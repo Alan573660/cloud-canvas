@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { 
   ArrowLeft, Loader2, Save, Plus, Pencil, Trash2, 
-  Package, User, Building2, FileText 
+  Package, User, Building2, FileText, ExternalLink, Truck
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Select,
   SelectContent,
@@ -87,6 +88,7 @@ interface OrderItem {
   unit: string;
   price_per_unit: number;
   amount: number;
+  meta_json: unknown;
 }
 
 interface Contact {
@@ -105,6 +107,7 @@ interface Lead {
   id: string;
   title: string | null;
   subject: string | null;
+  status: string;
 }
 
 interface Product {
@@ -178,6 +181,22 @@ export default function OrderDetailPage() {
     enabled: !isNew && !!id,
   });
 
+  // Fetch linked lead details
+  const { data: linkedLead } = useQuery({
+    queryKey: ['linked-lead', order?.lead_id],
+    queryFn: async () => {
+      if (!order?.lead_id) return null;
+      const { data, error } = await supabase
+        .from('leads')
+        .select('id, title, subject, status')
+        .eq('id', order.lead_id)
+        .single();
+      if (error) return null;
+      return data as Lead;
+    },
+    enabled: !!order?.lead_id,
+  });
+
   // Fetch contacts
   const { data: contacts } = useQuery({
     queryKey: ['contacts-list', profile?.organization_id],
@@ -204,13 +223,16 @@ export default function OrderDetailPage() {
         .select('id, company_name, inn')
         .eq('organization_id', profile.organization_id)
         .order('company_name');
-      if (error) throw error;
+      if (error) {
+        console.warn('Cannot fetch companies:', error.message);
+        return [];
+      }
       return data as BuyerCompany[];
     },
     enabled: !!profile?.organization_id,
   });
 
-  // Fetch leads
+  // Fetch leads for dropdown
   const { data: leads } = useQuery({
     queryKey: ['leads-list', profile?.organization_id],
     queryFn: async () => {
@@ -310,16 +332,25 @@ export default function OrderDetailPage() {
         })
         .eq('id', id);
 
-      if (error) throw error;
+      if (error) {
+        if (error.code === '42501' || error.message?.includes('permission')) {
+          throw new Error('permission_denied');
+        }
+        throw error;
+      }
     },
     onSuccess: () => {
       toast.success(t('common.success'));
       queryClient.invalidateQueries({ queryKey: ['order', id] });
       queryClient.invalidateQueries({ queryKey: ['orders'] });
     },
-    onError: (error) => {
+    onError: (error: Error) => {
       console.error('Update error:', error);
-      toast.error(t('errors.generic'));
+      if (error.message === 'permission_denied') {
+        toast.error(t('errors.forbidden'));
+      } else {
+        toast.error(t('errors.generic'));
+      }
     },
   });
 
@@ -346,17 +377,17 @@ export default function OrderDetailPage() {
 
   const getStatusLabel = (status: OrderStatus) => {
     const statusMap: Record<OrderStatus, string> = {
-      DRAFT: t('orders.statuses.draft', 'Черновик'),
-      CONFIRMED: t('orders.statuses.confirmed', 'Подтверждён'),
-      INVOICED: t('orders.statuses.invoiced', 'Счёт выставлен'),
-      PAID: t('orders.statuses.paid', 'Оплачен'),
-      CANCELLED: t('orders.statuses.cancelled', 'Отменён'),
-      FAILED: t('orders.statuses.failed', 'Ошибка'),
+      DRAFT: t('orders.statuses.draft'),
+      CONFIRMED: t('orders.statuses.confirmed'),
+      INVOICED: t('orders.statuses.invoiced'),
+      PAID: t('orders.statuses.paid'),
+      CANCELLED: t('orders.statuses.cancelled'),
+      FAILED: t('orders.statuses.failed'),
     };
     return statusMap[status] || status;
   };
 
-  const getOrderStatusType = (status: OrderStatus) => {
+  const getOrderStatusType = (status: string) => {
     switch (status) {
       case 'PAID':
         return 'success' as const;
@@ -455,7 +486,7 @@ export default function OrderDetailPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Package className="h-5 w-5" />
-              Основная информация
+              {t('common.info')}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -484,11 +515,29 @@ export default function OrderDetailPage() {
                 <Label>{t('orders.deliveryPrice')}</Label>
                 <Input
                   type="number"
+                  min={0}
+                  step={0.01}
                   value={formData.delivery_price}
-                  onChange={(e) => setFormData({ ...formData, delivery_price: parseFloat(e.target.value) || 0 })}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    setFormData({ ...formData, delivery_price: isNaN(val) ? 0 : Math.max(0, val) });
+                  }}
                   disabled={!canManageOrders}
                 />
               </div>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="delivery_required"
+                checked={formData.delivery_required}
+                onCheckedChange={(checked) => setFormData({ ...formData, delivery_required: !!checked })}
+                disabled={!canManageOrders}
+              />
+              <Label htmlFor="delivery_required" className="flex items-center gap-2 cursor-pointer">
+                <Truck className="h-4 w-4" />
+                {t('orders.deliveryRequired')}
+              </Label>
             </div>
 
             <div className="space-y-2">
@@ -496,7 +545,7 @@ export default function OrderDetailPage() {
               <Textarea
                 value={formData.comment}
                 onChange={(e) => setFormData({ ...formData, comment: e.target.value })}
-                placeholder="Комментарий к заказу..."
+                placeholder={i18n.language === 'ru' ? 'Комментарий к заказу...' : 'Order comment...'}
                 rows={3}
                 disabled={!canManageOrders}
               />
@@ -527,7 +576,7 @@ export default function OrderDetailPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <User className="h-5 w-5" />
-              Связи
+              {i18n.language === 'ru' ? 'Связи' : 'Relations'}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -545,13 +594,13 @@ export default function OrderDetailPage() {
                 disabled={!canManageOrders}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Выберите контакт" />
+                  <SelectValue placeholder={i18n.language === 'ru' ? 'Выберите контакт' : 'Select contact'} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">— Не выбран —</SelectItem>
+                  <SelectItem value="none">— {i18n.language === 'ru' ? 'Не выбран' : 'Not selected'} —</SelectItem>
                   {contacts?.map((contact) => (
                     <SelectItem key={contact.id} value={contact.id}>
-                      {contact.full_name || contact.email || contact.id}
+                      {contact.full_name || contact.email || contact.id.slice(0, 8)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -572,10 +621,10 @@ export default function OrderDetailPage() {
                 disabled={!canManageOrders}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Выберите компанию" />
+                  <SelectValue placeholder={i18n.language === 'ru' ? 'Выберите компанию' : 'Select company'} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">— Не выбрана —</SelectItem>
+                  <SelectItem value="none">— {i18n.language === 'ru' ? 'Не выбрана' : 'Not selected'} —</SelectItem>
                   {companies?.map((company) => (
                     <SelectItem key={company.id} value={company.id}>
                       {company.company_name}
@@ -588,7 +637,7 @@ export default function OrderDetailPage() {
             <div className="space-y-2">
               <Label className="flex items-center gap-2">
                 <FileText className="h-4 w-4" />
-                Лид
+                {i18n.language === 'ru' ? 'Лид' : 'Lead'}
               </Label>
               <Select
                 value={formData.lead_id || 'none'}
@@ -599,10 +648,10 @@ export default function OrderDetailPage() {
                 disabled={!canManageOrders}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Привязать к лиду" />
+                  <SelectValue placeholder={i18n.language === 'ru' ? 'Привязать к лиду' : 'Link to lead'} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">— Не привязан —</SelectItem>
+                  <SelectItem value="none">— {i18n.language === 'ru' ? 'Не привязан' : 'Not linked'} —</SelectItem>
                   {leads?.map((lead) => (
                     <SelectItem key={lead.id} value={lead.id}>
                       {lead.title || lead.subject || lead.id.slice(0, 8)}
@@ -611,6 +660,23 @@ export default function OrderDetailPage() {
                 </SelectContent>
               </Select>
             </div>
+
+            {/* Show linked lead info */}
+            {linkedLead && (
+              <div className="p-3 bg-muted rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium">{linkedLead.title || linkedLead.subject}</p>
+                    <StatusBadge status={linkedLead.status} type={getOrderStatusType(linkedLead.status)} />
+                  </div>
+                  <Button variant="ghost" size="sm" asChild>
+                    <Link to={`/leads/${linkedLead.id}`}>
+                      <ExternalLink className="h-4 w-4" />
+                    </Link>
+                  </Button>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -621,7 +687,7 @@ export default function OrderDetailPage() {
           <CardHeader className="flex flex-row items-center justify-between">
             <div>
               <CardTitle>{t('orders.items')}</CardTitle>
-              <CardDescription>Позиции заказа</CardDescription>
+              <CardDescription>{i18n.language === 'ru' ? 'Позиции заказа' : 'Order items'}</CardDescription>
             </div>
             {canManageOrders && (
               <Button
@@ -631,7 +697,7 @@ export default function OrderDetailPage() {
                 }}
               >
                 <Plus className="h-4 w-4 mr-2" />
-                Добавить позицию
+                {i18n.language === 'ru' ? 'Добавить позицию' : 'Add item'}
               </Button>
             )}
           </CardHeader>
@@ -644,11 +710,11 @@ export default function OrderDetailPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Название</TableHead>
-                    <TableHead className="text-right">Кол-во</TableHead>
-                    <TableHead>Ед.</TableHead>
-                    <TableHead className="text-right">Цена</TableHead>
-                    <TableHead className="text-right">Сумма</TableHead>
+                    <TableHead>{i18n.language === 'ru' ? 'Название' : 'Title'}</TableHead>
+                    <TableHead className="text-right">{i18n.language === 'ru' ? 'Кол-во' : 'Qty'}</TableHead>
+                    <TableHead>{i18n.language === 'ru' ? 'Ед.' : 'Unit'}</TableHead>
+                    <TableHead className="text-right">{i18n.language === 'ru' ? 'Цена' : 'Price'}</TableHead>
+                    <TableHead className="text-right">{i18n.language === 'ru' ? 'Сумма' : 'Amount'}</TableHead>
                     {canManageOrders && <TableHead className="w-[100px]"></TableHead>}
                   </TableRow>
                 </TableHeader>
@@ -693,7 +759,7 @@ export default function OrderDetailPage() {
               </Table>
             ) : (
               <div className="text-center py-8 text-muted-foreground">
-                Нет позиций в заказе
+                {i18n.language === 'ru' ? 'Нет позиций в заказе' : 'No items in order'}
               </div>
             )}
           </CardContent>
@@ -702,10 +768,13 @@ export default function OrderDetailPage() {
 
       {/* Order Item Form Dialog */}
       <Dialog open={isItemFormOpen} onOpenChange={setIsItemFormOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>
-              {editingItem ? 'Редактировать позицию' : 'Добавить позицию'}
+              {editingItem 
+                ? (i18n.language === 'ru' ? 'Редактировать позицию' : 'Edit item')
+                : (i18n.language === 'ru' ? 'Добавить позицию' : 'Add item')
+              }
             </DialogTitle>
           </DialogHeader>
           <OrderItemForm
@@ -733,7 +802,10 @@ export default function OrderDetailPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>{t('common.confirm')}</AlertDialogTitle>
             <AlertDialogDescription>
-              Удалить позицию "{deletingItem?.title}"?
+              {i18n.language === 'ru' 
+                ? `Удалить позицию "${deletingItem?.title}"?` 
+                : `Delete item "${deletingItem?.title}"?`
+              }
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -762,7 +834,7 @@ interface OrderItemFormProps {
 }
 
 function OrderItemForm({ orderId, organizationId, item, products, onSuccess, onCancel }: OrderItemFormProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   
   const [formData, setFormData] = useState({
     product_id: item?.product_id || '',
@@ -772,8 +844,26 @@ function OrderItemForm({ orderId, organizationId, item, products, onSuccess, onC
     price_per_unit: item?.price_per_unit || 0,
   });
 
+  const [errors, setErrors] = useState<{ qty?: string; price?: string }>({});
+
+  const validate = (): boolean => {
+    const newErrors: { qty?: string; price?: string } = {};
+    
+    if (formData.qty <= 0) {
+      newErrors.qty = i18n.language === 'ru' ? 'Количество должно быть > 0' : 'Quantity must be > 0';
+    }
+    if (formData.price_per_unit < 0) {
+      newErrors.price = i18n.language === 'ru' ? 'Цена не может быть отрицательной' : 'Price cannot be negative';
+    }
+    
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
   const mutation = useMutation({
     mutationFn: async () => {
+      if (!validate()) throw new Error('Validation failed');
+      
       const amount = formData.qty * formData.price_per_unit;
       
       const payload = {
@@ -811,9 +901,11 @@ function OrderItemForm({ orderId, organizationId, item, products, onSuccess, onC
       toast.success(t('common.success'));
       onSuccess();
     },
-    onError: (error) => {
-      console.error('Item save error:', error);
-      toast.error(t('errors.generic'));
+    onError: (error: Error) => {
+      if (error.message !== 'Validation failed') {
+        console.error('Item save error:', error);
+        toast.error(t('errors.generic'));
+      }
     },
   });
 
@@ -836,16 +928,16 @@ function OrderItemForm({ orderId, organizationId, item, products, onSuccess, onC
   return (
     <div className="space-y-4">
       <div className="space-y-2">
-        <Label>Товар из каталога</Label>
+        <Label>{i18n.language === 'ru' ? 'Товар из каталога' : 'Product from catalog'}</Label>
         <Select
           value={formData.product_id || 'none'}
           onValueChange={(value) => handleProductChange(value === 'none' ? '' : value)}
         >
           <SelectTrigger>
-            <SelectValue placeholder="Выберите товар" />
+            <SelectValue placeholder={i18n.language === 'ru' ? 'Выберите товар' : 'Select product'} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="none">— Произвольная позиция —</SelectItem>
+            <SelectItem value="none">— {i18n.language === 'ru' ? 'Произвольная позиция' : 'Custom item'} —</SelectItem>
             {products.map((product) => (
               <SelectItem key={product.id} value={product.id}>
                 {product.title || product.sku} ({product.base_price_rub_m2} ₽/м²)
@@ -856,28 +948,34 @@ function OrderItemForm({ orderId, organizationId, item, products, onSuccess, onC
       </div>
 
       <div className="space-y-2">
-        <Label>Название</Label>
+        <Label>{i18n.language === 'ru' ? 'Название' : 'Title'}</Label>
         <Input
           value={formData.title}
           onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-          placeholder="Название позиции"
+          placeholder={i18n.language === 'ru' ? 'Название позиции' : 'Item title'}
         />
       </div>
 
       <div className="grid gap-4 grid-cols-3">
         <div className="space-y-2">
-          <Label>Кол-во</Label>
+          <Label>{i18n.language === 'ru' ? 'Кол-во' : 'Qty'}</Label>
           <Input
             type="number"
             min={0.01}
             step={0.01}
             value={formData.qty}
-            onChange={(e) => setFormData({ ...formData, qty: parseFloat(e.target.value) || 0 })}
+            onChange={(e) => {
+              const val = parseFloat(e.target.value);
+              setFormData({ ...formData, qty: isNaN(val) ? 0 : val });
+              setErrors({ ...errors, qty: undefined });
+            }}
+            className={errors.qty ? 'border-destructive' : ''}
           />
+          {errors.qty && <p className="text-xs text-destructive">{errors.qty}</p>}
         </div>
 
         <div className="space-y-2">
-          <Label>Ед. изм.</Label>
+          <Label>{i18n.language === 'ru' ? 'Ед. изм.' : 'Unit'}</Label>
           <Select
             value={formData.unit}
             onValueChange={(value) => setFormData({ ...formData, unit: value })}
@@ -895,20 +993,26 @@ function OrderItemForm({ orderId, organizationId, item, products, onSuccess, onC
         </div>
 
         <div className="space-y-2">
-          <Label>Цена за ед.</Label>
+          <Label>{i18n.language === 'ru' ? 'Цена за ед.' : 'Price'}</Label>
           <Input
             type="number"
             min={0}
             step={0.01}
             value={formData.price_per_unit}
-            onChange={(e) => setFormData({ ...formData, price_per_unit: parseFloat(e.target.value) || 0 })}
+            onChange={(e) => {
+              const val = parseFloat(e.target.value);
+              setFormData({ ...formData, price_per_unit: isNaN(val) ? 0 : Math.max(0, val) });
+              setErrors({ ...errors, price: undefined });
+            }}
+            className={errors.price ? 'border-destructive' : ''}
           />
+          {errors.price && <p className="text-xs text-destructive">{errors.price}</p>}
         </div>
       </div>
 
       <div className="p-3 bg-muted rounded-lg">
         <div className="flex justify-between font-medium">
-          <span>Сумма:</span>
+          <span>{i18n.language === 'ru' ? 'Сумма:' : 'Amount:'}</span>
           <span>{new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB' }).format(calculatedAmount)}</span>
         </div>
       </div>
@@ -918,9 +1022,7 @@ function OrderItemForm({ orderId, organizationId, item, products, onSuccess, onC
           {t('common.cancel')}
         </Button>
         <Button onClick={() => mutation.mutate()} disabled={mutation.isPending}>
-          {mutation.isPending ? (
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-          ) : null}
+          {mutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
           {t('common.save')}
         </Button>
       </div>
