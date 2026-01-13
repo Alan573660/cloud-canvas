@@ -61,7 +61,9 @@
     "details": "Details",
     "open": "Open",
     "allStatuses": "All statuses",
-    "reset": "Reset"
+    "all": "All",
+    "reset": "Reset",
+    "noPermission": "Insufficient permissions to view"
   },
   "auth": {
     "login": "Login",
@@ -330,14 +332,20 @@
   },
   "billing": {
     "title": "Billing",
+    "description": "Transaction history and organization balance",
     "balance": "Balance",
-    "transactions": "Transactions",
+    "currentBalance": "Current Balance",
+    "transactions": "Transaction History",
+    "transactionsDesc": "All account operations for the organization",
     "topUp": "Top Up",
     "usage": "Usage",
     "type": "Type",
     "amount": "Amount",
     "reason": "Reason",
     "reference": "Reference",
+    "referenceType": "Reference Type",
+    "referenceId": "Reference ID",
+    "exportCSV": "Export CSV",
     "types": {
       "topUp": "Top Up",
       "debit": "Debit",
@@ -347,6 +355,7 @@
       "callCost": "Call Cost",
       "emailCost": "Email Cost",
       "llmCost": "LLM Cost",
+      "invoiceCost": "Invoice Cost",
       "subscription": "Subscription",
       "manual": "Manual",
       "payment": "Payment"
