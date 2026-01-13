@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Pencil, Eye, Filter, X } from 'lucide-react';
+import { Plus, Filter, X, ExternalLink } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -15,10 +15,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { ru, enUS } from 'date-fns/locale';
 
-// DB enum values - MUST match database
+// DB enum values - MUST match database exactly
 const LEAD_STATUSES = ['NEW', 'IN_PROGRESS', 'CALCULATED', 'INVOICED', 'PAID', 'FAILED', 'HUMAN_REQUIRED'] as const;
 const LEAD_SOURCES = ['call', 'email', 'manual'] as const;
 
@@ -33,12 +34,15 @@ interface Lead {
   subject: string | null;
   created_at: string;
   contact: {
+    id: string;
     full_name: string | null;
   } | null;
   buyer_company: {
+    id: string;
     company_name: string;
   } | null;
   assigned_to_profile: {
+    id: string;
     full_name: string | null;
   } | null;
 }
@@ -47,6 +51,7 @@ export default function LeadsPage() {
   const { t, i18n } = useTranslation();
   const { profile } = useAuth();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -63,22 +68,25 @@ export default function LeadsPage() {
         .from('leads')
         .select(
           `
-          *,
-          contact:contacts(full_name),
-          buyer_company:buyer_companies(company_name),
-          assigned_to_profile:profiles!leads_assigned_to_fkey(full_name)
+          id,
+          title,
+          subject,
+          source,
+          status,
+          created_at,
+          contact:contacts(id, full_name),
+          buyer_company:buyer_companies(id, company_name),
+          assigned_to_profile:profiles!leads_assigned_to_fkey(id, full_name)
         `,
           { count: 'exact' }
         )
         .eq('organization_id', profile.organization_id)
         .order('created_at', { ascending: false });
 
-      // Apply status filter
       if (statusFilter !== 'all') {
         query = query.eq('status', statusFilter);
       }
 
-      // Apply source filter
       if (sourceFilter !== 'all') {
         query = query.eq('source', sourceFilter);
       }
@@ -97,6 +105,34 @@ export default function LeadsPage() {
       return { data: data as Lead[], count: count || 0 };
     },
     enabled: !!profile?.organization_id,
+  });
+
+  // Inline status update mutation
+  const updateStatusMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: LeadStatus }) => {
+      const { error } = await supabase
+        .from('leads')
+        .update({ status })
+        .eq('id', id);
+
+      if (error) {
+        if (error.code === '42501' || error.message?.includes('permission')) {
+          throw new Error('permission_denied');
+        }
+        throw error;
+      }
+    },
+    onSuccess: () => {
+      toast.success(t('common.success'));
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+    },
+    onError: (error: Error) => {
+      if (error.message === 'permission_denied') {
+        toast.error(t('errors.forbidden'));
+      } else {
+        toast.error(t('errors.generic'));
+      }
+    },
   });
 
   const getStatusLabel = (status: LeadStatus) => {
@@ -158,22 +194,50 @@ export default function LeadsPage() {
     {
       key: 'contact',
       header: t('leads.contact'),
-      cell: (row) =>
-        row.contact?.full_name || row.buyer_company?.company_name || '—',
+      cell: (row) => row.contact?.full_name || '—',
+    },
+    {
+      key: 'company',
+      header: t('leads.company'),
+      cell: (row) => row.buyer_company?.company_name || '—',
     },
     {
       key: 'source',
       header: t('leads.source'),
-      cell: (row) => getSourceLabel(row.source),
+      cell: (row) => (
+        <StatusBadge 
+          status={getSourceLabel(row.source)} 
+          type="default" 
+        />
+      ),
     },
     {
       key: 'status',
       header: t('common.status'),
       cell: (row) => (
-        <StatusBadge
-          status={getStatusLabel(row.status)}
-          type={getLeadStatusType(row.status)}
-        />
+        <Select
+          value={row.status}
+          onValueChange={(value) => {
+            updateStatusMutation.mutate({ id: row.id, status: value as LeadStatus });
+          }}
+        >
+          <SelectTrigger className="h-8 w-[160px]">
+            <StatusBadge
+              status={getStatusLabel(row.status)}
+              type={getLeadStatusType(row.status)}
+            />
+          </SelectTrigger>
+          <SelectContent>
+            {LEAD_STATUSES.map((status) => (
+              <SelectItem key={status} value={status}>
+                <StatusBadge
+                  status={getStatusLabel(status)}
+                  type={getLeadStatusType(status)}
+                />
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       ),
     },
     {
@@ -191,24 +255,16 @@ export default function LeadsPage() {
     },
     {
       key: 'actions',
-      header: t('common.actions'),
+      header: '',
       cell: (row) => (
-        <div className="flex items-center gap-2">
-          <Button 
-            variant="ghost" 
-            size="icon"
-            onClick={() => navigate(`/leads/${row.id}`)}
-          >
-            <Eye className="h-4 w-4" />
-          </Button>
-          <Button 
-            variant="ghost" 
-            size="icon"
-            onClick={() => navigate(`/leads/${row.id}`)}
-          >
-            <Pencil className="h-4 w-4" />
-          </Button>
-        </div>
+        <Button 
+          variant="ghost" 
+          size="sm"
+          onClick={() => navigate(`/leads/${row.id}`)}
+        >
+          <ExternalLink className="h-4 w-4 mr-1" />
+          {t('common.edit')}
+        </Button>
       ),
     },
   ];
@@ -219,7 +275,7 @@ export default function LeadsPage() {
         <div>
           <h1 className="text-3xl font-bold">{t('leads.title')}</h1>
         </div>
-        <Button>
+        <Button onClick={() => navigate('/leads/new')}>
           <Plus className="h-4 w-4 mr-2" />
           {t('leads.newLead')}
         </Button>
@@ -243,7 +299,7 @@ export default function LeadsPage() {
             <SelectValue placeholder={t('common.status')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">{t('common.status')}: все</SelectItem>
+            <SelectItem value="all">{t('common.status')}: {i18n.language === 'ru' ? 'все' : 'all'}</SelectItem>
             {LEAD_STATUSES.map((status) => (
               <SelectItem key={status} value={status}>
                 {getStatusLabel(status)}
@@ -263,7 +319,7 @@ export default function LeadsPage() {
             <SelectValue placeholder={t('leads.source')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">{t('leads.source')}: все</SelectItem>
+            <SelectItem value="all">{t('leads.source')}: {i18n.language === 'ru' ? 'все' : 'all'}</SelectItem>
             {LEAD_SOURCES.map((source) => (
               <SelectItem key={source} value={source}>
                 {getSourceLabel(source)}
@@ -275,7 +331,7 @@ export default function LeadsPage() {
         {hasActiveFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters}>
             <X className="h-4 w-4 mr-1" />
-            Сбросить
+            {i18n.language === 'ru' ? 'Сбросить' : 'Clear'}
           </Button>
         )}
       </div>
