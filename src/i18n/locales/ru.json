@@ -69,6 +69,7 @@
     "invoices": "Счета",
     "products": "Товары",
     "email": "Почта",
+    "calls": "Звонки",
     "billing": "Биллинг",
     "analytics": "Аналитика",
     "import": "Импорт",
@@ -77,6 +78,41 @@
     "catalog": "Каталог",
     "communications": "Коммуникации",
     "finance": "Финансы"
+  },
+  "calls": {
+    "title": "Звонки",
+    "callDetails": "Детали звонка",
+    "callInfo": "Информация о звонке",
+    "direction": "Направление",
+    "inbound": "Входящий",
+    "outbound": "Исходящий",
+    "fromPhone": "От",
+    "toPhone": "Кому",
+    "startedAt": "Начало",
+    "duration": "Длительность",
+    "sentiment": "Тональность",
+    "aiSummary": "AI резюме",
+    "transcript": "Транскрипт",
+    "transcriptDescription": "Расшифровка разговора",
+    "viewTranscript": "Показать транскрипт",
+    "openTranscriptFile": "Открыть файл транскрипта",
+    "playRecording": "Воспроизвести запись",
+    "linkedLead": "Связанный лид",
+    "noCalls": "Звонков пока нет",
+    "searchPhone": "Поиск по номеру",
+    "statuses": {
+      "ringing": "Вызов",
+      "in_progress": "В процессе",
+      "done": "Завершён",
+      "failed": "Ошибка",
+      "no_answer": "Нет ответа",
+      "busy": "Занято"
+    },
+    "sentiments": {
+      "positive": "Позитивный",
+      "neutral": "Нейтральный",
+      "negative": "Негативный"
+    }
   },
   "dashboard": {
     "title": "Панель управления",

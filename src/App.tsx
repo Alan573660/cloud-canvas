@@ -22,6 +22,8 @@ import InvoicesPage from "@/pages/invoices/InvoicesPage";
 import InvoiceDetailPage from "@/pages/invoices/InvoiceDetailPage";
 import ProductsPage from "@/pages/products/ProductsPage";
 import EmailPage from "@/pages/email/EmailPage";
+import CallsPage from "@/pages/calls/CallsPage";
+import CallDetailPage from "@/pages/calls/CallDetailPage";
 import BillingPage from "@/pages/billing/BillingPage";
 import AnalyticsPage from "@/pages/analytics/AnalyticsPage";
 import ImportPage from "@/pages/import/ImportPage";
@@ -55,6 +57,8 @@ const App = () => (
               <Route path="invoices/:id" element={<InvoiceDetailPage />} />
               <Route path="products" element={<ProductsPage />} />
               <Route path="email" element={<EmailPage />} />
+              <Route path="calls" element={<CallsPage />} />
+              <Route path="calls/:id" element={<CallDetailPage />} />
               <Route path="billing" element={<BillingPage />} />
               <Route path="analytics" element={<AnalyticsPage />} />
               <Route path="import" element={<ImportPage />} />

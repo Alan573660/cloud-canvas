@@ -9,6 +9,7 @@ import {
   FileText,
   Package,
   Mail,
+  Phone,
   CreditCard,
   BarChart3,
   Upload,
@@ -75,6 +76,7 @@ const menuGroups = [
     labelKey: 'nav.communications',
     items: [
       { key: 'email', icon: Mail, path: '/email' },
+      { key: 'calls', icon: Phone, path: '/calls' },
     ],
   },
   {
