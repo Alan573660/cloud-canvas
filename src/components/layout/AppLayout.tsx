@@ -1,3 +1,4 @@
+// AppLayout - main authenticated layout wrapper
 import { useEffect, useRef } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar';
