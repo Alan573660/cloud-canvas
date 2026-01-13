@@ -61,6 +61,9 @@ export default function OnboardingPage() {
   }
 
   const onSubmit = async (data: OnboardingFormData) => {
+    // Prevent duplicate submissions
+    if (isSubmitting) return;
+    
     setIsSubmitting(true);
     try {
       const { error } = await supabase.rpc('rpc_onboard_create_org', {
