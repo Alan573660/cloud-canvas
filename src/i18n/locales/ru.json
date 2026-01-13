@@ -153,12 +153,11 @@
     "noOrders": "Заказы не найдены",
     "statuses": {
       "draft": "Черновик",
-      "pending": "Ожидает",
       "confirmed": "Подтверждён",
-      "inProduction": "В производстве",
-      "shipped": "Отправлен",
-      "delivered": "Доставлен",
-      "cancelled": "Отменён"
+      "invoiced": "Счёт выставлен",
+      "paid": "Оплачен",
+      "cancelled": "Отменён",
+      "failed": "Ошибка"
     }
   },
   "invoices": {

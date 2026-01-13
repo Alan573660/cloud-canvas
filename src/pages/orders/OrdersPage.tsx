@@ -1,19 +1,34 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { Plus, Eye } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Plus, Eye, Filter, X } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { DataTable, Column } from '@/components/ui/data-table';
-import { StatusBadge, getStatusType } from '@/components/ui/status-badge';
+import { StatusBadge } from '@/components/ui/status-badge';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { format } from 'date-fns';
 import { ru, enUS } from 'date-fns/locale';
+
+// DB status values - MUST match database exactly
+const ORDER_STATUSES = ['DRAFT', 'CONFIRMED', 'INVOICED', 'PAID', 'CANCELLED', 'FAILED'] as const;
+type OrderStatus = typeof ORDER_STATUSES[number];
+
+// Roles that can manage orders
+const CAN_MANAGE_ORDERS: string[] = ['owner', 'admin', 'operator'];
 
 interface Order {
   id: string;
   order_number: string | null;
-  status: string;
+  status: OrderStatus;
   total_amount: number;
   items_total: number;
   delivery_price: number;
@@ -30,13 +45,17 @@ interface Order {
 export default function OrdersPage() {
   const { t, i18n } = useTranslation();
   const { profile } = useAuth();
+  const navigate = useNavigate();
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [statusFilter, setStatusFilter] = useState<OrderStatus | 'all'>('all');
+
+  const canManageOrders = profile?.role && CAN_MANAGE_ORDERS.includes(profile.role);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['orders', profile?.organization_id, search, page, pageSize],
+    queryKey: ['orders', profile?.organization_id, search, page, pageSize, statusFilter],
     queryFn: async () => {
       if (!profile?.organization_id) return { data: [], count: 0 };
 
@@ -52,6 +71,11 @@ export default function OrdersPage() {
         )
         .eq('organization_id', profile.organization_id)
         .order('created_at', { ascending: false });
+
+      // Apply status filter
+      if (statusFilter !== 'all') {
+        query = query.eq('status', statusFilter);
+      }
 
       if (search) {
         query = query.ilike('order_number', `%${search}%`);
@@ -77,18 +101,41 @@ export default function OrdersPage() {
     }).format(value);
   };
 
-  const getStatusLabel = (status: string) => {
-    const statusMap: Record<string, string> = {
-      draft: t('orders.statuses.draft'),
-      pending: t('orders.statuses.pending'),
-      confirmed: t('orders.statuses.confirmed'),
-      in_production: t('orders.statuses.inProduction'),
-      shipped: t('orders.statuses.shipped'),
-      delivered: t('orders.statuses.delivered'),
-      cancelled: t('orders.statuses.cancelled'),
+  const getStatusLabel = (status: OrderStatus) => {
+    const statusMap: Record<OrderStatus, string> = {
+      DRAFT: t('orders.statuses.draft', 'Черновик'),
+      CONFIRMED: t('orders.statuses.confirmed', 'Подтверждён'),
+      INVOICED: t('orders.statuses.invoiced', 'Счёт выставлен'),
+      PAID: t('orders.statuses.paid', 'Оплачен'),
+      CANCELLED: t('orders.statuses.cancelled', 'Отменён'),
+      FAILED: t('orders.statuses.failed', 'Ошибка'),
     };
     return statusMap[status] || status;
   };
+
+  const getOrderStatusType = (status: OrderStatus) => {
+    switch (status) {
+      case 'PAID':
+        return 'success' as const;
+      case 'DRAFT':
+      case 'CONFIRMED':
+        return 'warning' as const;
+      case 'INVOICED':
+        return 'info' as const;
+      case 'CANCELLED':
+      case 'FAILED':
+        return 'error' as const;
+      default:
+        return 'default' as const;
+    }
+  };
+
+  const clearFilters = () => {
+    setStatusFilter('all');
+    setPage(1);
+  };
+
+  const hasActiveFilters = statusFilter !== 'all';
 
   const columns: Column<Order>[] = [
     {
@@ -112,7 +159,7 @@ export default function OrdersPage() {
       cell: (row) => (
         <StatusBadge
           status={getStatusLabel(row.status)}
-          type={getStatusType(row.status)}
+          type={getOrderStatusType(row.status)}
         />
       ),
     },
@@ -147,7 +194,11 @@ export default function OrdersPage() {
       key: 'actions',
       header: t('common.actions'),
       cell: (row) => (
-        <Button variant="ghost" size="icon">
+        <Button 
+          variant="ghost" 
+          size="icon"
+          onClick={() => navigate(`/orders/${row.id}`)}
+        >
           <Eye className="h-4 w-4" />
         </Button>
       ),
@@ -160,17 +211,54 @@ export default function OrdersPage() {
         <div>
           <h1 className="text-3xl font-bold">{t('orders.title')}</h1>
         </div>
-        <Button>
-          <Plus className="h-4 w-4 mr-2" />
-          {t('orders.newOrder')}
-        </Button>
+        {canManageOrders && (
+          <Button onClick={() => navigate('/orders/new')}>
+            <Plus className="h-4 w-4 mr-2" />
+            {t('orders.newOrder')}
+          </Button>
+        )}
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap items-center gap-4 p-4 bg-card rounded-lg border">
+        <div className="flex items-center gap-2">
+          <Filter className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-medium">{t('common.filter')}:</span>
+        </div>
+        
+        <Select
+          value={statusFilter}
+          onValueChange={(value) => {
+            setStatusFilter(value as OrderStatus | 'all');
+            setPage(1);
+          }}
+        >
+          <SelectTrigger className="w-[180px]">
+            <SelectValue placeholder={t('common.status')} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{t('common.status')}: все</SelectItem>
+            {ORDER_STATUSES.map((status) => (
+              <SelectItem key={status} value={status}>
+                {getStatusLabel(status)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {hasActiveFilters && (
+          <Button variant="ghost" size="sm" onClick={clearFilters}>
+            <X className="h-4 w-4 mr-1" />
+            Сбросить
+          </Button>
+        )}
       </div>
 
       <DataTable
         columns={columns}
         data={data?.data || []}
         loading={isLoading}
-        searchPlaceholder={t('common.search')}
+        searchPlaceholder={t('orders.orderNumber')}
         onSearch={setSearch}
         searchValue={search}
         page={page}

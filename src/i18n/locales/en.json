@@ -153,12 +153,11 @@
     "noOrders": "No orders found",
     "statuses": {
       "draft": "Draft",
-      "pending": "Pending",
       "confirmed": "Confirmed",
-      "inProduction": "In Production",
-      "shipped": "Shipped",
-      "delivered": "Delivered",
-      "cancelled": "Cancelled"
+      "invoiced": "Invoiced",
+      "paid": "Paid",
+      "cancelled": "Cancelled",
+      "failed": "Failed"
     }
   },
   "invoices": {
