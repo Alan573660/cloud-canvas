@@ -271,9 +271,13 @@
     "to": "To",
     "body": "Body",
     "attachments": "Attachments",
-    "send": "Send",
+    "send": "Queue Email",
+    "messages": "Messages",
+    "cancelConfirm": "Are you sure you want to cancel sending this email?",
+    "noAccounts": "No email accounts available",
     "statuses": {
       "queued": "Queued",
+      "sending": "Sending",
       "sent": "Sent",
       "failed": "Failed",
       "cancelled": "Cancelled"
