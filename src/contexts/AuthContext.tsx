@@ -17,7 +17,7 @@ interface AuthContextType {
   profile: Profile | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
-  signUp: (email: string, password: string, fullName: string, orgName: string) => Promise<{ error: Error | null }>;
+  signUp: (email: string, password: string, fullName: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
@@ -111,35 +111,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const signUp = async (email: string, password: string, fullName: string, orgName: string) => {
+  const signUp = async (email: string, password: string, fullName: string) => {
     try {
-      const { data, error } = await supabase.auth.signUp({
+      const { error } = await supabase.auth.signUp({
         email,
         password,
         options: {
           data: {
             full_name: fullName,
-            org_name: orgName,
           },
+          emailRedirectTo: `${window.location.origin}/onboarding`,
         },
       });
 
-      if (error) return { error };
-
-      // After signup, create organization using RPC
-      if (data.user) {
-        const { error: rpcError } = await supabase.rpc('rpc_onboard_create_org', {
-          p_org_name: orgName,
-          p_plan: 'base',
-        });
-
-        if (rpcError) {
-          console.error('Error creating organization:', rpcError);
-          return { error: rpcError };
-        }
-      }
-
-      return { error: null };
+      return { error };
     } catch (err) {
       return { error: err as Error };
     }

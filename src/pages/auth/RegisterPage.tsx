@@ -20,7 +20,6 @@ import { toast } from 'sonner';
 
 const registerSchema = z.object({
   fullName: z.string().min(2),
-  organizationName: z.string().min(2),
   email: z.string().email(),
   password: z.string().min(6),
   confirmPassword: z.string().min(6),
@@ -33,7 +32,7 @@ type RegisterFormData = z.infer<typeof registerSchema>;
 
 export default function RegisterPage() {
   const { t } = useTranslation();
-  const { signUp, user, loading } = useAuth();
+  const { signUp, user, profile, loading } = useAuth();
   const navigate = useNavigate();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -41,7 +40,6 @@ export default function RegisterPage() {
     resolver: zodResolver(registerSchema),
     defaultValues: {
       fullName: '',
-      organizationName: '',
       email: '',
       password: '',
       confirmPassword: '',
@@ -50,9 +48,14 @@ export default function RegisterPage() {
 
   useEffect(() => {
     if (!loading && user) {
-      navigate('/dashboard', { replace: true });
+      // Check if profile exists to determine where to navigate
+      if (profile) {
+        navigate('/dashboard', { replace: true });
+      } else {
+        navigate('/onboarding', { replace: true });
+      }
     }
-  }, [user, loading, navigate]);
+  }, [user, profile, loading, navigate]);
 
   if (loading) {
     return (
@@ -76,15 +79,14 @@ export default function RegisterPage() {
       const { error } = await signUp(
         data.email,
         data.password,
-        data.fullName,
-        data.organizationName
+        data.fullName
       );
       if (error) {
         toast.error(error.message);
       } else {
-        toast.success(t('common.success'));
-        navigate('/dashboard');
+        toast.success('Проверьте вашу почту для подтверждения регистрации');
       }
+      // Navigation will be handled by useEffect based on profile state
     } finally {
       setIsSubmitting(false);
     }
@@ -113,19 +115,6 @@ export default function RegisterPage() {
                     <FormLabel>{t('auth.fullName')}</FormLabel>
                     <FormControl>
                       <Input placeholder="Иван Петров" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="organizationName"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('auth.organizationName')}</FormLabel>
-                    <FormControl>
-                      <Input placeholder="ООО Компания" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
