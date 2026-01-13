@@ -16,6 +16,7 @@ import CompaniesPage from "@/pages/companies/CompaniesPage";
 import LeadsPage from "@/pages/leads/LeadsPage";
 import LeadDetailPage from "@/pages/leads/LeadDetailPage";
 import OrdersPage from "@/pages/orders/OrdersPage";
+import OrderDetailPage from "@/pages/orders/OrderDetailPage";
 import InvoicesPage from "@/pages/invoices/InvoicesPage";
 import ProductsPage from "@/pages/products/ProductsPage";
 import EmailPage from "@/pages/email/EmailPage";
@@ -46,6 +47,8 @@ const App = () => (
               <Route path="leads" element={<LeadsPage />} />
               <Route path="leads/:id" element={<LeadDetailPage />} />
               <Route path="orders" element={<OrdersPage />} />
+              <Route path="orders/new" element={<OrderDetailPage />} />
+              <Route path="orders/:id" element={<OrderDetailPage />} />
               <Route path="invoices" element={<InvoicesPage />} />
               <Route path="products" element={<ProductsPage />} />
               <Route path="email" element={<EmailPage />} />
