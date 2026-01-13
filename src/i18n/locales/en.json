@@ -383,13 +383,24 @@
   },
   "settings": {
     "title": "Settings",
+    "description": "Manage organization and configuration",
     "organization": "Organization",
+    "organizationDesc": "Organization information",
+    "plan": "Plan",
+    "statuses": {
+      "active": "Active",
+      "suspended": "Suspended"
+    },
     "users": "Users",
+    "usersDesc": "Manage organization users",
     "inviteUser": "Add User",
+    "inviteDesc": "Add an existing user to the organization",
     "inviteHint": "User must register first. Then enter their User ID (UUID) from auth.users.",
     "roles": "Role",
     "botSettings": "Bot Settings",
+    "botSettingsDesc": "AI assistant configuration",
     "features": "Features",
+    "featuresDesc": "Enable and configure platform features",
     "channels": "Channels",
     "role": {
       "owner": "Owner",
@@ -402,6 +413,11 @@
     "roleChanged": "Role changed",
     "changeRole": "Change Role",
     "removeUserConfirm": "Are you sure you want to remove {{name}} from the organization?",
+    "transferOwnership": "Transfer Ownership",
+    "transferDesc": "Transfer owner rights to another user",
+    "transferWarning": "This action is irreversible! You will become an admin, and the selected user will become the owner.",
+    "newOwnerUserId": "New owner User ID",
+    "ownershipTransferred": "Ownership transferred",
     "channelType": "Channel Type",
     "channelValue": "Value",
     "newChannel": "New Channel",
@@ -412,7 +428,10 @@
     "greetingText": "Greeting Message",
     "greetingHint": "Text that the bot will send on first contact",
     "handoffPolicy": "Manager Handoff Policy",
-    "pricingMode": "Pricing Mode"
+    "pricingMode": "Pricing Mode",
+    "editConfig": "Edit Configuration",
+    "editSettingsJson": "Edit settings_json",
+    "invalidJson": "Invalid JSON"
   },
   "email": {
     "title": "Email",

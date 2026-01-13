@@ -1,15 +1,14 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Bot, Code } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Form,
@@ -27,8 +26,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { toast } from '@/hooks/use-toast';
 import { Skeleton } from '@/components/ui/skeleton';
+import type { Json } from '@/integrations/supabase/types';
 
 interface BotSettings {
   id: string;
@@ -37,6 +43,7 @@ interface BotSettings {
   greeting_text: string | null;
   manager_handoff_policy: string;
   pricing_mode: string;
+  settings_json: Json;
 }
 
 const formSchema = z.object({
@@ -70,6 +77,12 @@ export function BotSettingsTab() {
   const { t, i18n } = useTranslation();
   const { profile } = useAuth();
   const queryClient = useQueryClient();
+
+  const [jsonDialogOpen, setJsonDialogOpen] = useState(false);
+  const [settingsJson, setSettingsJson] = useState('');
+  const [jsonError, setJsonError] = useState<string | null>(null);
+
+  const canEdit = profile?.role === 'owner' || profile?.role === 'admin';
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -108,6 +121,7 @@ export function BotSettingsTab() {
         manager_handoff_policy: settings.manager_handoff_policy,
         pricing_mode: settings.pricing_mode,
       });
+      setSettingsJson(JSON.stringify(settings.settings_json, null, 2));
     }
   }, [settings, form]);
 
@@ -137,6 +151,27 @@ export function BotSettingsTab() {
     },
   });
 
+  const jsonMutation = useMutation({
+    mutationFn: async (json: Json) => {
+      if (!profile?.organization_id) throw new Error('No org');
+
+      const { error } = await supabase
+        .from('bot_settings')
+        .update({ settings_json: json, updated_at: new Date().toISOString() })
+        .eq('organization_id', profile.organization_id);
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast({ title: t('common.success') });
+      queryClient.invalidateQueries({ queryKey: ['bot-settings'] });
+      setJsonDialogOpen(false);
+    },
+    onError: (error: Error) => {
+      toast({ title: t('common.error'), description: error.message, variant: 'destructive' });
+    },
+  });
+
   const getHandoffLabel = (policy: string) => {
     const labels: Record<string, { ru: string; en: string }> = {
       AUTO: { ru: 'Автоматически', en: 'Automatic' },
@@ -157,6 +192,16 @@ export function BotSettingsTab() {
     return label ? (i18n.language === 'ru' ? label.ru : label.en) : mode;
   };
 
+  const handleSaveJson = () => {
+    try {
+      const parsed = JSON.parse(settingsJson);
+      setJsonError(null);
+      jsonMutation.mutate(parsed);
+    } catch {
+      setJsonError(t('settings.invalidJson'));
+    }
+  };
+
   if (isLoading) {
     return (
       <Card>
@@ -172,141 +217,202 @@ export function BotSettingsTab() {
     );
   }
 
+  if (!settings) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>{t('settings.botSettings')}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-muted-foreground text-center py-8">{t('common.noData')}</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('settings.botSettings')}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <Form {...form}>
-          <form onSubmit={form.handleSubmit((v) => saveMutation.mutate(v))} className="space-y-4">
-            <FormField
-              control={form.control}
-              name="language_default"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('settings.defaultLanguage')}</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
+    <>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between flex-wrap gap-4">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Bot className="h-5 w-5" />
+              {t('settings.botSettings')}
+            </CardTitle>
+            <CardDescription>{t('settings.botSettingsDesc')}</CardDescription>
+          </div>
+          {canEdit && (
+            <Button variant="outline" onClick={() => setJsonDialogOpen(true)}>
+              <Code className="h-4 w-4 mr-2" />
+              {t('settings.editSettingsJson')}
+            </Button>
+          )}
+        </CardHeader>
+        <CardContent>
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit((v) => saveMutation.mutate(v))} className="space-y-4">
+              <FormField
+                control={form.control}
+                name="language_default"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('settings.defaultLanguage')}</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value} disabled={!canEdit}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="ru">Русский</SelectItem>
+                        <SelectItem value="en">English</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="timezone"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('settings.timezone')}</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value} disabled={!canEdit}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {TIMEZONES.map((tz) => (
+                          <SelectItem key={tz} value={tz}>
+                            {tz}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="greeting_text"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('settings.greetingText')}</FormLabel>
                     <FormControl>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
+                      <Textarea
+                        rows={3}
+                        disabled={!canEdit}
+                        {...field}
+                        value={field.value || ''}
+                      />
                     </FormControl>
-                    <SelectContent>
-                      <SelectItem value="ru">Русский</SelectItem>
-                      <SelectItem value="en">English</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+                    <FormDescription>
+                      {t('settings.greetingHint')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-            <FormField
-              control={form.control}
-              name="timezone"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('settings.timezone')}</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {TIMEZONES.map((tz) => (
-                        <SelectItem key={tz} value={tz}>
-                          {tz}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+              <FormField
+                control={form.control}
+                name="manager_handoff_policy"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('settings.handoffPolicy')}</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value} disabled={!canEdit}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {HANDOFF_POLICIES.map((policy) => (
+                          <SelectItem key={policy} value={policy}>
+                            {getHandoffLabel(policy)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-            <FormField
-              control={form.control}
-              name="greeting_text"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('settings.greetingText')}</FormLabel>
-                  <FormControl>
-                    <Textarea
-                      rows={3}
-                      {...field}
-                      value={field.value || ''}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t('settings.greetingHint')}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+              <FormField
+                control={form.control}
+                name="pricing_mode"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('settings.pricingMode')}</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value} disabled={!canEdit}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {PRICING_MODES.map((mode) => (
+                          <SelectItem key={mode} value={mode}>
+                            {getPricingLabel(mode)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
-            <FormField
-              control={form.control}
-              name="manager_handoff_policy"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('settings.handoffPolicy')}</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {HANDOFF_POLICIES.map((policy) => (
-                        <SelectItem key={policy} value={policy}>
-                          {getHandoffLabel(policy)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
+              {canEdit && (
+                <div className="flex justify-end pt-4">
+                  <Button type="submit" disabled={saveMutation.isPending}>
+                    {saveMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    {t('common.save')}
+                  </Button>
+                </div>
               )}
-            />
+            </form>
+          </Form>
+        </CardContent>
+      </Card>
 
-            <FormField
-              control={form.control}
-              name="pricing_mode"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('settings.pricingMode')}</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {PRICING_MODES.map((mode) => (
-                        <SelectItem key={mode} value={mode}>
-                          {getPricingLabel(mode)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
+      {/* Settings JSON Dialog */}
+      <Dialog open={jsonDialogOpen} onOpenChange={setJsonDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t('settings.editSettingsJson')}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <Textarea
+              className="font-mono text-sm min-h-[300px]"
+              value={settingsJson}
+              onChange={(e) => {
+                setSettingsJson(e.target.value);
+                setJsonError(null);
+              }}
+              placeholder="{}"
             />
-
-            <div className="flex justify-end pt-4">
-              <Button type="submit" disabled={saveMutation.isPending}>
-                {saveMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+            {jsonError && (
+              <p className="text-sm text-destructive">{jsonError}</p>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setJsonDialogOpen(false)}>
+                {t('common.cancel')}
+              </Button>
+              <Button onClick={handleSaveJson} disabled={jsonMutation.isPending}>
                 {t('common.save')}
               </Button>
             </div>
-          </form>
-        </Form>
-      </CardContent>
-    </Card>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
