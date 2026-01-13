@@ -642,7 +642,7 @@ export default function LeadDetailPage() {
               </TabsTrigger>
               <TabsTrigger value="calls" className="flex items-center gap-2">
                 <Phone className="h-4 w-4" />
-                {i18n.language === 'ru' ? 'Звонки' : 'Calls'} ({calls?.length || 0})
+                {t('calls.title')} ({calls?.length || 0})
               </TabsTrigger>
               <TabsTrigger value="emails" className="flex items-center gap-2">
                 <Mail className="h-4 w-4" />
@@ -725,30 +725,48 @@ export default function LeadDetailPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>{i18n.language === 'ru' ? 'Направление' : 'Direction'}</TableHead>
-                      <TableHead>{i18n.language === 'ru' ? 'Телефон' : 'Phone'}</TableHead>
+                      <TableHead>{t('calls.direction')}</TableHead>
+                      <TableHead>{t('calls.fromPhone')}</TableHead>
+                      <TableHead>{t('calls.toPhone')}</TableHead>
+                      <TableHead>{t('calls.duration')}</TableHead>
                       <TableHead>{t('common.status')}</TableHead>
-                      <TableHead>{i18n.language === 'ru' ? 'Длительность' : 'Duration'}</TableHead>
                       <TableHead>{t('common.date')}</TableHead>
+                      <TableHead>{t('common.actions')}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {calls.map((call) => (
                       <TableRow key={call.id}>
-                        <TableCell>{call.direction === 'inbound' ? '📞 Входящий' : '📲 Исходящий'}</TableCell>
-                        <TableCell>{call.direction === 'inbound' ? call.from_phone : call.to_phone || '—'}</TableCell>
                         <TableCell>
-                          <StatusBadge status={call.status} type={call.status === 'DONE' ? 'success' : 'warning'} />
+                          {call.direction === 'inbound' ? (
+                            <span className="flex items-center gap-1">📞 {t('calls.inbound')}</span>
+                          ) : (
+                            <span className="flex items-center gap-1">📲 {t('calls.outbound')}</span>
+                          )}
                         </TableCell>
-                        <TableCell>{formatDuration(call.duration_seconds)}</TableCell>
+                        <TableCell className="font-mono text-sm">{call.from_phone || '—'}</TableCell>
+                        <TableCell className="font-mono text-sm">{call.to_phone || '—'}</TableCell>
+                        <TableCell className="font-mono">{formatDuration(call.duration_seconds)}</TableCell>
+                        <TableCell>
+                          <StatusBadge status={call.status} type={call.status === 'DONE' ? 'success' : call.status === 'FAILED' ? 'error' : 'warning'} />
+                        </TableCell>
                         <TableCell>{formatDate(call.started_at)}</TableCell>
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => navigate(`/calls/${call.id}`)}
+                          >
+                            {t('common.details')}
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
               ) : (
                 <div className="py-8 text-center text-muted-foreground">
-                  {i18n.language === 'ru' ? 'Нет звонков' : 'No calls'}
+                  {t('calls.noCalls')}
                 </div>
               )}
             </TabsContent>
