@@ -17,14 +17,15 @@ import {
 } from '@/components/ui/form';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
+import { Loader2 } from 'lucide-react';
 
 const registerSchema = z.object({
-  fullName: z.string().min(2),
-  email: z.string().email(),
-  password: z.string().min(6),
-  confirmPassword: z.string().min(6),
+  fullName: z.string().min(2, 'Минимум 2 символа'),
+  email: z.string().email('Некорректный email'),
+  password: z.string().min(6, 'Минимум 6 символов'),
+  confirmPassword: z.string().min(6, 'Минимум 6 символов'),
 }).refine((data) => data.password === data.confirmPassword, {
-  message: 'Passwords do not match',
+  message: 'Пароли не совпадают',
   path: ['confirmPassword'],
 });
 
@@ -46,51 +47,73 @@ export default function RegisterPage() {
     },
   });
 
+  // Handle redirect after auth state changes
   useEffect(() => {
+    console.debug('[RegisterPage] useEffect check - loading:', loading, 'user:', !!user, 'profile:', !!profile);
+    
     if (!loading && user) {
-      // Check if profile exists to determine where to navigate
       if (profile) {
+        console.debug('[RegisterPage] Redirect decision: user + profile -> /dashboard');
         navigate('/dashboard', { replace: true });
       } else {
+        console.debug('[RegisterPage] Redirect decision: user + no profile -> /onboarding');
         navigate('/onboarding', { replace: true });
       }
     }
   }, [user, profile, loading, navigate]);
 
-  if (loading) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-      </div>
-    );
-  }
-
-  if (user) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-      </div>
-    );
-  }
-
   const onSubmit = async (data: RegisterFormData) => {
+    if (isSubmitting) return;
+    
     setIsSubmitting(true);
+    console.debug('[RegisterPage] Submitting registration for:', data.email);
+    
     try {
-      const { error } = await signUp(
-        data.email,
-        data.password,
-        data.fullName
-      );
+      const { error } = await signUp(data.email, data.password, data.fullName);
+      
       if (error) {
-        toast.error(error.message);
-      } else {
-        toast.success('Проверьте вашу почту для подтверждения регистрации');
+        console.debug('[RegisterPage] Registration error:', error.message);
+        
+        // User-friendly error messages
+        if (error.message.includes('already registered')) {
+          toast.error('Этот email уже зарегистрирован');
+        } else if (error.message.includes('valid email')) {
+          toast.error('Введите корректный email');
+        } else {
+          toast.error(error.message);
+        }
+        return;
       }
-      // Navigation will be handled by useEffect based on profile state
+
+      console.debug('[RegisterPage] Registration success');
+      toast.success('Регистрация успешна! Проверьте почту для подтверждения.');
+      
+      // If email confirmation is disabled, user will be logged in automatically
+      // and useEffect will handle the redirect
     } finally {
       setIsSubmitting(false);
     }
   };
+
+  // Show spinner while loading
+  if (loading) {
+    console.debug('[RegisterPage] Rendering: loading state');
+    return (
+      <div className="flex h-screen items-center justify-center bg-secondary">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  // If user exists, show spinner (redirect will happen via useEffect)
+  if (user) {
+    console.debug('[RegisterPage] Rendering: user exists, waiting for redirect');
+    return (
+      <div className="flex h-screen items-center justify-center bg-secondary">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-secondary p-4">
@@ -114,7 +137,11 @@ export default function RegisterPage() {
                   <FormItem>
                     <FormLabel>{t('auth.fullName')}</FormLabel>
                     <FormControl>
-                      <Input placeholder="Иван Петров" {...field} />
+                      <Input 
+                        placeholder="Иван Петров" 
+                        disabled={isSubmitting}
+                        {...field} 
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -130,6 +157,7 @@ export default function RegisterPage() {
                       <Input
                         type="email"
                         placeholder="email@example.com"
+                        disabled={isSubmitting}
                         {...field}
                       />
                     </FormControl>
@@ -144,7 +172,11 @@ export default function RegisterPage() {
                   <FormItem>
                     <FormLabel>{t('auth.password')}</FormLabel>
                     <FormControl>
-                      <Input type="password" {...field} />
+                      <Input 
+                        type="password" 
+                        disabled={isSubmitting}
+                        {...field} 
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -157,7 +189,11 @@ export default function RegisterPage() {
                   <FormItem>
                     <FormLabel>{t('auth.confirmPassword')}</FormLabel>
                     <FormControl>
-                      <Input type="password" {...field} />
+                      <Input 
+                        type="password" 
+                        disabled={isSubmitting}
+                        {...field} 
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -170,7 +206,14 @@ export default function RegisterPage() {
                 className="w-full"
                 disabled={isSubmitting}
               >
-                {isSubmitting ? t('common.loading') : t('auth.signUp')}
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    {t('common.loading')}
+                  </>
+                ) : (
+                  t('auth.signUp')
+                )}
               </Button>
               <p className="text-sm text-muted-foreground">
                 {t('auth.hasAccount')}{' '}
