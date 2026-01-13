@@ -1,4 +1,25 @@
 {
+  "analytics": {
+    "description": "Статистика использования платформы",
+    "last7days": "Последние 7 дней",
+    "last30days": "Последние 30 дней",
+    "last90days": "Последние 90 дней",
+    "cost7days": "Расходы за 7 дней",
+    "calls7days": "Звонков за 7 дней",
+    "emails7days": "Писем за 7 дней",
+    "currentBalance": "Текущий баланс",
+    "costByDay": "Расходы по дням",
+    "costByDayDesc": "Общие затраты из usage_logs",
+    "callsByDay": "Звонки по дням",
+    "callsByDayDesc": "Количество звонков",
+    "emailsByDay": "Письма по дням",
+    "emailsByDayDesc": "Отправленные письма (outbox)",
+    "tokensByDay": "Токены LLM по дням",
+    "tokensByDayDesc": "Входящие и исходящие токены",
+    "cost": "Расходы",
+    "tokensIn": "Токены (вход)",
+    "tokensOut": "Токены (выход)"
+  },
   "common": {
     "loading": "Загрузка...",
     "save": "Сохранить",

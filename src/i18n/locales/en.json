@@ -1,4 +1,25 @@
 {
+  "analytics": {
+    "description": "Platform usage statistics",
+    "last7days": "Last 7 days",
+    "last30days": "Last 30 days",
+    "last90days": "Last 90 days",
+    "cost7days": "Cost (7 days)",
+    "calls7days": "Calls (7 days)",
+    "emails7days": "Emails (7 days)",
+    "currentBalance": "Current Balance",
+    "costByDay": "Cost by Day",
+    "costByDayDesc": "Total expenses from usage logs",
+    "callsByDay": "Calls by Day",
+    "callsByDayDesc": "Number of calls",
+    "emailsByDay": "Emails by Day",
+    "emailsByDayDesc": "Sent emails (outbox)",
+    "tokensByDay": "LLM Tokens by Day",
+    "tokensByDayDesc": "Input and output tokens",
+    "cost": "Cost",
+    "tokensIn": "Tokens (in)",
+    "tokensOut": "Tokens (out)"
+  },
   "common": {
     "loading": "Loading...",
     "save": "Save",
