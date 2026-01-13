@@ -14,6 +14,7 @@ import DashboardPage from "@/pages/DashboardPage";
 import ContactsPage from "@/pages/contacts/ContactsPage";
 import CompaniesPage from "@/pages/companies/CompaniesPage";
 import LeadsPage from "@/pages/leads/LeadsPage";
+import LeadDetailPage from "@/pages/leads/LeadDetailPage";
 import OrdersPage from "@/pages/orders/OrdersPage";
 import InvoicesPage from "@/pages/invoices/InvoicesPage";
 import ProductsPage from "@/pages/products/ProductsPage";
@@ -43,6 +44,7 @@ const App = () => (
               <Route path="contacts" element={<ContactsPage />} />
               <Route path="companies" element={<CompaniesPage />} />
               <Route path="leads" element={<LeadsPage />} />
+              <Route path="leads/:id" element={<LeadDetailPage />} />
               <Route path="orders" element={<OrdersPage />} />
               <Route path="invoices" element={<InvoicesPage />} />
               <Route path="products" element={<ProductsPage />} />

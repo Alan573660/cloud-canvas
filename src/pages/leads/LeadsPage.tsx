@@ -1,20 +1,35 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { Plus, Pencil, Eye } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Plus, Pencil, Eye, Filter, X } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { DataTable, Column } from '@/components/ui/data-table';
 import { StatusBadge } from '@/components/ui/status-badge';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { format } from 'date-fns';
 import { ru, enUS } from 'date-fns/locale';
+
+// DB enum values - MUST match database
+const LEAD_STATUSES = ['NEW', 'IN_PROGRESS', 'CALCULATED', 'INVOICED', 'PAID', 'FAILED', 'HUMAN_REQUIRED'] as const;
+const LEAD_SOURCES = ['call', 'email', 'manual'] as const;
+
+type LeadStatus = typeof LEAD_STATUSES[number];
+type LeadSource = typeof LEAD_SOURCES[number];
 
 interface Lead {
   id: string;
   title: string | null;
-  source: string;
-  status: string;
+  source: LeadSource;
+  status: LeadStatus;
   subject: string | null;
   created_at: string;
   contact: {
@@ -31,13 +46,16 @@ interface Lead {
 export default function LeadsPage() {
   const { t, i18n } = useTranslation();
   const { profile } = useAuth();
+  const navigate = useNavigate();
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [statusFilter, setStatusFilter] = useState<LeadStatus | 'all'>('all');
+  const [sourceFilter, setSourceFilter] = useState<LeadSource | 'all'>('all');
 
   const { data, isLoading } = useQuery({
-    queryKey: ['leads', profile?.organization_id, search, page, pageSize],
+    queryKey: ['leads', profile?.organization_id, search, page, pageSize, statusFilter, sourceFilter],
     queryFn: async () => {
       if (!profile?.organization_id) return { data: [], count: 0 };
 
@@ -55,6 +73,16 @@ export default function LeadsPage() {
         .eq('organization_id', profile.organization_id)
         .order('created_at', { ascending: false });
 
+      // Apply status filter
+      if (statusFilter !== 'all') {
+        query = query.eq('status', statusFilter);
+      }
+
+      // Apply source filter
+      if (sourceFilter !== 'all') {
+        query = query.eq('source', sourceFilter);
+      }
+
       if (search) {
         query = query.or(`title.ilike.%${search}%,subject.ilike.%${search}%`);
       }
@@ -71,8 +99,8 @@ export default function LeadsPage() {
     enabled: !!profile?.organization_id,
   });
 
-  const getStatusLabel = (status: string) => {
-    const statusMap: Record<string, string> = {
+  const getStatusLabel = (status: LeadStatus) => {
+    const statusMap: Record<LeadStatus, string> = {
       NEW: t('leads.statuses.new'),
       IN_PROGRESS: t('leads.statuses.inProgress'),
       CALCULATED: t('leads.statuses.calculated'),
@@ -84,8 +112,8 @@ export default function LeadsPage() {
     return statusMap[status] || status;
   };
 
-  const getSourceLabel = (source: string) => {
-    const sourceMap: Record<string, string> = {
+  const getSourceLabel = (source: LeadSource) => {
+    const sourceMap: Record<LeadSource, string> = {
       call: t('leads.sources.call'),
       email: t('leads.sources.email'),
       manual: t('leads.sources.manual'),
@@ -93,7 +121,7 @@ export default function LeadsPage() {
     return sourceMap[source] || source;
   };
 
-  const getLeadStatusType = (status: string) => {
+  const getLeadStatusType = (status: LeadStatus) => {
     switch (status) {
       case 'PAID':
         return 'success' as const;
@@ -104,13 +132,20 @@ export default function LeadsPage() {
       case 'INVOICED':
         return 'info' as const;
       case 'FAILED':
-        return 'error' as const;
       case 'HUMAN_REQUIRED':
         return 'error' as const;
       default:
         return 'default' as const;
     }
   };
+
+  const clearFilters = () => {
+    setStatusFilter('all');
+    setSourceFilter('all');
+    setPage(1);
+  };
+
+  const hasActiveFilters = statusFilter !== 'all' || sourceFilter !== 'all';
 
   const columns: Column<Lead>[] = [
     {
@@ -159,10 +194,18 @@ export default function LeadsPage() {
       header: t('common.actions'),
       cell: (row) => (
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon">
+          <Button 
+            variant="ghost" 
+            size="icon"
+            onClick={() => navigate(`/leads/${row.id}`)}
+          >
             <Eye className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon">
+          <Button 
+            variant="ghost" 
+            size="icon"
+            onClick={() => navigate(`/leads/${row.id}`)}
+          >
             <Pencil className="h-4 w-4" />
           </Button>
         </div>
@@ -180,6 +223,61 @@ export default function LeadsPage() {
           <Plus className="h-4 w-4 mr-2" />
           {t('leads.newLead')}
         </Button>
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap items-center gap-4 p-4 bg-card rounded-lg border">
+        <div className="flex items-center gap-2">
+          <Filter className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-medium">{t('common.filter')}:</span>
+        </div>
+        
+        <Select
+          value={statusFilter}
+          onValueChange={(value) => {
+            setStatusFilter(value as LeadStatus | 'all');
+            setPage(1);
+          }}
+        >
+          <SelectTrigger className="w-[180px]">
+            <SelectValue placeholder={t('common.status')} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{t('common.status')}: все</SelectItem>
+            {LEAD_STATUSES.map((status) => (
+              <SelectItem key={status} value={status}>
+                {getStatusLabel(status)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select
+          value={sourceFilter}
+          onValueChange={(value) => {
+            setSourceFilter(value as LeadSource | 'all');
+            setPage(1);
+          }}
+        >
+          <SelectTrigger className="w-[180px]">
+            <SelectValue placeholder={t('leads.source')} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{t('leads.source')}: все</SelectItem>
+            {LEAD_SOURCES.map((source) => (
+              <SelectItem key={source} value={source}>
+                {getSourceLabel(source)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {hasActiveFilters && (
+          <Button variant="ghost" size="sm" onClick={clearFilters}>
+            <X className="h-4 w-4 mr-1" />
+            Сбросить
+          </Button>
+        )}
       </div>
 
       <DataTable
