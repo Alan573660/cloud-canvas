@@ -1,3 +1,4 @@
+// Auth Context - provides authentication state and methods
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
