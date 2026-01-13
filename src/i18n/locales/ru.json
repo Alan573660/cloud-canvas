@@ -61,7 +61,9 @@
     "details": "Подробнее",
     "open": "Открыть",
     "allStatuses": "Все статусы",
-    "reset": "Сбросить"
+    "all": "Все",
+    "reset": "Сбросить",
+    "noPermission": "Недостаточно прав для просмотра"
   },
   "auth": {
     "login": "Войти",
@@ -330,14 +332,20 @@
   },
   "billing": {
     "title": "Биллинг",
+    "description": "История транзакций и баланс организации",
     "balance": "Баланс",
-    "transactions": "Транзакции",
+    "currentBalance": "Текущий баланс",
+    "transactions": "История транзакций",
+    "transactionsDesc": "Все операции по счёту организации",
     "topUp": "Пополнить",
     "usage": "Использование",
     "type": "Тип",
     "amount": "Сумма",
     "reason": "Основание",
     "reference": "Ссылка",
+    "referenceType": "Тип ссылки",
+    "referenceId": "ID ссылки",
+    "exportCSV": "Экспорт CSV",
     "types": {
       "topUp": "Пополнение",
       "debit": "Списание",
@@ -347,6 +355,7 @@
       "callCost": "Стоимость звонка",
       "emailCost": "Стоимость письма",
       "llmCost": "Стоимость LLM",
+      "invoiceCost": "Стоимость счёта",
       "subscription": "Подписка",
       "manual": "Ручное",
       "payment": "Платёж"
