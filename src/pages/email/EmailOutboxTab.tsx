@@ -1,13 +1,20 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Send, X, Plus, Loader2 } from 'lucide-react';
+import { X, Plus, Loader2, Filter } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent } from '@/components/ui/card';
 import { DataTable, Column } from '@/components/ui/data-table';
 import { StatusBadge, getStatusType } from '@/components/ui/status-badge';
 import { Button } from '@/components/ui/button';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { toast } from '@/hooks/use-toast';
@@ -15,14 +22,19 @@ import { format } from 'date-fns';
 import { ru, enUS } from 'date-fns/locale';
 import QueueEmailForm from './QueueEmailForm';
 
+// DB status values - MUST match database exactly
+const OUTBOX_STATUSES = ['QUEUED', 'SENDING', 'SENT', 'FAILED', 'CANCELLED'] as const;
+type OutboxStatus = typeof OUTBOX_STATUSES[number];
+
 interface EmailOutbox {
   id: string;
   to_email: string;
   subject: string | null;
-  status: string;
+  status: OutboxStatus;
   queued_at: string;
   sent_at: string | null;
   error_reason: string | null;
+  provider_message_id: string | null;
 }
 
 export default function EmailOutboxTab() {
@@ -31,14 +43,16 @@ export default function EmailOutboxTab() {
   const queryClient = useQueryClient();
 
   const [page, setPage] = useState(1);
-  const [statusFilter, setStatusFilter] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<OutboxStatus | 'all'>('all');
   const [formOpen, setFormOpen] = useState(false);
   const [cancelId, setCancelId] = useState<string | null>(null);
   const pageSize = 10;
 
   const dateLocale = i18n.language === 'ru' ? ru : enUS;
 
-  const canManage = profile?.role && ['owner', 'admin'].includes(profile.role);
+  // Role permissions
+  const canQueue = profile?.role && ['owner', 'admin', 'operator'].includes(profile.role);
+  const canCancel = profile?.role && ['owner', 'admin'].includes(profile.role);
 
   const { data: outbox, isLoading } = useQuery({
     queryKey: ['email-outbox', profile?.organization_id, page, statusFilter],
@@ -54,7 +68,7 @@ export default function EmailOutboxTab() {
         .eq('organization_id', profile.organization_id)
         .order('queued_at', { ascending: false });
 
-      if (statusFilter) {
+      if (statusFilter !== 'all') {
         query = query.eq('status', statusFilter);
       }
 
@@ -82,8 +96,9 @@ export default function EmailOutboxTab() {
       if (success) {
         toast({ title: t('common.success') });
         queryClient.invalidateQueries({ queryKey: ['email-outbox'] });
+        queryClient.invalidateQueries({ queryKey: ['email-outbox-count'] });
       } else {
-        toast({ title: t('common.error'), description: 'Cannot cancel', variant: 'destructive' });
+        toast({ title: t('common.error'), description: t('email.cannotCancel'), variant: 'destructive' });
       }
       setCancelId(null);
     },
@@ -93,15 +108,9 @@ export default function EmailOutboxTab() {
     },
   });
 
-  const getStatusLabel = (status: string) => {
-    const statusMap: Record<string, string> = {
-      QUEUED: t('email.statuses.queued'),
-      SENDING: t('email.statuses.queued'),
-      SENT: t('email.statuses.sent'),
-      FAILED: t('email.statuses.failed'),
-      CANCELLED: t('email.statuses.cancelled'),
-    };
-    return statusMap[status] || status;
+  const getStatusLabel = (status: OutboxStatus) => {
+    const key = `email.statuses.${status.toLowerCase()}`;
+    return t(key, status);
   };
 
   const outboxColumns: Column<EmailOutbox>[] = [
@@ -114,7 +123,7 @@ export default function EmailOutboxTab() {
       key: 'subject',
       header: t('email.subject'),
       cell: (row) => (
-        <span className="max-w-md truncate block">{row.subject || '—'}</span>
+        <span className="max-w-xs truncate block">{row.subject || '—'}</span>
       ),
     },
     {
@@ -124,21 +133,40 @@ export default function EmailOutboxTab() {
         <div className="flex flex-col gap-1">
           <StatusBadge status={getStatusLabel(row.status)} type={getStatusType(row.status)} />
           {row.error_reason && (
-            <span className="text-xs text-destructive">{row.error_reason}</span>
+            <span className="text-xs text-destructive max-w-xs truncate" title={row.error_reason}>
+              {row.error_reason}
+            </span>
           )}
         </div>
       ),
     },
     {
       key: 'queued_at',
-      header: t('common.date'),
-      cell: (row) => format(new Date(row.queued_at), 'dd MMM yyyy HH:mm', { locale: dateLocale }),
+      header: t('email.queuedAt'),
+      cell: (row) => format(new Date(row.queued_at), 'dd MMM HH:mm', { locale: dateLocale }),
+    },
+    {
+      key: 'sent_at',
+      header: t('email.sentAt'),
+      cell: (row) =>
+        row.sent_at
+          ? format(new Date(row.sent_at), 'dd MMM HH:mm', { locale: dateLocale })
+          : '—',
+    },
+    {
+      key: 'provider_message_id',
+      header: t('email.providerMessageId'),
+      cell: (row) => (
+        <span className="text-xs text-muted-foreground max-w-[100px] truncate block" title={row.provider_message_id || undefined}>
+          {row.provider_message_id || '—'}
+        </span>
+      ),
     },
     {
       key: 'actions',
       header: t('common.actions'),
       cell: (row) => (
-        row.status === 'QUEUED' && canManage ? (
+        row.status === 'QUEUED' && canCancel ? (
           <Button
             variant="outline"
             size="sm"
@@ -152,32 +180,48 @@ export default function EmailOutboxTab() {
     },
   ];
 
-  const statuses = ['QUEUED', 'SENDING', 'SENT', 'FAILED', 'CANCELLED'];
+  const hasActiveFilters = statusFilter !== 'all';
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <div className="flex gap-2">
-          <Button
-            variant={statusFilter === '' ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => setStatusFilter('')}
+      <div className="flex justify-between items-center flex-wrap gap-4">
+        {/* Filters */}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Filter className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-medium">{t('common.filter')}:</span>
+          </div>
+          
+          <Select
+            value={statusFilter}
+            onValueChange={(value) => {
+              setStatusFilter(value as OutboxStatus | 'all');
+              setPage(1);
+            }}
           >
-            {t('common.filter')}: {t('common.noData').replace('Нет данных', 'Все').replace('No data', 'All')}
-          </Button>
-          {statuses.map((status) => (
-            <Button
-              key={status}
-              variant={statusFilter === status ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setStatusFilter(status)}
-            >
-              {getStatusLabel(status)}
+            <SelectTrigger className="w-[180px]">
+              <SelectValue placeholder={t('common.status')} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t('common.allStatuses')}</SelectItem>
+              {OUTBOX_STATUSES.map((status) => (
+                <SelectItem key={status} value={status}>
+                  {getStatusLabel(status)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {hasActiveFilters && (
+            <Button variant="ghost" size="sm" onClick={() => setStatusFilter('all')}>
+              <X className="h-4 w-4 mr-1" />
+              {t('common.reset')}
             </Button>
-          ))}
+          )}
         </div>
 
-        {canManage && (
+        {/* Queue button - available for operator, admin, owner */}
+        {canQueue && (
           <Dialog open={formOpen} onOpenChange={setFormOpen}>
             <DialogTrigger asChild>
               <Button>
@@ -193,6 +237,7 @@ export default function EmailOutboxTab() {
                 onSuccess={() => {
                   setFormOpen(false);
                   queryClient.invalidateQueries({ queryKey: ['email-outbox'] });
+                  queryClient.invalidateQueries({ queryKey: ['email-outbox-count'] });
                 }}
                 onCancel={() => setFormOpen(false)}
               />
@@ -211,18 +256,18 @@ export default function EmailOutboxTab() {
             pageSize={pageSize}
             totalCount={outbox?.count || 0}
             onPageChange={setPage}
+            emptyMessage={t('email.noOutbox')}
           />
         </CardContent>
       </Card>
 
+      {/* Cancel confirmation dialog */}
       <AlertDialog open={!!cancelId} onOpenChange={() => setCancelId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t('common.confirm')}</AlertDialogTitle>
             <AlertDialogDescription>
-              {i18n.language === 'ru' 
-                ? 'Вы уверены, что хотите отменить отправку этого письма?'
-                : 'Are you sure you want to cancel sending this email?'}
+              {t('email.cancelConfirm')}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

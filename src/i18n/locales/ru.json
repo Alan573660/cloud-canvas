@@ -364,6 +364,13 @@
     "messages": "Сообщения",
     "cancelConfirm": "Вы уверены, что хотите отменить отправку этого письма?",
     "noAccounts": "Нет доступных email-аккаунтов",
+    "noOutbox": "Нет писем в очереди",
+    "queuedAt": "В очереди",
+    "sentAt": "Отправлено",
+    "providerMessageId": "ID провайдера",
+    "cannotCancel": "Невозможно отменить",
+    "rawTextForAgent": "Исходный текст (для агента)",
+    "extractedText": "Извлечённый текст",
     "statuses": {
       "queued": "В очереди",
       "sending": "Отправляется",
