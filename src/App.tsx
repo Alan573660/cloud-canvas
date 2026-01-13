@@ -2,25 +2,59 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import Index from "./pages/Index";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider } from "@/contexts/AuthContext";
+import "@/i18n";
+
+import { AppLayout } from "@/components/layout/AppLayout";
+import LoginPage from "@/pages/auth/LoginPage";
+import RegisterPage from "@/pages/auth/RegisterPage";
+import DashboardPage from "@/pages/DashboardPage";
+import ContactsPage from "@/pages/contacts/ContactsPage";
+import CompaniesPage from "@/pages/companies/CompaniesPage";
+import LeadsPage from "@/pages/leads/LeadsPage";
+import OrdersPage from "@/pages/orders/OrdersPage";
+import InvoicesPage from "@/pages/invoices/InvoicesPage";
+import ProductsPage from "@/pages/products/ProductsPage";
+import EmailPage from "@/pages/email/EmailPage";
+import BillingPage from "@/pages/billing/BillingPage";
+import AnalyticsPage from "@/pages/analytics/AnalyticsPage";
+import ImportPage from "@/pages/import/ImportPage";
+import SettingsPage from "@/pages/settings/SettingsPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <Toaster />
-      <Sonner />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Index />} />
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </BrowserRouter>
-    </TooltipProvider>
+    <AuthProvider>
+      <TooltipProvider>
+        <Toaster />
+        <Sonner />
+        <BrowserRouter>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/register" element={<RegisterPage />} />
+            <Route path="/" element={<AppLayout />}>
+              <Route index element={<Navigate to="/dashboard" replace />} />
+              <Route path="dashboard" element={<DashboardPage />} />
+              <Route path="contacts" element={<ContactsPage />} />
+              <Route path="companies" element={<CompaniesPage />} />
+              <Route path="leads" element={<LeadsPage />} />
+              <Route path="orders" element={<OrdersPage />} />
+              <Route path="invoices" element={<InvoicesPage />} />
+              <Route path="products" element={<ProductsPage />} />
+              <Route path="email" element={<EmailPage />} />
+              <Route path="billing" element={<BillingPage />} />
+              <Route path="analytics" element={<AnalyticsPage />} />
+              <Route path="import" element={<ImportPage />} />
+              <Route path="settings" element={<SettingsPage />} />
+            </Route>
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </BrowserRouter>
+      </TooltipProvider>
+    </AuthProvider>
   </QueryClientProvider>
 );
 
