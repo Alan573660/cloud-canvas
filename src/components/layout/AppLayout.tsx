@@ -6,14 +6,18 @@ import { AppHeader } from './AppHeader';
 import { useAuth } from '@/contexts/AuthContext';
 
 export function AppLayout() {
-  const { user, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!loading && !user) {
-      navigate('/login', { replace: true });
+    if (!loading) {
+      if (!user) {
+        navigate('/login', { replace: true });
+      } else if (!profile) {
+        navigate('/onboarding', { replace: true });
+      }
     }
-  }, [user, loading, navigate]);
+  }, [user, profile, loading, navigate]);
 
   if (loading) {
     return (
@@ -23,7 +27,7 @@ export function AppLayout() {
     );
   }
 
-  if (!user) {
+  if (!user || !profile) {
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />

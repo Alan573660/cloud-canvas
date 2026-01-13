@@ -27,7 +27,7 @@ type LoginFormData = z.infer<typeof loginSchema>;
 
 export default function LoginPage() {
   const { t } = useTranslation();
-  const { signIn, user, loading } = useAuth();
+  const { signIn, user, profile, loading } = useAuth();
   const navigate = useNavigate();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -41,9 +41,14 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!loading && user) {
-      navigate('/dashboard', { replace: true });
+      // Check if profile exists to determine where to navigate
+      if (profile) {
+        navigate('/dashboard', { replace: true });
+      } else {
+        navigate('/onboarding', { replace: true });
+      }
     }
-  }, [user, loading, navigate]);
+  }, [user, profile, loading, navigate]);
 
   if (loading) {
     return (
@@ -67,9 +72,8 @@ export default function LoginPage() {
       const { error } = await signIn(data.email, data.password);
       if (error) {
         toast.error(error.message);
-      } else {
-        navigate('/dashboard');
       }
+      // Navigation will be handled by useEffect based on profile state
     } finally {
       setIsSubmitting(false);
     }
