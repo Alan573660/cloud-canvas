@@ -1,13 +1,19 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { Mail, ArrowLeft } from 'lucide-react';
+import { Mail, ArrowLeft, Paperclip, FileText, ExternalLink } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { DataTable, Column } from '@/components/ui/data-table';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from '@/components/ui/accordion';
 import { format } from 'date-fns';
 import { ru, enUS } from 'date-fns/locale';
 
@@ -26,10 +32,20 @@ interface EmailMessage {
   to_email: string | null;
   subject: string | null;
   body_text: string | null;
+  raw_text_for_agent: string | null;
   received_at: string | null;
   sent_at: string | null;
   status: string;
   has_attachments: boolean;
+}
+
+interface EmailAttachment {
+  id: string;
+  message_id: string;
+  filename: string | null;
+  mime_type: string | null;
+  storage_url: string | null;
+  extracted_text: string | null;
 }
 
 export default function EmailThreadsTab() {
@@ -86,6 +102,28 @@ export default function EmailThreadsTab() {
     enabled: !!selectedThreadId,
   });
 
+  // Fetch attachments for all messages in the thread
+  const messageIds = messages?.map(m => m.id) || [];
+  const { data: attachments } = useQuery({
+    queryKey: ['email-attachments', messageIds],
+    queryFn: async () => {
+      if (messageIds.length === 0) return [];
+
+      const { data, error } = await supabase
+        .from('email_attachments')
+        .select('*')
+        .in('message_id', messageIds);
+
+      if (error) throw error;
+      return data as EmailAttachment[];
+    },
+    enabled: messageIds.length > 0,
+  });
+
+  const getAttachmentsForMessage = (messageId: string) => {
+    return attachments?.filter(a => a.message_id === messageId) || [];
+  };
+
   const threadColumns: Column<EmailThread>[] = [
     {
       key: 'counterparty_email',
@@ -112,7 +150,7 @@ export default function EmailThreadsTab() {
       header: t('common.actions'),
       cell: (row) => (
         <Button variant="outline" size="sm" onClick={() => setSelectedThreadId(row.id)}>
-          {t('common.edit')}
+          {t('email.messages')}
         </Button>
       ),
     },
@@ -145,43 +183,111 @@ export default function EmailThreadsTab() {
               <div className="text-muted-foreground">{t('common.loading')}</div>
             ) : messages && messages.length > 0 ? (
               <div className="space-y-4">
-                {messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`p-4 rounded-lg border ${
-                      msg.direction === 'outbound'
-                        ? 'bg-primary/5 border-primary/20 ml-8'
-                        : 'bg-muted/50 mr-8'
-                    }`}
-                  >
-                    <div className="flex justify-between items-start mb-2">
-                      <div className="flex items-center gap-2">
-                        <Badge variant={msg.direction === 'outbound' ? 'default' : 'secondary'}>
-                          {msg.direction === 'outbound' ? t('email.outbox') : t('email.inbox')}
-                        </Badge>
-                        {msg.has_attachments && (
-                          <Badge variant="outline">{t('email.attachments')}</Badge>
-                        )}
+                {messages.map((msg) => {
+                  const msgAttachments = getAttachmentsForMessage(msg.id);
+                  
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`p-4 rounded-lg border ${
+                        msg.direction === 'outbound'
+                          ? 'bg-primary/5 border-primary/20 ml-8'
+                          : 'bg-muted/50 mr-8'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <div className="flex items-center gap-2">
+                          <Badge variant={msg.direction === 'outbound' ? 'default' : 'secondary'}>
+                            {msg.direction === 'outbound' ? t('email.outbox') : t('email.inbox')}
+                          </Badge>
+                          {msg.has_attachments && (
+                            <Badge variant="outline">
+                              <Paperclip className="h-3 w-3 mr-1" />
+                              {t('email.attachments')}
+                            </Badge>
+                          )}
+                        </div>
+                        <span className="text-sm text-muted-foreground">
+                          {(msg.received_at || msg.sent_at) 
+                            ? format(new Date(msg.received_at || msg.sent_at!), 'dd MMM yyyy HH:mm', { locale: dateLocale })
+                            : '—'}
+                        </span>
                       </div>
-                      <span className="text-sm text-muted-foreground">
-                        {(msg.received_at || msg.sent_at) 
-                          ? format(new Date(msg.received_at || msg.sent_at!), 'dd MMM yyyy HH:mm', { locale: dateLocale })
-                          : '—'}
-                      </span>
+                      
+                      <div className="text-sm text-muted-foreground mb-1">
+                        {msg.direction === 'outbound' 
+                          ? `${t('email.to')}: ${msg.to_email}`
+                          : `${t('email.from')}: ${msg.from_email}`}
+                      </div>
+                      
+                      {msg.subject && (
+                        <div className="font-medium mb-2">{msg.subject}</div>
+                      )}
+                      
+                      <div className="whitespace-pre-wrap text-sm mb-3">
+                        {msg.body_text || '—'}
+                      </div>
+
+                      {/* Attachments */}
+                      {msgAttachments.length > 0 && (
+                        <div className="mt-3 pt-3 border-t">
+                          <div className="text-sm font-medium mb-2 flex items-center gap-1">
+                            <Paperclip className="h-4 w-4" />
+                            {t('email.attachments')} ({msgAttachments.length})
+                          </div>
+                          <div className="space-y-2">
+                            {msgAttachments.map((att) => (
+                              <div key={att.id} className="flex items-center gap-2 text-sm">
+                                <FileText className="h-4 w-4 text-muted-foreground" />
+                                <span>{att.filename || 'attachment'}</span>
+                                {att.storage_url && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 px-2"
+                                    onClick={() => window.open(att.storage_url!, '_blank')}
+                                  >
+                                    <ExternalLink className="h-3 w-3" />
+                                  </Button>
+                                )}
+                                {att.extracted_text && (
+                                  <Accordion type="single" collapsible className="w-full">
+                                    <AccordionItem value="extracted" className="border-0">
+                                      <AccordionTrigger className="py-1 text-xs">
+                                        {t('email.extractedText')}
+                                      </AccordionTrigger>
+                                      <AccordionContent>
+                                        <pre className="text-xs whitespace-pre-wrap bg-muted p-2 rounded max-h-32 overflow-auto">
+                                          {att.extracted_text}
+                                        </pre>
+                                      </AccordionContent>
+                                    </AccordionItem>
+                                  </Accordion>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Raw text for agent - in accordion */}
+                      {msg.raw_text_for_agent && (
+                        <Accordion type="single" collapsible className="mt-3">
+                          <AccordionItem value="raw" className="border rounded">
+                            <AccordionTrigger className="px-3 py-2 text-sm">
+                              {t('email.rawTextForAgent')}
+                            </AccordionTrigger>
+                            <AccordionContent className="px-3 pb-3">
+                              <pre className="text-xs whitespace-pre-wrap bg-muted p-2 rounded max-h-48 overflow-auto">
+                                {msg.raw_text_for_agent}
+                              </pre>
+                            </AccordionContent>
+                          </AccordionItem>
+                        </Accordion>
+                      )}
                     </div>
-                    <div className="text-sm text-muted-foreground mb-1">
-                      {msg.direction === 'outbound' 
-                        ? `${t('email.to')}: ${msg.to_email}`
-                        : `${t('email.from')}: ${msg.from_email}`}
-                    </div>
-                    {msg.subject && (
-                      <div className="font-medium mb-2">{msg.subject}</div>
-                    )}
-                    <div className="whitespace-pre-wrap text-sm">
-                      {msg.body_text || '—'}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="text-muted-foreground">{t('common.noData')}</div>
