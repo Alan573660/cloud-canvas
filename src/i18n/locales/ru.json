@@ -35,7 +35,12 @@
     "error": "Ошибка",
     "success": "Успешно",
     "warning": "Предупреждение",
-    "info": "Информация"
+    "info": "Информация",
+    "createdAt": "Создан",
+    "details": "Подробнее",
+    "open": "Открыть",
+    "allStatuses": "Все статусы",
+    "reset": "Сбросить"
   },
   "auth": {
     "login": "Войти",
@@ -172,6 +177,28 @@
     "paidAt": "Оплачен",
     "deleteConfirm": "Вы уверены, что хотите удалить этот счёт?",
     "noInvoices": "Счета не найдены",
+    "openPdf": "Открыть PDF",
+    "invoiceInfo": "Информация о счёте",
+    "relatedOrder": "Связанный заказ",
+    "deliveryHistory": "История отправки",
+    "deliveryHistoryDescription": "Все попытки доставки счёта клиенту",
+    "noDeliveries": "Нет записей об отправке",
+    "channel": "Канал",
+    "toAddress": "Адрес",
+    "errorReason": "Ошибка",
+    "channels": {
+      "EMAIL": "Email",
+      "SMS": "SMS",
+      "TELEGRAM": "Telegram",
+      "WHATSAPP": "WhatsApp"
+    },
+    "deliveryStatuses": {
+      "QUEUED": "В очереди",
+      "SENDING": "Отправляется",
+      "SENT": "Отправлено",
+      "FAILED": "Ошибка",
+      "CANCELLED": "Отменено"
+    },
     "statuses": {
       "draft": "Черновик",
       "created": "Создан",
