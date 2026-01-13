@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, AlertCircle } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -22,6 +22,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ContactForm } from './ContactForm';
 import { toast } from 'sonner';
 
@@ -34,6 +35,9 @@ interface Contact {
   created_at: string;
 }
 
+// Roles that can create/edit/delete contacts
+const CAN_MANAGE_CONTACTS: string[] = ['owner', 'admin', 'operator'];
+
 export default function ContactsPage() {
   const { t } = useTranslation();
   const { profile } = useAuth();
@@ -45,8 +49,12 @@ export default function ContactsPage() {
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [deletingContact, setDeletingContact] = useState<Contact | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [permissionError, setPermissionError] = useState<string | null>(null);
 
-  const { data, isLoading } = useQuery({
+  // Check if current user can manage contacts based on role
+  const canManageContacts = profile?.role && CAN_MANAGE_CONTACTS.includes(profile.role);
+
+  const { data, isLoading, error: fetchError } = useQuery({
     queryKey: ['contacts', profile?.organization_id, search, page, pageSize],
     queryFn: async () => {
       if (!profile?.organization_id) return { data: [], count: 0 };
@@ -68,8 +76,17 @@ export default function ContactsPage() {
       query = query.range(from, to);
 
       const { data, count, error } = await query;
-      if (error) throw error;
+      
+      if (error) {
+        // Handle 403 permission error
+        if (error.code === '42501' || error.message?.includes('permission') || error.message?.includes('policy')) {
+          setPermissionError(t('errors.forbidden', 'Недостаточно прав'));
+          return { data: [], count: 0 };
+        }
+        throw error;
+      }
 
+      setPermissionError(null);
       return { data: data as Contact[], count: count || 0 };
     },
     enabled: !!profile?.organization_id,
@@ -78,7 +95,13 @@ export default function ContactsPage() {
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
       const { error } = await supabase.from('contacts').delete().eq('id', id);
-      if (error) throw error;
+      if (error) {
+        // Handle 403 permission error
+        if (error.code === '42501' || error.message?.includes('permission') || error.message?.includes('policy')) {
+          throw new Error(t('errors.forbidden', 'Недостаточно прав'));
+        }
+        throw error;
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
@@ -87,6 +110,7 @@ export default function ContactsPage() {
     },
     onError: (error) => {
       toast.error(error.message);
+      setDeletingContact(null);
     },
   });
 
@@ -94,7 +118,7 @@ export default function ContactsPage() {
     {
       key: 'full_name',
       header: t('contacts.fullName'),
-      cell: (row) => row.full_name || '—',
+      cell: (row) => <span className="font-medium">{row.full_name || '—'}</span>,
     },
     {
       key: 'email',
@@ -110,7 +134,9 @@ export default function ContactsPage() {
       key: 'notes',
       header: t('contacts.notes'),
       cell: (row) => (
-        <span className="max-w-xs truncate block">{row.notes || '—'}</span>
+        <span className="max-w-xs truncate block text-muted-foreground">
+          {row.notes || '—'}
+        </span>
       ),
     },
     {
@@ -118,23 +144,29 @@ export default function ContactsPage() {
       header: t('common.actions'),
       cell: (row) => (
         <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => {
-              setEditingContact(row);
-              setIsFormOpen(true);
-            }}
-          >
-            <Pencil className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setDeletingContact(row)}
-          >
-            <Trash2 className="h-4 w-4 text-destructive" />
-          </Button>
+          {canManageContacts && (
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => {
+                  setEditingContact(row);
+                  setIsFormOpen(true);
+                }}
+                title={t('common.edit')}
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setDeletingContact(row)}
+                title={t('common.delete')}
+              >
+                <Trash2 className="h-4 w-4 text-destructive" />
+              </Button>
+            </>
+          )}
         </div>
       ),
     },
@@ -146,22 +178,42 @@ export default function ContactsPage() {
     queryClient.invalidateQueries({ queryKey: ['contacts'] });
   };
 
+  const handleFormError = (error: Error) => {
+    // Check if it's a permission error
+    if (error.message?.includes('permission') || error.message?.includes('policy') || error.message?.includes('403')) {
+      toast.error(t('errors.forbidden', 'Недостаточно прав'));
+    } else {
+      toast.error(error.message);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">{t('contacts.title')}</h1>
         </div>
-        <Button
-          onClick={() => {
-            setEditingContact(null);
-            setIsFormOpen(true);
-          }}
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          {t('contacts.newContact')}
-        </Button>
+        {canManageContacts && (
+          <Button
+            onClick={() => {
+              setEditingContact(null);
+              setIsFormOpen(true);
+            }}
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            {t('contacts.newContact')}
+          </Button>
+        )}
       </div>
+
+      {/* Permission error alert */}
+      {permissionError && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>{t('common.error')}</AlertTitle>
+          <AlertDescription>{permissionError}</AlertDescription>
+        </Alert>
+      )}
 
       <DataTable
         columns={columns}
@@ -181,8 +233,9 @@ export default function ContactsPage() {
         emptyMessage={t('contacts.noContacts')}
       />
 
+      {/* Create/Edit Modal */}
       <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>
               {editingContact ? t('contacts.editContact') : t('contacts.newContact')}
@@ -192,10 +245,12 @@ export default function ContactsPage() {
             contact={editingContact}
             onSuccess={handleFormSuccess}
             onCancel={() => setIsFormOpen(false)}
+            onError={handleFormError}
           />
         </DialogContent>
       </Dialog>
 
+      {/* Delete Confirmation */}
       <AlertDialog
         open={!!deletingContact}
         onOpenChange={() => setDeletingContact(null)}
@@ -205,15 +260,23 @@ export default function ContactsPage() {
             <AlertDialogTitle>{t('common.confirm')}</AlertDialogTitle>
             <AlertDialogDescription>
               {t('contacts.deleteConfirm')}
+              {deletingContact?.full_name && (
+                <span className="font-medium block mt-2">
+                  {deletingContact.full_name}
+                </span>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>
+              {t('common.cancel')}
+            </AlertDialogCancel>
             <AlertDialogAction
               onClick={() => deletingContact && deleteMutation.mutate(deletingContact.id)}
+              disabled={deleteMutation.isPending}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {t('common.delete')}
+              {deleteMutation.isPending ? t('common.loading') : t('common.delete')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
