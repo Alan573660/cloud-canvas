@@ -212,14 +212,17 @@ export default function QueueEmailForm({ onSuccess, onCancel }: QueueEmailFormPr
             render={({ field }) => (
               <FormItem>
                 <FormLabel>{t('leads.title')} (optional)</FormLabel>
-                <Select onValueChange={field.onChange} value={field.value}>
+                <Select 
+                  onValueChange={(val) => field.onChange(val === '__none__' ? '' : val)} 
+                  value={field.value || '__none__'}
+                >
                   <FormControl>
                     <SelectTrigger>
                       <SelectValue placeholder="—" />
                     </SelectTrigger>
                   </FormControl>
                   <SelectContent>
-                    <SelectItem value="">—</SelectItem>
+                    <SelectItem value="__none__">—</SelectItem>
                     {leads?.map((lead) => (
                       <SelectItem key={lead.id} value={lead.id}>
                         {lead.title || lead.subject || lead.id.slice(0, 8)}
@@ -238,14 +241,17 @@ export default function QueueEmailForm({ onSuccess, onCancel }: QueueEmailFormPr
             render={({ field }) => (
               <FormItem>
                 <FormLabel>{t('email.threads')} (optional)</FormLabel>
-                <Select onValueChange={field.onChange} value={field.value}>
+                <Select 
+                  onValueChange={(val) => field.onChange(val === '__none__' ? '' : val)} 
+                  value={field.value || '__none__'}
+                >
                   <FormControl>
                     <SelectTrigger>
                       <SelectValue placeholder="—" />
                     </SelectTrigger>
                   </FormControl>
                   <SelectContent>
-                    <SelectItem value="">—</SelectItem>
+                    <SelectItem value="__none__">—</SelectItem>
                     {threads?.map((thread) => (
                       <SelectItem key={thread.id} value={thread.id}>
                         {thread.subject || thread.counterparty_email || thread.id.slice(0, 8)}
