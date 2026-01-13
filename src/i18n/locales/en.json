@@ -174,10 +174,11 @@
     "noInvoices": "No invoices found",
     "statuses": {
       "draft": "Draft",
+      "created": "Created",
       "sent": "Sent",
       "paid": "Paid",
-      "overdue": "Overdue",
-      "cancelled": "Cancelled"
+      "cancelled": "Cancelled",
+      "failed": "Failed"
     }
   },
   "products": {

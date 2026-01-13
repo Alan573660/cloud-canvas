@@ -174,10 +174,11 @@
     "noInvoices": "Счета не найдены",
     "statuses": {
       "draft": "Черновик",
+      "created": "Создан",
       "sent": "Отправлен",
       "paid": "Оплачен",
-      "overdue": "Просрочен",
-      "cancelled": "Отменён"
+      "cancelled": "Отменён",
+      "failed": "Ошибка"
     }
   },
   "products": {
