@@ -125,16 +125,16 @@
     "statuses": {
       "new": "Новый",
       "inProgress": "В работе",
-      "qualified": "Квалифицирован",
-      "converted": "Конвертирован",
-      "lost": "Потерян"
+      "calculated": "Расчёт готов",
+      "invoiced": "Счёт выставлен",
+      "paid": "Оплачен",
+      "failed": "Ошибка",
+      "humanRequired": "Требуется оператор"
     },
     "sources": {
+      "call": "Звонок",
       "email": "Email",
-      "phone": "Телефон",
-      "website": "Сайт",
-      "referral": "Рекомендация",
-      "other": "Другое"
+      "manual": "Вручную"
     }
   },
   "orders": {

@@ -125,16 +125,16 @@
     "statuses": {
       "new": "New",
       "inProgress": "In Progress",
-      "qualified": "Qualified",
-      "converted": "Converted",
-      "lost": "Lost"
+      "calculated": "Calculated",
+      "invoiced": "Invoiced",
+      "paid": "Paid",
+      "failed": "Failed",
+      "humanRequired": "Human Required"
     },
     "sources": {
+      "call": "Call",
       "email": "Email",
-      "phone": "Phone",
-      "website": "Website",
-      "referral": "Referral",
-      "other": "Other"
+      "manual": "Manual"
     }
   },
   "orders": {

@@ -6,7 +6,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { DataTable, Column } from '@/components/ui/data-table';
-import { StatusBadge, getStatusType } from '@/components/ui/status-badge';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { format } from 'date-fns';
 import { ru, enUS } from 'date-fns/locale';
 
@@ -73,24 +73,43 @@ export default function LeadsPage() {
 
   const getStatusLabel = (status: string) => {
     const statusMap: Record<string, string> = {
-      new: t('leads.statuses.new'),
-      in_progress: t('leads.statuses.inProgress'),
-      qualified: t('leads.statuses.qualified'),
-      converted: t('leads.statuses.converted'),
-      lost: t('leads.statuses.lost'),
+      NEW: t('leads.statuses.new'),
+      IN_PROGRESS: t('leads.statuses.inProgress'),
+      CALCULATED: t('leads.statuses.calculated'),
+      INVOICED: t('leads.statuses.invoiced'),
+      PAID: t('leads.statuses.paid'),
+      FAILED: t('leads.statuses.failed'),
+      HUMAN_REQUIRED: t('leads.statuses.humanRequired'),
     };
     return statusMap[status] || status;
   };
 
   const getSourceLabel = (source: string) => {
     const sourceMap: Record<string, string> = {
+      call: t('leads.sources.call'),
       email: t('leads.sources.email'),
-      phone: t('leads.sources.phone'),
-      website: t('leads.sources.website'),
-      referral: t('leads.sources.referral'),
-      other: t('leads.sources.other'),
+      manual: t('leads.sources.manual'),
     };
     return sourceMap[source] || source;
+  };
+
+  const getLeadStatusType = (status: string) => {
+    switch (status) {
+      case 'PAID':
+        return 'success' as const;
+      case 'NEW':
+      case 'IN_PROGRESS':
+      case 'CALCULATED':
+        return 'warning' as const;
+      case 'INVOICED':
+        return 'info' as const;
+      case 'FAILED':
+        return 'error' as const;
+      case 'HUMAN_REQUIRED':
+        return 'error' as const;
+      default:
+        return 'default' as const;
+    }
   };
 
   const columns: Column<Lead>[] = [
@@ -118,7 +137,7 @@ export default function LeadsPage() {
       cell: (row) => (
         <StatusBadge
           status={getStatusLabel(row.status)}
-          type={getStatusType(row.status)}
+          type={getLeadStatusType(row.status)}
         />
       ),
     },
