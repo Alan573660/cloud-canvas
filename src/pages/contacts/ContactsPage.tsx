@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, AlertCircle } from 'lucide-react';
+import { Plus, Pencil, Trash2, AlertCircle, Eye } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ContactForm } from './ContactForm';
+import { ContactDetailDialog } from './ContactDetailDialog';
 import { toast } from 'sonner';
 
 interface Contact {
@@ -48,6 +49,7 @@ export default function ContactsPage() {
   const [pageSize, setPageSize] = useState(10);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [deletingContact, setDeletingContact] = useState<Contact | null>(null);
+  const [viewingContact, setViewingContact] = useState<Contact | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [permissionError, setPermissionError] = useState<string | null>(null);
 
@@ -143,7 +145,15 @@ export default function ContactsPage() {
       key: 'actions',
       header: t('common.actions'),
       cell: (row) => (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setViewingContact(row)}
+            title="Подробнее"
+          >
+            <Eye className="h-4 w-4" />
+          </Button>
           {canManageContacts && (
             <>
               <Button
@@ -249,6 +259,13 @@ export default function ContactsPage() {
           />
         </DialogContent>
       </Dialog>
+
+      {/* Detail Dialog */}
+      <ContactDetailDialog
+        contact={viewingContact}
+        open={!!viewingContact}
+        onOpenChange={() => setViewingContact(null)}
+      />
 
       {/* Delete Confirmation */}
       <AlertDialog
