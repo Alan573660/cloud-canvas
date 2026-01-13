@@ -19,7 +19,7 @@ interface AuthContextType {
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string, fullName: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
-  refreshProfile: () => Promise<void>;
+  refreshProfile: () => Promise<Profile | null>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -38,7 +38,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchProfile = async (userId: string) => {
+  const fetchProfile = async (userId: string): Promise<Profile | null> => {
+    console.log('[AuthContext] fetchProfile called for userId:', userId);
     try {
       const { data, error } = await supabase
         .from('profiles')
@@ -48,70 +49,112 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         .maybeSingle();
 
       if (error) {
-        console.error('Error fetching profile:', error);
+        console.error('[AuthContext] fetchProfile error:', error);
         return null;
       }
 
+      console.log('[AuthContext] fetchProfile result:', data);
       return data as Profile | null;
     } catch (err) {
-      console.error('Error in fetchProfile:', err);
+      console.error('[AuthContext] fetchProfile exception:', err);
       return null;
     }
   };
 
-  const refreshProfile = async () => {
+  const refreshProfile = async (): Promise<Profile | null> => {
+    console.log('[AuthContext] refreshProfile called, user:', user?.id);
     if (user) {
       const profileData = await fetchProfile(user.id);
+      console.log('[AuthContext] refreshProfile result:', profileData);
       setProfile(profileData);
+      return profileData;
     }
+    return null;
   };
 
   useEffect(() => {
+    let isMounted = true;
+
     // Set up auth state listener
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log('[AuthContext] onAuthStateChange event:', event, 'session:', !!session);
+      
+      if (!isMounted) return;
+      
       setSession(session);
       setUser(session?.user ?? null);
 
       if (session?.user) {
-        // Defer profile fetch to avoid blocking
+        // Defer profile fetch to avoid blocking and deadlock
         setTimeout(async () => {
+          if (!isMounted) return;
+          console.log('[AuthContext] Deferred fetchProfile for:', session.user.id);
           const profileData = await fetchProfile(session.user.id);
-          setProfile(profileData);
+          if (isMounted) {
+            setProfile(profileData);
+            setLoading(false);
+          }
         }, 0);
       } else {
         setProfile(null);
+        setLoading(false);
       }
-
-      setLoading(false);
     });
 
     // Check for existing session
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!isMounted) return;
+      
+      console.log('[AuthContext] getSession result:', !!session);
       setSession(session);
       setUser(session?.user ?? null);
 
       if (session?.user) {
-        fetchProfile(session.user.id).then(setProfile);
+        const profileData = await fetchProfile(session.user.id);
+        if (isMounted) {
+          setProfile(profileData);
+        }
       }
 
-      setLoading(false);
+      if (isMounted) {
+        setLoading(false);
+      }
     });
 
     return () => {
+      isMounted = false;
       subscription.unsubscribe();
     };
   }, []);
 
   const signIn = async (email: string, password: string) => {
+    console.log('[AuthContext] signIn called for:', email);
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      return { error };
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      
+      if (error) {
+        console.error('[AuthContext] signIn error:', error);
+        return { error };
+      }
+      
+      console.log('[AuthContext] signIn success, user:', data.user?.id);
+      
+      // Immediately fetch profile after successful login
+      if (data.user) {
+        const profileData = await fetchProfile(data.user.id);
+        console.log('[AuthContext] signIn - profile fetched:', profileData);
+        setProfile(profileData);
+      }
+      
+      return { error: null };
     } catch (err) {
+      console.error('[AuthContext] signIn exception:', err);
       return { error: err as Error };
     }
   };
 
   const signUp = async (email: string, password: string, fullName: string) => {
+    console.log('[AuthContext] signUp called for:', email);
     try {
       const { error } = await supabase.auth.signUp({
         email,
@@ -124,13 +167,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         },
       });
 
+      if (error) {
+        console.error('[AuthContext] signUp error:', error);
+      } else {
+        console.log('[AuthContext] signUp success');
+      }
+
       return { error };
     } catch (err) {
+      console.error('[AuthContext] signUp exception:', err);
       return { error: err as Error };
     }
   };
 
   const signOut = async () => {
+    console.log('[AuthContext] signOut called');
     await supabase.auth.signOut();
     setUser(null);
     setSession(null);
