@@ -27,9 +27,23 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
+
+  // In rare cases (HMR/module duplication) context may be temporarily undefined.
+  // Don't hard-crash the whole app; instead log and return a safe fallback.
   if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
+    console.debug('[AuthContext] useAuth called without provider (fallback).');
+    return {
+      user: null,
+      session: null,
+      profile: null,
+      loading: true,
+      signIn: async () => ({ error: new Error('AuthProvider not mounted'), profile: null }),
+      signUp: async () => ({ error: new Error('AuthProvider not mounted') }),
+      signOut: async () => {},
+      refreshProfile: async () => null,
+    };
   }
+
   return context;
 };
 
