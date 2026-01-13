@@ -166,6 +166,14 @@ export default function InvoicesPage() {
       ),
     },
     {
+      key: 'created_at',
+      header: t('common.createdAt'),
+      cell: (row) =>
+        format(new Date(row.created_at), 'dd MMM yyyy', {
+          locale: i18n.language === 'ru' ? ru : enUS,
+        }),
+    },
+    {
       key: 'sent_at',
       header: t('invoices.sentAt'),
       cell: (row) =>
@@ -194,7 +202,7 @@ export default function InvoicesPage() {
             variant="ghost" 
             size="icon"
             onClick={() => navigate(`/invoices/${row.id}`)}
-            title="Подробнее"
+            title={t('common.details')}
           >
             <Eye className="h-4 w-4" />
           </Button>
@@ -203,7 +211,7 @@ export default function InvoicesPage() {
               variant="ghost"
               size="icon"
               onClick={() => window.open(row.pdf_url!, '_blank')}
-              title="Открыть PDF"
+              title={t('invoices.openPdf')}
             >
               <FileDown className="h-4 w-4" />
             </Button>
@@ -239,7 +247,7 @@ export default function InvoicesPage() {
             <SelectValue placeholder={t('common.status')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">{t('common.status')}: все</SelectItem>
+            <SelectItem value="all">{t('common.allStatuses')}</SelectItem>
             {INVOICE_STATUSES.map((status) => (
               <SelectItem key={status} value={status}>
                 {getStatusLabel(status)}
@@ -251,7 +259,7 @@ export default function InvoicesPage() {
         {hasActiveFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters}>
             <X className="h-4 w-4 mr-1" />
-            Сбросить
+            {t('common.reset')}
           </Button>
         )}
       </div>

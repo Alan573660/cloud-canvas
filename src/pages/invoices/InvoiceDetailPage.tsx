@@ -158,14 +158,8 @@ export default function InvoiceDetailPage() {
   };
 
   const getDeliveryStatusLabel = (status: DeliveryStatus) => {
-    const statusMap: Record<DeliveryStatus, string> = {
-      QUEUED: 'В очереди',
-      SENDING: 'Отправляется',
-      SENT: 'Отправлено',
-      FAILED: 'Ошибка',
-      CANCELLED: 'Отменено',
-    };
-    return statusMap[status] || status;
+    const key = `invoices.deliveryStatuses.${status}`;
+    return t(key, status);
   };
 
   const getDeliveryStatusIcon = (status: DeliveryStatus) => {
@@ -185,13 +179,7 @@ export default function InvoiceDetailPage() {
   };
 
   const getChannelLabel = (channel: string) => {
-    const channelMap: Record<string, string> = {
-      EMAIL: 'Email',
-      SMS: 'SMS',
-      TELEGRAM: 'Telegram',
-      WHATSAPP: 'WhatsApp',
-    };
-    return channelMap[channel] || channel;
+    return t(`invoices.channels.${channel}`, channel);
   };
 
   if (invoiceLoading) {
@@ -242,16 +230,16 @@ export default function InvoiceDetailPage() {
         {invoice.pdf_url && (
           <Button onClick={() => window.open(invoice.pdf_url!, '_blank')}>
             <FileDown className="h-4 w-4 mr-2" />
-            Открыть PDF
+            {t('invoices.openPdf')}
           </Button>
         )}
       </div>
 
       <Tabs defaultValue="details" className="space-y-4">
         <TabsList>
-          <TabsTrigger value="details">Детали</TabsTrigger>
+          <TabsTrigger value="details">{t('common.details')}</TabsTrigger>
           <TabsTrigger value="delivery">
-            История отправки
+            {t('invoices.deliveryHistory')}
             {deliveries && deliveries.length > 0 && (
               <span className="ml-2 px-2 py-0.5 text-xs bg-muted rounded-full">
                 {deliveries.length}
@@ -265,12 +253,12 @@ export default function InvoiceDetailPage() {
             {/* Invoice Info */}
             <Card>
               <CardHeader>
-                <CardTitle>Информация о счёте</CardTitle>
+                <CardTitle>{t('invoices.invoiceInfo')}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <p className="text-sm text-muted-foreground">Статус</p>
+                    <p className="text-sm text-muted-foreground">{t('common.status')}</p>
                     <div className="mt-1">
                       <StatusBadge
                         status={getStatusLabel(invoice.status)}
@@ -279,14 +267,14 @@ export default function InvoiceDetailPage() {
                     </div>
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">Сумма</p>
+                    <p className="text-sm text-muted-foreground">{t('invoices.amount')}</p>
                     <p className="text-2xl font-bold">{formatCurrency(invoice.total_amount)}</p>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <p className="text-sm text-muted-foreground">Отправлен</p>
+                    <p className="text-sm text-muted-foreground">{t('invoices.sentAt')}</p>
                     <p className="font-medium">
                       {invoice.sent_at
                         ? format(new Date(invoice.sent_at), 'dd.MM.yyyy HH:mm', {
@@ -296,7 +284,7 @@ export default function InvoiceDetailPage() {
                     </p>
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">Оплачен</p>
+                    <p className="text-sm text-muted-foreground">{t('invoices.paidAt')}</p>
                     <p className="font-medium">
                       {invoice.paid_at
                         ? format(new Date(invoice.paid_at), 'dd.MM.yyyy HH:mm', {
@@ -309,7 +297,7 @@ export default function InvoiceDetailPage() {
 
                 {invoice.error_reason && (
                   <div className="p-3 bg-destructive/10 text-destructive rounded-lg">
-                    <p className="text-sm font-medium">Ошибка:</p>
+                    <p className="text-sm font-medium">{t('invoices.errorReason')}:</p>
                     <p className="text-sm">{invoice.error_reason}</p>
                   </div>
                 )}
@@ -319,14 +307,14 @@ export default function InvoiceDetailPage() {
             {/* Related Order */}
             <Card>
               <CardHeader>
-                <CardTitle>Связанный заказ</CardTitle>
+                <CardTitle>{t('invoices.relatedOrder')}</CardTitle>
               </CardHeader>
               <CardContent>
                 {order ? (
                   <div className="space-y-4">
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-sm text-muted-foreground">Номер заказа</p>
+                        <p className="text-sm text-muted-foreground">{t('orders.orderNumber')}</p>
                         <p className="font-medium">{order.order_number || order.id.slice(0, 8)}</p>
                       </div>
                       <Button
@@ -335,12 +323,12 @@ export default function InvoiceDetailPage() {
                         onClick={() => navigate(`/orders/${order.id}`)}
                       >
                         <ExternalLink className="h-4 w-4 mr-2" />
-                        Открыть
+                        {t('common.open')}
                       </Button>
                     </div>
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="text-sm text-muted-foreground">Сумма заказа</p>
+                        <p className="text-sm text-muted-foreground">{t('invoices.amount')}</p>
                         <p className="font-medium">{formatCurrency(order.total_amount)}</p>
                       </div>
                       <StatusBadge status={order.status} type="default" />
@@ -359,10 +347,10 @@ export default function InvoiceDetailPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Send className="h-5 w-5" />
-                История отправки счёта
+                {t('invoices.deliveryHistory')}
               </CardTitle>
               <CardDescription>
-                Все попытки доставки счёта клиенту
+                {t('invoices.deliveryHistoryDescription')}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -374,12 +362,12 @@ export default function InvoiceDetailPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Канал</TableHead>
-                      <TableHead>Адрес</TableHead>
-                      <TableHead>Статус</TableHead>
-                      <TableHead>Дата создания</TableHead>
-                      <TableHead>Дата отправки</TableHead>
-                      <TableHead>Ошибка</TableHead>
+                      <TableHead>{t('invoices.channel')}</TableHead>
+                      <TableHead>{t('invoices.toAddress')}</TableHead>
+                      <TableHead>{t('common.status')}</TableHead>
+                      <TableHead>{t('common.createdAt')}</TableHead>
+                      <TableHead>{t('invoices.sentAt')}</TableHead>
+                      <TableHead>{t('invoices.errorReason')}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -418,7 +406,7 @@ export default function InvoiceDetailPage() {
                 </Table>
               ) : (
                 <div className="text-center py-8 text-muted-foreground">
-                  Нет записей об отправке
+                  {t('invoices.noDeliveries')}
                 </div>
               )}
             </CardContent>
