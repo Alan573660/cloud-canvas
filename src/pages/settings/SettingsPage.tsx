@@ -5,26 +5,16 @@ import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { DataTable, Column } from '@/components/ui/data-table';
-
-interface OrgMember {
-  id: string;
-  user_id: string;
-  full_name: string | null;
-  email: string | null;
-  role: string;
-  created_at: string;
-}
-
-interface OrgFeature {
-  id: string;
-  feature_code: string;
-  enabled: boolean;
-}
+import { UsersTab } from './UsersTab';
+import { FeaturesTab } from './FeaturesTab';
+import { ChannelsTab } from './ChannelsTab';
+import { BotSettingsTab } from './BotSettingsTab';
 
 export default function SettingsPage() {
   const { t } = useTranslation();
   const { profile } = useAuth();
+
+  const canManage = profile?.role === 'owner' || profile?.role === 'admin';
 
   const { data: organization } = useQuery({
     queryKey: ['organization', profile?.organization_id],
@@ -43,76 +33,6 @@ export default function SettingsPage() {
     enabled: !!profile?.organization_id,
   });
 
-  const { data: members, isLoading: membersLoading } = useQuery({
-    queryKey: ['org-members', profile?.organization_id],
-    queryFn: async () => {
-      if (!profile?.organization_id) return [];
-
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('organization_id', profile.organization_id)
-        .order('created_at', { ascending: true });
-
-      if (error) throw error;
-      return data as OrgMember[];
-    },
-    enabled: !!profile?.organization_id,
-  });
-
-  const { data: features } = useQuery({
-    queryKey: ['org-features', profile?.organization_id],
-    queryFn: async () => {
-      if (!profile?.organization_id) return [];
-
-      const { data, error } = await supabase
-        .from('org_features')
-        .select('*')
-        .eq('organization_id', profile.organization_id);
-
-      if (error) throw error;
-      return data as OrgFeature[];
-    },
-    enabled: !!profile?.organization_id,
-  });
-
-  const getRoleColor = (role: string) => {
-    switch (role) {
-      case 'owner':
-        return 'bg-purple-100 text-purple-800';
-      case 'admin':
-        return 'bg-blue-100 text-blue-800';
-      case 'operator':
-        return 'bg-green-100 text-green-800';
-      case 'accountant':
-        return 'bg-yellow-100 text-yellow-800';
-      default:
-        return 'bg-gray-100 text-gray-800';
-    }
-  };
-
-  const memberColumns: Column<OrgMember>[] = [
-    {
-      key: 'full_name',
-      header: t('auth.fullName'),
-      cell: (row) => row.full_name || '—',
-    },
-    {
-      key: 'email',
-      header: t('common.email'),
-      cell: (row) => row.email || '—',
-    },
-    {
-      key: 'role',
-      header: t('settings.roles'),
-      cell: (row) => (
-        <Badge className={getRoleColor(row.role)}>
-          {t(`settings.role.${row.role}`)}
-        </Badge>
-      ),
-    },
-  ];
-
   return (
     <div className="space-y-6">
       <div>
@@ -120,10 +40,12 @@ export default function SettingsPage() {
       </div>
 
       <Tabs defaultValue="organization">
-        <TabsList>
+        <TabsList className="flex-wrap">
           <TabsTrigger value="organization">{t('settings.organization')}</TabsTrigger>
-          <TabsTrigger value="users">{t('settings.users')}</TabsTrigger>
-          <TabsTrigger value="features">{t('settings.features')}</TabsTrigger>
+          {canManage && <TabsTrigger value="users">{t('settings.users')}</TabsTrigger>}
+          {canManage && <TabsTrigger value="features">{t('settings.features')}</TabsTrigger>}
+          {canManage && <TabsTrigger value="channels">{t('settings.channels')}</TabsTrigger>}
+          {canManage && <TabsTrigger value="bot">{t('settings.botSettings')}</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="organization" className="space-y-4">
@@ -165,51 +87,29 @@ export default function SettingsPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="users" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>{t('settings.users')}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <DataTable
-                columns={memberColumns}
-                data={members || []}
-                loading={membersLoading}
-              />
-            </CardContent>
-          </Card>
-        </TabsContent>
+        {canManage && (
+          <TabsContent value="users" className="space-y-4">
+            <UsersTab />
+          </TabsContent>
+        )}
 
-        <TabsContent value="features" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>{t('settings.features')}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-2">
-                {features?.map((feature) => (
-                  <div
-                    key={feature.id}
-                    className="flex items-center justify-between py-2 border-b last:border-0"
-                  >
-                    <span className="font-medium capitalize">
-                      {feature.feature_code}
-                    </span>
-                    <Badge
-                      className={
-                        feature.enabled
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-gray-100 text-gray-800'
-                      }
-                    >
-                      {feature.enabled ? t('common.yes') : t('common.no')}
-                    </Badge>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
+        {canManage && (
+          <TabsContent value="features" className="space-y-4">
+            <FeaturesTab />
+          </TabsContent>
+        )}
+
+        {canManage && (
+          <TabsContent value="channels" className="space-y-4">
+            <ChannelsTab />
+          </TabsContent>
+        )}
+
+        {canManage && (
+          <TabsContent value="bot" className="space-y-4">
+            <BotSettingsTab />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );
