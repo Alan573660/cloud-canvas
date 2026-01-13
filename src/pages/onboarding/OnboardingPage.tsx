@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
@@ -31,6 +31,7 @@ export default function OnboardingPage() {
   const { user, profile, loading, refreshProfile } = useAuth();
   const navigate = useNavigate();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const hasRedirected = useRef(false);
 
   const form = useForm<OnboardingFormData>({
     resolver: zodResolver(onboardingSchema),
@@ -39,98 +40,117 @@ export default function OnboardingPage() {
     },
   });
 
-  // If still loading, show spinner
-  if (loading) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-      </div>
-    );
-  }
+  // Handle redirects via useEffect to avoid render-time navigation
+  useEffect(() => {
+    console.debug('[OnboardingPage] useEffect check - loading:', loading, 'user:', !!user, 'profile:', !!profile, 'hasRedirected:', hasRedirected.current);
+    
+    if (loading || hasRedirected.current) return;
 
-  // If no user, redirect to login
-  if (!user) {
-    console.log('[OnboardingPage] No user, redirecting to /login');
-    navigate('/login', { replace: true });
-    return null;
-  }
+    if (!user) {
+      console.debug('[OnboardingPage] Redirect decision: no user -> /login');
+      hasRedirected.current = true;
+      navigate('/login', { replace: true });
+      return;
+    }
 
-  // If profile already exists, redirect to dashboard
-  if (profile) {
-    console.log('[OnboardingPage] Profile exists, redirecting to /dashboard');
-    navigate('/dashboard', { replace: true });
-    return null;
-  }
+    if (profile) {
+      console.debug('[OnboardingPage] Redirect decision: user + profile -> /dashboard');
+      hasRedirected.current = true;
+      navigate('/dashboard', { replace: true });
+      return;
+    }
+
+    console.debug('[OnboardingPage] Staying on onboarding: user exists, no profile');
+  }, [user, profile, loading, navigate]);
 
   const onSubmit = async (data: OnboardingFormData) => {
-    // Prevent duplicate submissions
+    // Strict double-click prevention
     if (isSubmitting) {
-      console.log('[OnboardingPage] Submission blocked - already submitting');
+      console.debug('[OnboardingPage] Submission blocked - already submitting');
       return;
     }
     
     setIsSubmitting(true);
-    console.log('[OnboardingPage] Creating organization:', data.organizationName);
+    console.debug('[OnboardingPage] Creating organization:', data.organizationName);
     
     try {
-      const { data: rpcResult, error } = await supabase.rpc('rpc_onboard_create_org', {
-        p_org_name: data.organizationName,
+      const { data: orgId, error } = await supabase.rpc('rpc_onboard_create_org', {
+        p_org_name: data.organizationName.trim(),
         p_plan: 'base',
       });
 
-      console.log('[OnboardingPage] rpc_onboard_create_org result:', rpcResult, 'error:', error);
+      console.debug('[OnboardingPage] rpc_onboard_create_org result - orgId:', orgId, 'error:', error?.message);
 
       if (error) {
-        console.error('[OnboardingPage] RPC error:', error);
+        console.debug('[OnboardingPage] RPC error:', error.message);
         
-        // Handle specific error cases
-        if (error.message.includes('already')) {
-          toast.error('Организация уже создана. Обновляем профиль...');
-        } else {
-          toast.error(error.message || t('errors.generic'));
-        }
-        
-        // Try to refresh profile anyway - maybe org was created
+        // Check if org was actually created (duplicate request)
         const refreshedProfile = await refreshProfile();
-        console.log('[OnboardingPage] After error, refreshed profile:', refreshedProfile);
-        
         if (refreshedProfile) {
-          console.log('[OnboardingPage] Profile found after error, redirecting to /dashboard');
+          console.debug('[OnboardingPage] Profile found after error, redirecting to /dashboard');
+          toast.success('Организация уже создана');
+          hasRedirected.current = true;
           navigate('/dashboard', { replace: true });
+          return;
         }
+        
+        toast.error(error.message || 'Ошибка создания организации');
         return;
       }
 
       toast.success('Организация создана!');
+      console.debug('[OnboardingPage] Organization created, orgId:', orgId);
       
-      // Wait for profile refresh and ensure it's loaded
-      console.log('[OnboardingPage] Refreshing profile after org creation...');
-      const refreshedProfile = await refreshProfile();
-      console.log('[OnboardingPage] Refreshed profile:', refreshedProfile);
+      // Poll for profile until it exists (max 5 attempts)
+      let profileData = null;
+      for (let attempt = 1; attempt <= 5; attempt++) {
+        console.debug('[OnboardingPage] Refreshing profile, attempt:', attempt);
+        profileData = await refreshProfile();
+        
+        if (profileData) {
+          console.debug('[OnboardingPage] Profile found on attempt:', attempt);
+          break;
+        }
+        
+        // Wait before next attempt
+        await new Promise(resolve => setTimeout(resolve, 300 * attempt));
+      }
       
-      if (refreshedProfile) {
-        console.log('[OnboardingPage] Redirect decision: profile exists, going to /dashboard');
+      if (profileData) {
+        console.debug('[OnboardingPage] Success - navigating to /dashboard');
+        hasRedirected.current = true;
         navigate('/dashboard', { replace: true });
       } else {
-        // Retry once more after a short delay
-        console.log('[OnboardingPage] Profile still null, retrying in 500ms...');
-        await new Promise(resolve => setTimeout(resolve, 500));
-        const retryProfile = await refreshProfile();
-        console.log('[OnboardingPage] Retry profile result:', retryProfile);
-        
-        if (retryProfile) {
-          navigate('/dashboard', { replace: true });
-        } else {
-          toast.error('Не удалось загрузить профиль. Попробуйте обновить страницу.');
-        }
+        console.debug('[OnboardingPage] Failed to fetch profile after 5 attempts');
+        toast.error('Профиль не загружен. Попробуйте обновить страницу.');
       }
     } catch (err) {
-      console.error('[OnboardingPage] Unexpected error:', err);
-      toast.error(t('errors.generic'));
+      console.debug('[OnboardingPage] Unexpected error:', err);
+      toast.error('Неожиданная ошибка');
     } finally {
       setIsSubmitting(false);
     }
   };
+
+  // Show spinner while loading
+  if (loading) {
+    console.debug('[OnboardingPage] Rendering: loading state');
+    return (
+      <div className="flex h-screen items-center justify-center bg-secondary">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  // If no user or profile exists, show spinner (redirect will happen via useEffect)
+  if (!user || profile) {
+    console.debug('[OnboardingPage] Rendering: waiting for redirect');
+    return (
+      <div className="flex h-screen items-center justify-center bg-secondary">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-secondary p-4">
@@ -156,8 +176,8 @@ export default function OnboardingPage() {
                     <FormControl>
                       <Input 
                         placeholder="ООО Компания" 
-                        {...field} 
                         disabled={isSubmitting}
+                        {...field} 
                       />
                     </FormControl>
                     <FormMessage />
@@ -172,7 +192,7 @@ export default function OnboardingPage() {
                 {isSubmitting ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {t('common.loading', 'Загрузка...')}
+                    {t('common.loading', 'Создание...')}
                   </>
                 ) : (
                   t('onboarding.createButton', 'Создать организацию')
