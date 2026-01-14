@@ -2,8 +2,8 @@ import { useTranslation } from 'react-i18next';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { 
-  ArrowLeft, Loader2, Phone, PhoneIncoming, PhoneOutgoing, 
-  Play, FileText, AlertCircle, Clock, User, ExternalLink
+  ArrowLeft, Phone, PhoneIncoming, PhoneOutgoing, 
+  Play, FileText, AlertCircle, Clock, User, ExternalLink, Mic, Brain
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -15,13 +15,17 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from '@/components/ui/accordion';
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '@/components/ui/tabs';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { Badge } from '@/components/ui/badge';
+import { DetailPageSkeleton } from '@/components/ui/page-skeleton';
+import { NotFound } from '@/components/ui/permission-denied';
+import { openSignedUrl } from '@/lib/file-utils';
+import { showErrorToast } from '@/lib/error-utils';
 import { format } from 'date-fns';
 import { ru, enUS } from 'date-fns/locale';
 
@@ -60,7 +64,7 @@ export default function CallDetailPage() {
   const dateLocale = i18n.language === 'ru' ? ru : enUS;
 
   // Fetch call session
-  const { data: call, isLoading } = useQuery({
+  const { data: call, isLoading, error } = useQuery({
     queryKey: ['call', id],
     queryFn: async () => {
       if (!id) return null;
@@ -90,6 +94,11 @@ export default function CallDetailPage() {
     },
     enabled: !!call?.lead_id,
   });
+
+  // Show error toast if query failed
+  if (error) {
+    showErrorToast(error, { logPrefix: 'CallDetailPage' });
+  }
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -127,38 +136,26 @@ export default function CallDetailPage() {
   const getSentimentColor = (sentiment: string | null) => {
     switch (sentiment?.toLowerCase()) {
       case 'positive':
-        return 'bg-green-100 text-green-800';
+        return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
       case 'negative':
-        return 'bg-red-100 text-red-800';
+        return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
       case 'neutral':
       default:
-        return 'bg-gray-100 text-gray-800';
+        return 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200';
     }
   };
 
   if (isLoading) {
-    return (
-      <div className="flex h-64 items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
+    return <DetailPageSkeleton />;
   }
 
   if (!call) {
-    return (
-      <div className="space-y-6">
-        <Button variant="ghost" onClick={() => navigate('/calls')}>
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          {t('common.back')}
-        </Button>
-        <Card>
-          <CardContent className="py-8 text-center text-muted-foreground">
-            {t('errors.notFound')}
-          </CardContent>
-        </Card>
-      </div>
-    );
+    return <NotFound resourceType={t('calls.title')} backPath="/calls" />;
   }
+
+  const hasRecording = !!call.recording_url;
+  const hasTranscript = !!call.transcript_text || !!call.transcript_url;
+  const hasSummary = !!call.ai_summary;
 
   return (
     <div className="space-y-6">
@@ -186,8 +183,8 @@ export default function CallDetailPage() {
           </div>
         </div>
 
-        {call.recording_url && (
-          <Button onClick={() => window.open(call.recording_url!, '_blank')}>
+        {hasRecording && (
+          <Button onClick={() => openSignedUrl(call.recording_url, 'recording.mp3')}>
             <Play className="h-4 w-4 mr-2" />
             {t('calls.playRecording')}
           </Button>
@@ -248,7 +245,7 @@ export default function CallDetailPage() {
                 <p className="text-sm text-muted-foreground">{t('calls.duration')}</p>
                 <p className="font-medium flex items-center gap-2">
                   <Clock className="h-4 w-4 text-muted-foreground" />
-                  {formatDuration(call.duration_seconds)}
+                  <span className="font-mono tabular-nums">{formatDuration(call.duration_seconds)}</span>
                 </p>
               </div>
               {call.sentiment && (
@@ -273,22 +270,8 @@ export default function CallDetailPage() {
           </CardContent>
         </Card>
 
-        {/* AI Summary & Related Lead */}
+        {/* Linked Lead */}
         <div className="space-y-6">
-          {call.ai_summary && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <FileText className="h-5 w-5" />
-                  {t('calls.aiSummary')}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm whitespace-pre-wrap">{call.ai_summary}</p>
-              </CardContent>
-            </Card>
-          )}
-
           {lead && (
             <Card>
               <CardHeader>
@@ -315,49 +298,98 @@ export default function CallDetailPage() {
               </CardContent>
             </Card>
           )}
+
+          {!lead && !hasSummary && !hasTranscript && (
+            <Card>
+              <CardContent className="py-8 text-center text-muted-foreground">
+                {t('calls.noAdditionalInfo', 'Дополнительная информация отсутствует')}
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
 
-      {/* Transcript */}
-      {(call.transcript_text || call.transcript_url) && (
+      {/* Tabs for Summary, Transcript, Recording */}
+      {(hasSummary || hasTranscript || hasRecording) && (
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5" />
-              {t('calls.transcript')}
-            </CardTitle>
-            <CardDescription>
-              {t('calls.transcriptDescription')}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {call.transcript_url && (
-              <div className="mb-4">
-                <Button
-                  variant="outline"
-                  onClick={() => window.open(call.transcript_url!, '_blank')}
-                >
-                  <ExternalLink className="h-4 w-4 mr-2" />
-                  {t('calls.openTranscriptFile')}
-                </Button>
-              </div>
-            )}
-            
-            {call.transcript_text && (
-              <Accordion type="single" collapsible defaultValue="transcript">
-                <AccordionItem value="transcript" className="border rounded">
-                  <AccordionTrigger className="px-4">
-                    {t('calls.viewTranscript')}
-                  </AccordionTrigger>
-                  <AccordionContent className="px-4 pb-4">
-                    <pre className="text-sm whitespace-pre-wrap bg-muted p-4 rounded max-h-96 overflow-auto">
+          <Tabs defaultValue={hasSummary ? 'summary' : hasTranscript ? 'transcript' : 'recording'}>
+            <CardHeader>
+              <TabsList>
+                {hasSummary && (
+                  <TabsTrigger value="summary" className="flex items-center gap-2">
+                    <Brain className="h-4 w-4" />
+                    {t('calls.aiSummary')}
+                  </TabsTrigger>
+                )}
+                {hasTranscript && (
+                  <TabsTrigger value="transcript" className="flex items-center gap-2">
+                    <FileText className="h-4 w-4" />
+                    {t('calls.transcript')}
+                  </TabsTrigger>
+                )}
+                {hasRecording && (
+                  <TabsTrigger value="recording" className="flex items-center gap-2">
+                    <Mic className="h-4 w-4" />
+                    {t('calls.recording', 'Запись')}
+                  </TabsTrigger>
+                )}
+              </TabsList>
+            </CardHeader>
+            <CardContent>
+              {hasSummary && (
+                <TabsContent value="summary" className="mt-0">
+                  <div className="prose dark:prose-invert max-w-none">
+                    <p className="whitespace-pre-wrap">{call.ai_summary}</p>
+                  </div>
+                </TabsContent>
+              )}
+
+              {hasTranscript && (
+                <TabsContent value="transcript" className="mt-0">
+                  {call.transcript_url && (
+                    <div className="mb-4">
+                      <Button
+                        variant="outline"
+                        onClick={() => openSignedUrl(call.transcript_url, 'transcript.txt')}
+                      >
+                        <ExternalLink className="h-4 w-4 mr-2" />
+                        {t('calls.openTranscriptFile')}
+                      </Button>
+                    </div>
+                  )}
+                  
+                  {call.transcript_text && (
+                    <pre className="text-sm whitespace-pre-wrap bg-muted p-4 rounded-lg max-h-96 overflow-auto font-mono">
                       {call.transcript_text}
                     </pre>
-                  </AccordionContent>
-                </AccordionItem>
-              </Accordion>
-            )}
-          </CardContent>
+                  )}
+
+                  {!call.transcript_text && call.transcript_url && (
+                    <p className="text-muted-foreground">
+                      {t('calls.transcriptInFile', 'Транскрипт доступен в файле')}
+                    </p>
+                  )}
+                </TabsContent>
+              )}
+
+              {hasRecording && (
+                <TabsContent value="recording" className="mt-0">
+                  <div className="flex flex-col items-center gap-4 py-8">
+                    <div className="rounded-full bg-primary/10 p-6">
+                      <Mic className="h-12 w-12 text-primary" />
+                    </div>
+                    <p className="text-muted-foreground text-center">
+                      {t('calls.recordingAvailable', 'Запись разговора доступна')}
+                    </p>
+                    <Button onClick={() => openSignedUrl(call.recording_url, 'recording.mp3')}>
+                      <Play className="h-4 w-4 mr-2" />
+                      {t('calls.playRecording')}
+                    </Button>
+                  </div>
+                </TabsContent>
+              )}
+            </CardContent>
+          </Tabs>
         </Card>
       )}
     </div>

@@ -40,7 +40,21 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 
-const menuGroups = [
+interface MenuItem {
+  key: string;
+  icon: React.ComponentType<{ className?: string }>;
+  path: string;
+  roles?: string[]; // If specified, only these roles can see this item
+}
+
+interface MenuGroup {
+  key: string;
+  labelKey?: string;
+  items: MenuItem[];
+  roles?: string[]; // If specified, only these roles can see this group
+}
+
+const menuGroups: MenuGroup[] = [
   {
     key: 'main',
     items: [
@@ -82,6 +96,8 @@ const menuGroups = [
   {
     key: 'finance',
     labelKey: 'nav.finance',
+    // Only owner, admin, accountant can see this group (operator cannot)
+    roles: ['owner', 'admin', 'accountant'],
     items: [
       { key: 'billing', icon: CreditCard, path: '/billing' },
       { key: 'analytics', icon: BarChart3, path: '/analytics' },
@@ -102,10 +118,26 @@ export function AppSidebar() {
   const { state } = useSidebar();
   const { signOut, profile } = useAuth();
   const collapsed = state === 'collapsed';
+  const userRole = profile?.role || '';
 
   const isActive = (path: string) => location.pathname === path;
-  const isGroupActive = (items: { path: string }[]) =>
+  const isGroupActive = (items: MenuItem[]) =>
     items.some((item) => location.pathname.startsWith(item.path));
+
+  // Check if user can see an item or group
+  const canSee = (roles?: string[]) => {
+    if (!roles || roles.length === 0) return true;
+    return roles.includes(userRole);
+  };
+
+  // Filter visible groups and items
+  const visibleGroups = menuGroups
+    .filter((group) => canSee(group.roles))
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => canSee(item.roles)),
+    }))
+    .filter((group) => group.items.length > 0);
 
   return (
     <Sidebar collapsible="icon" className="border-r-0">
@@ -123,7 +155,7 @@ export function AppSidebar() {
       </SidebarHeader>
 
       <SidebarContent>
-        {menuGroups.map((group) => (
+        {visibleGroups.map((group) => (
           <SidebarGroup key={group.key}>
             {group.labelKey ? (
               <Collapsible
