@@ -2,12 +2,17 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Phone, PhoneIncoming, PhoneOutgoing, Eye, Filter, X } from 'lucide-react';
+import { 
+  Phone, PhoneIncoming, PhoneOutgoing, Eye, Filter, X, Calendar 
+} from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { DataTable, Column } from '@/components/ui/data-table';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { PageSkeleton } from '@/components/ui/page-skeleton';
+import { EmptyState } from '@/components/ui/permission-denied';
+import { showErrorToast } from '@/lib/error-utils';
 import {
   Select,
   SelectContent,
@@ -15,12 +20,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { format } from 'date-fns';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import { Calendar as CalendarComponent } from '@/components/ui/calendar';
+import { format, subDays, startOfDay, endOfDay } from 'date-fns';
 import { ru, enUS } from 'date-fns/locale';
+import { DateRange } from 'react-day-picker';
 
 // DB status values
 const CALL_STATUSES = ['RINGING', 'IN_PROGRESS', 'DONE', 'FAILED', 'NO_ANSWER', 'BUSY'] as const;
 type CallStatus = typeof CALL_STATUSES[number];
+
+const DIRECTIONS = ['inbound', 'outbound'] as const;
+type Direction = typeof DIRECTIONS[number];
 
 interface CallSession {
   id: string;
@@ -45,11 +60,13 @@ export default function CallsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [statusFilter, setStatusFilter] = useState<CallStatus | 'all'>('all');
+  const [directionFilter, setDirectionFilter] = useState<Direction | 'all'>('all');
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
 
   const dateLocale = i18n.language === 'ru' ? ru : enUS;
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['calls', profile?.organization_id, page, pageSize, statusFilter, search],
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['calls', profile?.organization_id, page, pageSize, statusFilter, directionFilter, dateRange, search],
     queryFn: async () => {
       if (!profile?.organization_id) return { data: [], count: 0 };
 
@@ -63,6 +80,17 @@ export default function CallsPage() {
         query = query.eq('status', statusFilter);
       }
 
+      if (directionFilter !== 'all') {
+        query = query.eq('direction', directionFilter);
+      }
+
+      if (dateRange?.from) {
+        query = query.gte('created_at', startOfDay(dateRange.from).toISOString());
+      }
+      if (dateRange?.to) {
+        query = query.lte('created_at', endOfDay(dateRange.to).toISOString());
+      }
+
       if (search) {
         query = query.or(`from_phone.ilike.%${search}%,to_phone.ilike.%${search}%`);
       }
@@ -72,12 +100,20 @@ export default function CallsPage() {
       query = query.range(from, to);
 
       const { data, count, error } = await query;
-      if (error) throw error;
+      if (error) {
+        console.error('Cannot fetch calls:', error.message);
+        throw error;
+      }
 
       return { data: data as CallSession[], count: count || 0 };
     },
     enabled: !!profile?.organization_id,
   });
+
+  // Show error toast if query failed
+  if (error) {
+    showErrorToast(error, { logPrefix: 'CallsPage' });
+  }
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -116,10 +152,20 @@ export default function CallsPage() {
 
   const clearFilters = () => {
     setStatusFilter('all');
+    setDirectionFilter('all');
+    setDateRange(undefined);
     setPage(1);
   };
 
-  const hasActiveFilters = statusFilter !== 'all';
+  const hasActiveFilters = statusFilter !== 'all' || directionFilter !== 'all' || dateRange !== undefined;
+
+  // Quick date presets
+  const setDatePreset = (days: number) => {
+    const to = new Date();
+    const from = subDays(to, days);
+    setDateRange({ from, to });
+    setPage(1);
+  };
 
   const columns: Column<CallSession>[] = [
     {
@@ -135,12 +181,12 @@ export default function CallsPage() {
     {
       key: 'from_phone',
       header: t('calls.fromPhone'),
-      cell: (row) => row.from_phone || '—',
+      cell: (row) => <span className="font-mono">{row.from_phone || '—'}</span>,
     },
     {
       key: 'to_phone',
       header: t('calls.toPhone'),
-      cell: (row) => row.to_phone || '—',
+      cell: (row) => <span className="font-mono">{row.to_phone || '—'}</span>,
     },
     {
       key: 'started_at',
@@ -154,7 +200,7 @@ export default function CallsPage() {
       key: 'duration_seconds',
       header: t('calls.duration'),
       cell: (row) => (
-        <span className="font-mono">{formatDuration(row.duration_seconds)}</span>
+        <span className="font-mono tabular-nums">{formatDuration(row.duration_seconds)}</span>
       ),
     },
     {
@@ -190,6 +236,10 @@ export default function CallsPage() {
     },
   ];
 
+  if (isLoading && !data) {
+    return <PageSkeleton rows={8} showFilters />;
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -215,7 +265,7 @@ export default function CallsPage() {
             setPage(1);
           }}
         >
-          <SelectTrigger className="w-[180px]">
+          <SelectTrigger className="w-[160px]">
             <SelectValue placeholder={t('common.status')} />
           </SelectTrigger>
           <SelectContent>
@@ -227,6 +277,69 @@ export default function CallsPage() {
             ))}
           </SelectContent>
         </Select>
+
+        <Select
+          value={directionFilter}
+          onValueChange={(value) => {
+            setDirectionFilter(value as Direction | 'all');
+            setPage(1);
+          }}
+        >
+          <SelectTrigger className="w-[160px]">
+            <SelectValue placeholder={t('calls.direction')} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{t('common.all')}</SelectItem>
+            <SelectItem value="inbound">{t('calls.inbound')}</SelectItem>
+            <SelectItem value="outbound">{t('calls.outbound')}</SelectItem>
+          </SelectContent>
+        </Select>
+
+        {/* Date range picker */}
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" className="w-[200px] justify-start text-left font-normal">
+              <Calendar className="mr-2 h-4 w-4" />
+              {dateRange?.from ? (
+                dateRange.to ? (
+                  <>
+                    {format(dateRange.from, 'dd.MM', { locale: dateLocale })} -{' '}
+                    {format(dateRange.to, 'dd.MM', { locale: dateLocale })}
+                  </>
+                ) : (
+                  format(dateRange.from, 'dd.MM.yyyy', { locale: dateLocale })
+                )
+              ) : (
+                <span className="text-muted-foreground">{t('common.date')}</span>
+              )}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-0" align="start">
+            <div className="p-2 border-b flex gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setDatePreset(7)}>
+                7 {t('products.days', 'дней')}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setDatePreset(30)}>
+                30 {t('products.days', 'дней')}
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setDatePreset(90)}>
+                90 {t('products.days', 'дней')}
+              </Button>
+            </div>
+            <CalendarComponent
+              initialFocus
+              mode="range"
+              defaultMonth={dateRange?.from}
+              selected={dateRange}
+              onSelect={(range) => {
+                setDateRange(range);
+                setPage(1);
+              }}
+              numberOfMonths={2}
+              locale={dateLocale}
+            />
+          </PopoverContent>
+        </Popover>
 
         {hasActiveFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters}>
