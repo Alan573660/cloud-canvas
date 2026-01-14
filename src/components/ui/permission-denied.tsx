@@ -1,3 +1,4 @@
+import React, { isValidElement } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShieldX, Lock, ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -135,14 +136,22 @@ export function EmptyState({
 }: EmptyStateProps) {
   const displayTitle = title || message;
   
-  // Check if icon is a component (function) or element
+  // Check if icon is a component (function or forwardRef) or already a React element
   const renderIcon = () => {
     if (!icon) return null;
-    if (typeof icon === 'function') {
+    
+    // Already a React element (JSX)
+    if (isValidElement(icon)) {
+      return icon;
+    }
+    
+    // A component (function, class, or forwardRef object with $$typeof)
+    if (typeof icon === 'function' || (typeof icon === 'object' && icon !== null && '$$typeof' in icon)) {
       const IconComponent = icon as React.ElementType;
       return <IconComponent className="h-8 w-8 text-muted-foreground" />;
     }
-    return icon;
+    
+    return null;
   };
 
   return (
