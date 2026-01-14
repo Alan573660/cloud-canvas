@@ -114,10 +114,12 @@ export function NotFound({
 }
 
 interface EmptyStateProps {
-  /** Icon to display */
-  icon?: React.ReactNode;
-  /** Title text */
-  title: string;
+  /** Icon to display - can be ReactNode or a Lucide icon component */
+  icon?: React.ReactNode | React.ElementType;
+  /** Title text or message (used if title not provided) */
+  title?: string;
+  /** Message text (alias for title for simpler API) */
+  message?: string;
   /** Description text */
   description?: string;
   /** Action button */
@@ -127,17 +129,30 @@ interface EmptyStateProps {
 export function EmptyState({
   icon,
   title,
+  message,
   description,
   action,
 }: EmptyStateProps) {
+  const displayTitle = title || message;
+  
+  // Check if icon is a component (function) or element
+  const renderIcon = () => {
+    if (!icon) return null;
+    if (typeof icon === 'function') {
+      const IconComponent = icon as React.ElementType;
+      return <IconComponent className="h-8 w-8 text-muted-foreground" />;
+    }
+    return icon;
+  };
+
   return (
     <div className="flex flex-col items-center justify-center text-center py-12 px-4">
       {icon && (
         <div className="rounded-full bg-muted p-4 mb-4">
-          {icon}
+          {renderIcon()}
         </div>
       )}
-      <h3 className="text-lg font-medium mb-2">{title}</h3>
+      {displayTitle && <h3 className="text-lg font-medium mb-2">{displayTitle}</h3>}
       {description && (
         <p className="text-muted-foreground mb-4 max-w-md">{description}</p>
       )}
