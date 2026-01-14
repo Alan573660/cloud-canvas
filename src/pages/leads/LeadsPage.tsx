@@ -299,7 +299,7 @@ export default function LeadsPage() {
             <SelectValue placeholder={t('common.status')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">{t('common.status')}: {i18n.language === 'ru' ? 'все' : 'all'}</SelectItem>
+            <SelectItem value="all">{t('common.allStatuses')}</SelectItem>
             {LEAD_STATUSES.map((status) => (
               <SelectItem key={status} value={status}>
                 {getStatusLabel(status)}
@@ -319,7 +319,7 @@ export default function LeadsPage() {
             <SelectValue placeholder={t('leads.source')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">{t('leads.source')}: {i18n.language === 'ru' ? 'все' : 'all'}</SelectItem>
+            <SelectItem value="all">{t('common.all')}</SelectItem>
             {LEAD_SOURCES.map((source) => (
               <SelectItem key={source} value={source}>
                 {getSourceLabel(source)}
@@ -331,7 +331,7 @@ export default function LeadsPage() {
         {hasActiveFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters}>
             <X className="h-4 w-4 mr-1" />
-            {i18n.language === 'ru' ? 'Сбросить' : 'Clear'}
+            {t('common.reset')}
           </Button>
         )}
       </div>

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, AlertCircle, Eye } from 'lucide-react';
+import { Plus, Pencil, Trash2, Eye } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -22,9 +22,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { PermissionDenied } from '@/components/ui/permission-denied';
 import { ContactForm } from './ContactForm';
 import { ContactDetailDialog } from './ContactDetailDialog';
+import { showErrorToast } from '@/lib/error-utils';
 import { toast } from 'sonner';
 
 interface Contact {
@@ -51,7 +52,6 @@ export default function ContactsPage() {
   const [deletingContact, setDeletingContact] = useState<Contact | null>(null);
   const [viewingContact, setViewingContact] = useState<Contact | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
-  const [permissionError, setPermissionError] = useState<string | null>(null);
 
   // Check if current user can manage contacts based on role
   const canManageContacts = profile?.role && CAN_MANAGE_CONTACTS.includes(profile.role);
@@ -79,31 +79,29 @@ export default function ContactsPage() {
 
       const { data, count, error } = await query;
       
-      if (error) {
-        // Handle 403 permission error
-        if (error.code === '42501' || error.message?.includes('permission') || error.message?.includes('policy')) {
-          setPermissionError(t('errors.forbidden', 'Недостаточно прав'));
-          return { data: [], count: 0 };
-        }
-        throw error;
-      }
+      if (error) throw error;
 
-      setPermissionError(null);
       return { data: data as Contact[], count: count || 0 };
     },
     enabled: !!profile?.organization_id,
   });
 
+  // Show error toast if query failed
+  if (fetchError) {
+    const isPermissionError = 
+      (fetchError as { code?: string })?.code === '42501' || 
+      fetchError.message?.includes('permission');
+    
+    if (isPermissionError) {
+      return <PermissionDenied />;
+    }
+    showErrorToast(fetchError, { logPrefix: 'ContactsPage' });
+  }
+
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
       const { error } = await supabase.from('contacts').delete().eq('id', id);
-      if (error) {
-        // Handle 403 permission error
-        if (error.code === '42501' || error.message?.includes('permission') || error.message?.includes('policy')) {
-          throw new Error(t('errors.forbidden', 'Недостаточно прав'));
-        }
-        throw error;
-      }
+      if (error) throw error;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
@@ -111,7 +109,7 @@ export default function ContactsPage() {
       setDeletingContact(null);
     },
     onError: (error) => {
-      toast.error(error.message);
+      showErrorToast(error, { logPrefix: 'ContactsPage:delete' });
       setDeletingContact(null);
     },
   });
@@ -189,12 +187,7 @@ export default function ContactsPage() {
   };
 
   const handleFormError = (error: Error) => {
-    // Check if it's a permission error
-    if (error.message?.includes('permission') || error.message?.includes('policy') || error.message?.includes('403')) {
-      toast.error(t('errors.forbidden', 'Недостаточно прав'));
-    } else {
-      toast.error(error.message);
-    }
+    showErrorToast(error, { logPrefix: 'ContactsPage:form' });
   };
 
   return (
@@ -215,15 +208,6 @@ export default function ContactsPage() {
           </Button>
         )}
       </div>
-
-      {/* Permission error alert */}
-      {permissionError && (
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
-          <AlertTitle>{t('common.error')}</AlertTitle>
-          <AlertDescription>{permissionError}</AlertDescription>
-        </Alert>
-      )}
 
       <DataTable
         columns={columns}
