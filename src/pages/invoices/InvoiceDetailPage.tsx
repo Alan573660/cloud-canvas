@@ -6,6 +6,7 @@ import {
   Send, Clock, CheckCircle, XCircle, AlertCircle 
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
+import { openSignedUrl } from '@/lib/file-utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import {
@@ -228,7 +229,7 @@ export default function InvoiceDetailPage() {
         </div>
         
         {invoice.pdf_url && (
-          <Button onClick={() => window.open(invoice.pdf_url!, '_blank')}>
+          <Button onClick={() => openSignedUrl(invoice.pdf_url, `invoice-${invoice.invoice_number || invoice.id}.pdf`)}>
             <FileDown className="h-4 w-4 mr-2" />
             {t('invoices.openPdf')}
           </Button>

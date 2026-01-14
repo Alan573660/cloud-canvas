@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { Mail, ArrowLeft, Paperclip, FileText, ExternalLink } from 'lucide-react';
+import { openSignedUrl } from '@/lib/file-utils';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -245,7 +246,7 @@ export default function EmailThreadsTab() {
                                     variant="ghost"
                                     size="sm"
                                     className="h-6 px-2"
-                                    onClick={() => window.open(att.storage_url!, '_blank')}
+                                    onClick={() => openSignedUrl(att.storage_url, att.filename || 'attachment')}
                                   >
                                     <ExternalLink className="h-3 w-3" />
                                   </Button>

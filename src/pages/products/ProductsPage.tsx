@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { Plus, Pencil, Check, X, Palette, Calculator } from 'lucide-react';
+import { Plus, Pencil, Check, X, Palette, Calculator, Receipt } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,7 @@ import { Label } from '@/components/ui/label';
 import { RalColorsDialog } from './RalColorsDialog';
 import { PriceByColorDialog } from './PriceByColorDialog';
 import { DiscountRulesTab } from './DiscountRulesTab';
+import { PriceQuoteDialog } from './PriceQuoteDialog';
 
 interface Product {
   id: string;
@@ -49,6 +50,7 @@ export default function ProductsPage() {
   // Dialog states
   const [ralDialogOpen, setRalDialogOpen] = useState(false);
   const [priceDialogOpen, setPriceDialogOpen] = useState(false);
+  const [quoteDialogOpen, setQuoteDialogOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
 
   // Fetch unique profiles for filter
@@ -144,6 +146,11 @@ export default function ProductsPage() {
     setPriceDialogOpen(true);
   };
 
+  const handleOpenQuoteDialog = (product: Product) => {
+    setSelectedProduct(product);
+    setQuoteDialogOpen(true);
+  };
+
   const columns: Column<Product>[] = [
     {
       key: 'sku',
@@ -207,6 +214,14 @@ export default function ProductsPage() {
       header: t('common.actions'),
       cell: (row) => (
         <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => handleOpenQuoteDialog(row)}
+            title={t('products.requestQuote', 'Рассчитать цену')}
+          >
+            <Receipt className="h-4 w-4" />
+          </Button>
           <Button
             variant="ghost"
             size="icon"
@@ -338,6 +353,11 @@ export default function ProductsPage() {
       <PriceByColorDialog
         open={priceDialogOpen}
         onOpenChange={setPriceDialogOpen}
+        product={selectedProduct}
+      />
+      <PriceQuoteDialog
+        open={quoteDialogOpen}
+        onOpenChange={setQuoteDialogOpen}
         product={selectedProduct}
       />
     </div>
