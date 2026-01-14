@@ -389,7 +389,8 @@
       "subscription": "Подписка",
       "manual": "Ручное",
       "payment": "Платёж"
-    }
+    },
+    "noTransactions": "Транзакций пока нет"
   },
   "import": {
     "title": "Импорт данных",

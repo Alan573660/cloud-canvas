@@ -237,7 +237,7 @@ export default function OrdersPage() {
             <SelectValue placeholder={t('common.status')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">{t('common.status')}: все</SelectItem>
+            <SelectItem value="all">{t('common.allStatuses')}</SelectItem>
             {ORDER_STATUSES.map((status) => (
               <SelectItem key={status} value={status}>
                 {getStatusLabel(status)}
@@ -249,7 +249,7 @@ export default function OrdersPage() {
         {hasActiveFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters}>
             <X className="h-4 w-4 mr-1" />
-            Сбросить
+            {t('common.reset')}
           </Button>
         )}
       </div>

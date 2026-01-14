@@ -2,12 +2,14 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { FileDown, Eye, Filter, X, ExternalLink } from 'lucide-react';
+import { FileDown, Eye, Filter, X } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { DataTable, Column } from '@/components/ui/data-table';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { showErrorToast } from '@/lib/error-utils';
+import { openSignedUrl } from '@/lib/file-utils';
 import {
   Select,
   SelectContent,
@@ -47,7 +49,7 @@ export default function InvoicesPage() {
   const [pageSize, setPageSize] = useState(10);
   const [statusFilter, setStatusFilter] = useState<InvoiceStatus | 'all'>('all');
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['invoices', profile?.organization_id, search, page, pageSize, statusFilter],
     queryFn: async () => {
       if (!profile?.organization_id) return { data: [], count: 0 };
@@ -81,6 +83,11 @@ export default function InvoicesPage() {
     },
     enabled: !!profile?.organization_id,
   });
+
+  // Show error toast if query failed
+  if (error) {
+    showErrorToast(error, { logPrefix: 'InvoicesPage' });
+  }
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('ru-RU', {
@@ -210,7 +217,7 @@ export default function InvoicesPage() {
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => window.open(row.pdf_url!, '_blank')}
+              onClick={() => openSignedUrl(row.pdf_url, `invoice-${row.invoice_number || row.id}.pdf`)}
               title={t('invoices.openPdf')}
             >
               <FileDown className="h-4 w-4" />

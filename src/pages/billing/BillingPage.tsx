@@ -1,7 +1,7 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { CreditCard, ArrowUpRight, ArrowDownRight, RefreshCw, Download, Filter } from 'lucide-react';
+import { CreditCard, ArrowUpRight, ArrowDownRight, RefreshCw, Download, Filter, Receipt } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -10,6 +10,8 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/ui/permission-denied';
+import { showErrorToast } from '@/lib/error-utils';
 import { format } from 'date-fns';
 import { ru, enUS } from 'date-fns/locale';
 
@@ -38,7 +40,7 @@ export default function BillingPage() {
   // Role check for export
   const canExport = profile?.role && ['owner', 'admin', 'accountant'].includes(profile.role);
 
-  const { data: balance, isLoading: balanceLoading } = useQuery({
+  const { data: balance, isLoading: balanceLoading, error: balanceError } = useQuery({
     queryKey: ['balance', profile?.organization_id],
     queryFn: async () => {
       if (!profile?.organization_id) return null;
@@ -53,7 +55,12 @@ export default function BillingPage() {
     enabled: !!profile?.organization_id,
   });
 
-  const { data: transactions, isLoading } = useQuery({
+  // Show balance error toast
+  if (balanceError) {
+    showErrorToast(balanceError, { logPrefix: 'BillingPage:balance' });
+  }
+
+  const { data: transactions, isLoading, error: transactionsError } = useQuery({
     queryKey: ['transactions', profile?.organization_id, page, pageSize, typeFilter, reasonFilter],
     queryFn: async () => {
       if (!profile?.organization_id) return { data: [], count: 0 };
@@ -82,6 +89,11 @@ export default function BillingPage() {
     },
     enabled: !!profile?.organization_id,
   });
+
+  // Show transactions error toast
+  if (transactionsError) {
+    showErrorToast(transactionsError, { logPrefix: 'BillingPage:transactions' });
+  }
 
   // Fetch all transactions for CSV export (without pagination)
   const { data: allTransactions, refetch: fetchAllForExport, isFetching: exportLoading } = useQuery({
@@ -350,6 +362,7 @@ export default function BillingPage() {
               setPageSize(size);
               setPage(1);
             }}
+            emptyMessage={t('billing.noTransactions')}
           />
         </CardContent>
       </Card>

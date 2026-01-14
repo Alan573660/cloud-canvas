@@ -9,21 +9,24 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { showErrorToast } from '@/lib/error-utils';
 
 interface StatCardProps {
   title: string;
   value: string | number;
   icon: React.ReactNode;
   description?: string;
+  loading?: boolean;
   trend?: {
     value: number;
     isPositive: boolean;
   };
 }
 
-function StatCard({ title, value, icon, description, trend }: StatCardProps) {
+function StatCard({ title, value, icon, description, loading, trend }: StatCardProps) {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -33,14 +36,18 @@ function StatCard({ title, value, icon, description, trend }: StatCardProps) {
         <div className="text-muted-foreground">{icon}</div>
       </CardHeader>
       <CardContent>
-        <div className="text-2xl font-bold">{value}</div>
+        {loading ? (
+          <Skeleton className="h-8 w-24" />
+        ) : (
+          <div className="text-2xl font-bold">{value}</div>
+        )}
         {description && (
           <p className="text-xs text-muted-foreground mt-1">{description}</p>
         )}
-        {trend && (
+        {trend && !loading && (
           <div
             className={`flex items-center text-xs mt-1 ${
-              trend.isPositive ? 'text-green-600' : 'text-red-600'
+              trend.isPositive ? 'text-success' : 'text-destructive'
             }`}
           >
             <TrendingUp
@@ -58,7 +65,7 @@ export default function DashboardPage() {
   const { t } = useTranslation();
   const { profile } = useAuth();
 
-  const { data: stats } = useQuery({
+  const { data: stats, isLoading, error } = useQuery({
     queryKey: ['dashboard-stats', profile?.organization_id],
     queryFn: async () => {
       if (!profile?.organization_id) return null;
@@ -104,6 +111,11 @@ export default function DashboardPage() {
     enabled: !!profile?.organization_id,
   });
 
+  // Show error toast if query failed
+  if (error) {
+    showErrorToast(error, { logPrefix: 'DashboardPage' });
+  }
+
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('ru-RU', {
       style: 'currency',
@@ -126,31 +138,37 @@ export default function DashboardPage() {
           title={t('dashboard.activeContacts')}
           value={stats?.contacts || 0}
           icon={<Users className="h-4 w-4" />}
+          loading={isLoading}
         />
         <StatCard
           title={t('dashboard.totalLeads')}
           value={stats?.leads || 0}
           icon={<Target className="h-4 w-4" />}
+          loading={isLoading}
         />
         <StatCard
           title={t('dashboard.totalOrders')}
           value={stats?.orders || 0}
           icon={<ShoppingCart className="h-4 w-4" />}
+          loading={isLoading}
         />
         <StatCard
           title={t('dashboard.pendingInvoices')}
           value={stats?.pendingInvoices || 0}
           icon={<FileText className="h-4 w-4" />}
+          loading={isLoading}
         />
         <StatCard
           title={t('dashboard.totalRevenue')}
           value={formatCurrency(stats?.totalRevenue || 0)}
           icon={<TrendingUp className="h-4 w-4" />}
+          loading={isLoading}
         />
         <StatCard
           title={t('dashboard.balance')}
           value={formatCurrency(stats?.balance || 0)}
           icon={<CreditCard className="h-4 w-4" />}
+          loading={isLoading}
         />
       </div>
 

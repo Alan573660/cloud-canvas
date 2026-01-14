@@ -389,7 +389,8 @@
       "subscription": "Subscription",
       "manual": "Manual",
       "payment": "Payment"
-    }
+    },
+    "noTransactions": "No transactions yet"
   },
   "import": {
     "title": "Data Import",
