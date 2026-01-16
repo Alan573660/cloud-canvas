@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { 
-  Phone, PhoneIncoming, PhoneOutgoing, Eye, Filter, X, Calendar 
+  Phone, PhoneIncoming, PhoneOutgoing, Eye, Filter, X, Calendar, 
+  Clock, TrendingUp, AlertCircle, CheckCircle, Smile, Meh, Frown, Link2
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -11,7 +12,8 @@ import { Button } from '@/components/ui/button';
 import { DataTable, Column } from '@/components/ui/data-table';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { PageSkeleton } from '@/components/ui/page-skeleton';
-import { EmptyState } from '@/components/ui/permission-denied';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { showErrorToast } from '@/lib/error-utils';
 import {
   Select,
@@ -25,6 +27,12 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { Calendar as CalendarComponent } from '@/components/ui/calendar';
 import { format, subDays, startOfDay, endOfDay } from 'date-fns';
 import { ru, enUS } from 'date-fns/locale';
@@ -37,6 +45,9 @@ type CallStatus = typeof CALL_STATUSES[number];
 const DIRECTIONS = ['inbound', 'outbound'] as const;
 type Direction = typeof DIRECTIONS[number];
 
+const SENTIMENTS = ['positive', 'neutral', 'negative'] as const;
+type Sentiment = typeof SENTIMENTS[number];
+
 interface CallSession {
   id: string;
   direction: string;
@@ -48,7 +59,18 @@ interface CallSession {
   status: CallStatus;
   error_reason: string | null;
   lead_id: string | null;
+  sentiment: string | null;
+  ai_summary: string | null;
   created_at: string;
+}
+
+interface CallStats {
+  total: number;
+  completed: number;
+  failed: number;
+  avgDuration: number;
+  inbound: number;
+  outbound: number;
 }
 
 export default function CallsPage() {
@@ -61,12 +83,14 @@ export default function CallsPage() {
   const [pageSize, setPageSize] = useState(10);
   const [statusFilter, setStatusFilter] = useState<CallStatus | 'all'>('all');
   const [directionFilter, setDirectionFilter] = useState<Direction | 'all'>('all');
+  const [sentimentFilter, setSentimentFilter] = useState<Sentiment | 'all'>('all');
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
 
   const dateLocale = i18n.language === 'ru' ? ru : enUS;
 
+  // Fetch calls data
   const { data, isLoading, error } = useQuery({
-    queryKey: ['calls', profile?.organization_id, page, pageSize, statusFilter, directionFilter, dateRange, search],
+    queryKey: ['calls', profile?.organization_id, page, pageSize, statusFilter, directionFilter, sentimentFilter, dateRange, search],
     queryFn: async () => {
       if (!profile?.organization_id) return { data: [], count: 0 };
 
@@ -82,6 +106,10 @@ export default function CallsPage() {
 
       if (directionFilter !== 'all') {
         query = query.eq('direction', directionFilter);
+      }
+
+      if (sentimentFilter !== 'all') {
+        query = query.eq('sentiment', sentimentFilter);
       }
 
       if (dateRange?.from) {
@@ -106,6 +134,43 @@ export default function CallsPage() {
       }
 
       return { data: data as CallSession[], count: count || 0 };
+    },
+    enabled: !!profile?.organization_id,
+  });
+
+  // Fetch stats for the overview cards
+  const { data: stats } = useQuery({
+    queryKey: ['calls-stats', profile?.organization_id, dateRange],
+    queryFn: async (): Promise<CallStats> => {
+      if (!profile?.organization_id) return { total: 0, completed: 0, failed: 0, avgDuration: 0, inbound: 0, outbound: 0 };
+
+      let query = supabase
+        .from('call_sessions')
+        .select('status, direction, duration_seconds')
+        .eq('organization_id', profile.organization_id);
+
+      if (dateRange?.from) {
+        query = query.gte('created_at', startOfDay(dateRange.from).toISOString());
+      }
+      if (dateRange?.to) {
+        query = query.lte('created_at', endOfDay(dateRange.to).toISOString());
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        console.warn('Cannot fetch call stats:', error.message);
+        return { total: 0, completed: 0, failed: 0, avgDuration: 0, inbound: 0, outbound: 0 };
+      }
+
+      const total = data?.length || 0;
+      const completed = data?.filter(c => c.status === 'DONE').length || 0;
+      const failed = data?.filter(c => ['FAILED', 'NO_ANSWER', 'BUSY'].includes(c.status)).length || 0;
+      const inbound = data?.filter(c => c.direction === 'inbound').length || 0;
+      const outbound = data?.filter(c => c.direction === 'outbound').length || 0;
+      const totalDuration = data?.reduce((sum, c) => sum + (c.duration_seconds || 0), 0) || 0;
+      const avgDuration = completed > 0 ? Math.round(totalDuration / completed) : 0;
+
+      return { total, completed, failed, avgDuration, inbound, outbound };
     },
     enabled: !!profile?.organization_id,
   });
@@ -150,14 +215,34 @@ export default function CallsPage() {
     );
   };
 
+  const getSentimentIcon = (sentiment: string | null) => {
+    switch (sentiment?.toLowerCase()) {
+      case 'positive':
+        return <Smile className="h-4 w-4 text-green-500" />;
+      case 'negative':
+        return <Frown className="h-4 w-4 text-red-500" />;
+      case 'neutral':
+        return <Meh className="h-4 w-4 text-gray-500" />;
+      default:
+        return null;
+    }
+  };
+
+  const getSentimentLabel = (sentiment: string | null) => {
+    if (!sentiment) return null;
+    const key = `calls.sentiments.${sentiment.toLowerCase()}`;
+    return t(key, sentiment);
+  };
+
   const clearFilters = () => {
     setStatusFilter('all');
     setDirectionFilter('all');
+    setSentimentFilter('all');
     setDateRange(undefined);
     setPage(1);
   };
 
-  const hasActiveFilters = statusFilter !== 'all' || directionFilter !== 'all' || dateRange !== undefined;
+  const hasActiveFilters = statusFilter !== 'all' || directionFilter !== 'all' || sentimentFilter !== 'all' || dateRange !== undefined;
 
   // Quick date presets
   const setDatePreset = (days: number) => {
@@ -174,19 +259,19 @@ export default function CallsPage() {
       cell: (row) => (
         <div className="flex items-center gap-2">
           {getDirectionIcon(row.direction)}
-          <span>{row.direction === 'inbound' ? t('calls.inbound') : t('calls.outbound')}</span>
+          <span className="text-sm">{row.direction === 'inbound' ? t('calls.inbound') : t('calls.outbound')}</span>
         </div>
       ),
     },
     {
       key: 'from_phone',
       header: t('calls.fromPhone'),
-      cell: (row) => <span className="font-mono">{row.from_phone || '—'}</span>,
+      cell: (row) => <span className="font-mono text-sm">{row.from_phone || '—'}</span>,
     },
     {
       key: 'to_phone',
       header: t('calls.toPhone'),
-      cell: (row) => <span className="font-mono">{row.to_phone || '—'}</span>,
+      cell: (row) => <span className="font-mono text-sm">{row.to_phone || '—'}</span>,
     },
     {
       key: 'started_at',
@@ -204,6 +289,19 @@ export default function CallsPage() {
       ),
     },
     {
+      key: 'sentiment',
+      header: t('calls.sentiment'),
+      cell: (row) => {
+        if (!row.sentiment) return <span className="text-muted-foreground text-sm">—</span>;
+        return (
+          <div className="flex items-center gap-1.5">
+            {getSentimentIcon(row.sentiment)}
+            <span className="text-sm">{getSentimentLabel(row.sentiment)}</span>
+          </div>
+        );
+      },
+    },
+    {
       key: 'status',
       header: t('common.status'),
       cell: (row) => (
@@ -213,12 +311,42 @@ export default function CallsPage() {
             type={getStatusType(row.status)}
           />
           {row.error_reason && (
-            <span className="text-xs text-destructive truncate max-w-[150px]" title={row.error_reason}>
-              {row.error_reason}
-            </span>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="text-xs text-destructive truncate max-w-[100px] cursor-help">
+                    {row.error_reason}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p className="max-w-xs">{row.error_reason}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           )}
         </div>
       ),
+    },
+    {
+      key: 'lead_id',
+      header: t('calls.linkedLead'),
+      cell: (row) => {
+        if (!row.lead_id) return <span className="text-muted-foreground text-sm">—</span>;
+        return (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/leads/${row.lead_id}`);
+            }}
+          >
+            <Link2 className="h-3.5 w-3.5 mr-1" />
+            <span className="text-xs">{t('calls.linkedLead')}</span>
+          </Button>
+        );
+      },
     },
     {
       key: 'actions',
@@ -242,13 +370,83 @@ export default function CallsPage() {
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2">
             <Phone className="h-8 w-8" />
             {t('calls.title')}
           </h1>
+          <p className="text-muted-foreground mt-1">
+            {t('calls.pageDescription', 'История и аналитика телефонных звонков')}
+          </p>
         </div>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              {t('calls.totalCalls', 'Всего звонков')}
+            </CardTitle>
+            <Phone className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats?.total || 0}</div>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
+              <PhoneIncoming className="h-3 w-3 text-green-500" />
+              <span>{stats?.inbound || 0}</span>
+              <PhoneOutgoing className="h-3 w-3 text-blue-500 ml-2" />
+              <span>{stats?.outbound || 0}</span>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              {t('calls.completedCalls', 'Успешных')}
+            </CardTitle>
+            <CheckCircle className="h-4 w-4 text-green-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-green-600">{stats?.completed || 0}</div>
+            <p className="text-xs text-muted-foreground mt-1">
+              {stats?.total ? Math.round((stats.completed / stats.total) * 100) : 0}% {t('calls.successRate', 'успешных')}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              {t('calls.failedCalls', 'Неудачных')}
+            </CardTitle>
+            <AlertCircle className="h-4 w-4 text-destructive" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-destructive">{stats?.failed || 0}</div>
+            <p className="text-xs text-muted-foreground mt-1">
+              {t('calls.failedDesc', 'Нет ответа, занято, ошибка')}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              {t('calls.avgDuration', 'Сред. длительность')}
+            </CardTitle>
+            <Clock className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold font-mono">{formatDuration(stats?.avgDuration || 0)}</div>
+            <p className="text-xs text-muted-foreground mt-1">
+              {t('calls.avgDurationDesc', 'Для успешных звонков')}
+            </p>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Filters */}
@@ -292,6 +490,39 @@ export default function CallsPage() {
             <SelectItem value="all">{t('common.all')}</SelectItem>
             <SelectItem value="inbound">{t('calls.inbound')}</SelectItem>
             <SelectItem value="outbound">{t('calls.outbound')}</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select
+          value={sentimentFilter}
+          onValueChange={(value) => {
+            setSentimentFilter(value as Sentiment | 'all');
+            setPage(1);
+          }}
+        >
+          <SelectTrigger className="w-[160px]">
+            <SelectValue placeholder={t('calls.sentiment')} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{t('common.all')}</SelectItem>
+            <SelectItem value="positive">
+              <div className="flex items-center gap-2">
+                <Smile className="h-4 w-4 text-green-500" />
+                {t('calls.sentiments.positive')}
+              </div>
+            </SelectItem>
+            <SelectItem value="neutral">
+              <div className="flex items-center gap-2">
+                <Meh className="h-4 w-4 text-gray-500" />
+                {t('calls.sentiments.neutral')}
+              </div>
+            </SelectItem>
+            <SelectItem value="negative">
+              <div className="flex items-center gap-2">
+                <Frown className="h-4 w-4 text-red-500" />
+                {t('calls.sentiments.negative')}
+              </div>
+            </SelectItem>
           </SelectContent>
         </Select>
 
