@@ -367,6 +367,37 @@
     "discountTypes": {
       "percent": "Percent",
       "fixed": "Fixed Amount"
+    },
+    "discountForm": {
+      "name": "Discount Name",
+      "namePlaceholder": "E.g.: Summer Sale",
+      "targetSection": "What does the discount apply to",
+      "targetAll": "All products",
+      "targetProfile": "Product profile",
+      "targetProduct": "Specific product",
+      "selectProfile": "Select profile",
+      "selectProductLabel": "Select product",
+      "searchProduct": "Search by name or SKU...",
+      "typeSection": "Discount type and amount",
+      "typePercent": "Percent (%)",
+      "typeFixed": "Fixed (₽/m²)",
+      "volumeSection": "Order volume (m²)",
+      "volumeHint": "Discount applies when order volume falls within this range",
+      "volumeFrom": "From",
+      "volumeTo": "To",
+      "volumeNoLimit": "No limit",
+      "steppedDiscount": "Stepped discount",
+      "steppedHint": "Create multiple discount tiers based on order volume",
+      "stepFrom": "From (m²)",
+      "stepTo": "To (m²)",
+      "addStep": "Add step",
+      "step": "step",
+      "preview": "Preview",
+      "previewDiscount": "{{value}} discount for volume {{range}}",
+      "previewRange": "from {{min}} to {{max}} m²",
+      "previewFrom": "from {{min}} m²",
+      "addAtLeastOneStep": "Add at least one discount step",
+      "stepsOverlap": "Step ranges must not overlap"
     }
   },
   "billing": {
