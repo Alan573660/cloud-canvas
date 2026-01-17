@@ -367,6 +367,37 @@
     "discountTypes": {
       "percent": "Процент",
       "fixed": "Фиксированная сумма"
+    },
+    "discountForm": {
+      "name": "Название скидки",
+      "namePlaceholder": "Например: Летняя акция",
+      "targetSection": "На что действует скидка",
+      "targetAll": "На все товары",
+      "targetProfile": "На профиль",
+      "targetProduct": "На товар",
+      "selectProfile": "Выберите профиль",
+      "selectProductLabel": "Выберите товар",
+      "searchProduct": "Поиск по названию или артикулу...",
+      "typeSection": "Тип и размер скидки",
+      "typePercent": "Процент (%)",
+      "typeFixed": "Фиксированная (₽/м²)",
+      "volumeSection": "Объём заказа (м²)",
+      "volumeHint": "Скидка применяется, если объём заказа попадает в этот диапазон",
+      "volumeFrom": "От",
+      "volumeTo": "До",
+      "volumeNoLimit": "Без ограничения",
+      "steppedDiscount": "Ступенчатая скидка",
+      "steppedHint": "Создайте несколько ступеней скидки в зависимости от объёма заказа",
+      "stepFrom": "От (м²)",
+      "stepTo": "До (м²)",
+      "addStep": "Добавить ступень",
+      "step": "ступень",
+      "preview": "Как это выглядит",
+      "previewDiscount": "Скидка {{value}} при объёме {{range}}",
+      "previewRange": "от {{min}} до {{max}} м²",
+      "previewFrom": "от {{min}} м²",
+      "addAtLeastOneStep": "Добавьте хотя бы одну ступень скидки",
+      "stepsOverlap": "Диапазоны ступеней не должны пересекаться"
     }
   },
   "billing": {
