@@ -26,6 +26,7 @@ interface PriceQuoteDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   product: Product | null;
+  embedded?: boolean;
 }
 
 interface QuoteBreakdown {
@@ -36,7 +37,7 @@ interface QuoteBreakdown {
   total: number;
 }
 
-export function PriceQuoteDialog({ open, onOpenChange, product }: PriceQuoteDialogProps) {
+export function PriceQuoteDialog({ open, onOpenChange, product, embedded = false }: PriceQuoteDialogProps) {
   const { t } = useTranslation();
   
   const [ral, setRal] = useState('');
