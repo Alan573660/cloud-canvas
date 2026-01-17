@@ -229,18 +229,9 @@ export function ProductsTab() {
       key: 'base_price_rub_m2',
       header: t('products.basePrice'),
       cell: (row) => (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="font-semibold text-primary cursor-help">
-                {formatCurrency(row.base_price_rub_m2)}/м²
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p className="text-xs">{t('catalog.basePriceHint', 'Базовая цена из BigQuery (read-only)')}</p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <span className="font-semibold text-primary">
+          {formatCurrency(row.base_price_rub_m2)}/м²
+        </span>
       ),
     },
     {
