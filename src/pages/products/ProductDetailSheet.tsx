@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { ru, enUS } from 'date-fns/locale';
-import { Package, Calendar, Database, Save, Loader2 } from 'lucide-react';
+import { Package, Calendar, Info, Save, Loader2 } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -121,9 +121,9 @@ export function ProductDetailSheet({ open, onOpenChange, product }: ProductDetai
             <Badge variant={product.is_active ? 'default' : 'secondary'}>
               {product.is_active ? t('catalog.active', 'Активен') : t('catalog.inactive', 'Неактивен')}
             </Badge>
-            {product.bq_key && (
+            {product.sku && (
               <Badge variant="outline" className="font-mono text-xs">
-                BQ: {product.bq_key}
+                SKU: {product.sku}
               </Badge>
             )}
           </div>
@@ -169,13 +169,13 @@ export function ProductDetailSheet({ open, onOpenChange, product }: ProductDetai
             </CardContent>
           </Card>
 
-          {/* Price Source Note */}
+          {/* Price Note */}
           <Card className="bg-muted/30">
             <CardContent className="p-4 flex items-start gap-3">
-              <Database className="h-4 w-4 text-muted-foreground mt-0.5" />
+              <Info className="h-4 w-4 text-muted-foreground mt-0.5" />
               <div className="text-xs text-muted-foreground">
-                <p className="font-medium mb-1">{t('catalog.priceSourceNote', 'Базовая цена (read-only)')}</p>
-                <p>{t('catalog.priceSourceDesc', 'Загружается из BigQuery. Редактирование через импорт прайса.')}</p>
+                <p className="font-medium mb-1">{t('catalog.priceNote', 'Базовая цена')}</p>
+                <p>{t('catalog.priceNoteDesc', 'Редактирование через импорт прайса.')}</p>
               </div>
             </CardContent>
           </Card>

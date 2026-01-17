@@ -207,7 +207,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
               <Info className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
               <div className="text-xs text-muted-foreground">
                 <p className="font-medium mb-1">{t('catalog.xlsxNote', 'Примечание по XLSX')}:</p>
-                <p>{t('catalog.xlsxNoteDesc', 'XLSX будет конвертирован backend-ом в CSV/JSONL перед загрузкой в BigQuery.')}</p>
+                <p>{t('catalog.xlsxNoteDesc', 'XLSX будет автоматически конвертирован в нужный формат.')}</p>
               </div>
             </CardContent>
           </Card>
