@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
@@ -34,8 +34,9 @@ import { Switch } from '@/components/ui/switch';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
 import { toast } from '@/hooks/use-toast';
-import { Loader2, Plus, Trash2, Package, Layers, ShoppingCart } from 'lucide-react';
+import { Loader2, Plus, Trash2, Package, Layers, ShoppingCart, X, Wand2, AlertCircle, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // Types
@@ -60,21 +61,59 @@ interface DiscountRuleDialogProps {
 
 interface SteppedDiscount {
   id: string;
-  minQty: number;
-  maxQty: number | null;
-  value: number;
+  minQty: string; // Keep as string for empty field support
+  maxQty: string;
+  value: string;
 }
 
-// Form schema
+interface SelectedProduct {
+  id: string;
+  title: string | null;
+  sku: string | null;
+  profile: string | null;
+  thickness_mm: number | null;
+  bq_key: string | null;
+}
+
+// Normalize search query - replace Latin C with Cyrillic С and vice versa
+function normalizeSearchQuery(query: string): string {
+  const trimmed = query.trim().toLowerCase();
+  // Create variants with both Latin C and Cyrillic С
+  const withCyrillic = trimmed.replace(/c/gi, 'с');
+  const withLatin = trimmed.replace(/с/gi, 'c');
+  return trimmed;
+}
+
+// Get search variants for ILIKE
+function getSearchVariants(query: string): string[] {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+  
+  const lower = trimmed.toLowerCase();
+  const withCyrillic = lower.replace(/c/gi, 'с');
+  const withLatin = lower.replace(/с/gi, 'c');
+  
+  const variants = new Set([lower, withCyrillic, withLatin]);
+  return Array.from(variants);
+}
+
+// Form schema with proper validation
 const formSchema = z.object({
   rule_name: z.string().min(1, 'Введите название'),
   target_type: z.enum(['ALL', 'PROFILE', 'PRODUCT']),
   profile_value: z.string().nullable(),
-  product_id: z.string().nullable(),
   discount_type: z.enum(['PERCENT', 'FIXED']),
-  discount_value: z.coerce.number().min(0, 'Значение должно быть >= 0'),
-  min_qty: z.coerce.number().min(0, 'Значение должно быть >= 0'),
-  max_qty: z.coerce.number().nullable(),
+  discount_value: z.string().refine(val => {
+    if (!val) return true; // Allow empty for stepped
+    const num = parseFloat(val);
+    return !isNaN(num) && num >= 0;
+  }, 'Значение должно быть >= 0'),
+  min_qty: z.string().refine(val => {
+    if (!val) return true;
+    const num = parseInt(val);
+    return !isNaN(num) && num >= 0;
+  }, 'Введите число м²'),
+  max_qty: z.string(),
   is_active: z.boolean(),
   is_stepped: z.boolean(),
 });
@@ -88,6 +127,9 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
 
   const [steppedDiscounts, setSteppedDiscounts] = useState<SteppedDiscount[]>([]);
   const [productSearch, setProductSearch] = useState('');
+  const [selectedProducts, setSelectedProducts] = useState<SelectedProduct[]>([]);
+  const [showMoreProducts, setShowMoreProducts] = useState(false);
+  const [stepErrors, setStepErrors] = useState<Record<string, string>>({});
 
   // Fetch unique profiles for dropdown
   const { data: profiles } = useQuery({
@@ -107,28 +149,45 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
     enabled: !!profile?.organization_id && open,
   });
 
-  // Fetch products for autocomplete
-  const { data: products } = useQuery({
+  // Fetch products with improved search
+  const { data: productsData, isFetching: isSearching } = useQuery({
     queryKey: ['products-autocomplete', profile?.organization_id, productSearch],
     queryFn: async () => {
-      if (!profile?.organization_id) return [];
+      if (!profile?.organization_id) return { products: [], hasMore: false };
+      
+      const limit = showMoreProducts ? 40 : 20;
       let query = supabase
         .from('product_catalog')
-        .select('id, title, sku, profile')
+        .select('id, title, sku, profile, thickness_mm, bq_key')
         .eq('organization_id', profile.organization_id)
         .eq('is_active', true)
-        .limit(20);
+        .limit(limit + 1); // Fetch one more to check if there's more
       
-      if (productSearch) {
-        query = query.or(`title.ilike.%${productSearch}%,sku.ilike.%${productSearch}%`);
+      if (productSearch.trim()) {
+        // Build OR filter for all search variants
+        const variants = getSearchVariants(productSearch);
+        const orClauses = variants.flatMap(v => [
+          `title.ilike.%${v}%`,
+          `sku.ilike.%${v}%`,
+          `bq_key.ilike.%${v}%`,
+          `profile.ilike.%${v}%`
+        ]);
+        query = query.or(orClauses.join(','));
       }
       
       const { data, error } = await query;
       if (error) throw error;
-      return data || [];
+      
+      const hasMore = (data?.length || 0) > limit;
+      const products = (data || []).slice(0, limit);
+      
+      return { products, hasMore };
     },
     enabled: !!profile?.organization_id && open,
   });
+
+  const products = productsData?.products || [];
+  const hasMoreProducts = productsData?.hasMore || false;
 
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
@@ -136,11 +195,10 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
       rule_name: '',
       target_type: 'ALL',
       profile_value: null,
-      product_id: null,
       discount_type: 'PERCENT',
-      discount_value: 5,
-      min_qty: 100,
-      max_qty: null,
+      discount_value: '',
+      min_qty: '',
+      max_qty: '',
       is_active: true,
       is_stepped: false,
     },
@@ -153,11 +211,31 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
   const minQty = form.watch('min_qty');
   const maxQty = form.watch('max_qty');
 
+  // Validate min < max for main form
+  const volumeError = useMemo(() => {
+    if (!minQty || !maxQty) return null;
+    const min = parseInt(minQty);
+    const max = parseInt(maxQty);
+    if (!isNaN(min) && !isNaN(max) && min >= max) {
+      return t('products.discountForm.minMustBeLessThanMax', 'От должно быть меньше До');
+    }
+    return null;
+  }, [minQty, maxQty, t]);
+
+  // Validate percent range
+  const percentError = useMemo(() => {
+    if (discountType !== 'PERCENT' || !discountValue) return null;
+    const val = parseFloat(discountValue);
+    if (!isNaN(val) && (val < 0 || val > 100)) {
+      return t('products.discountForm.percentRange', 'Процент 0..100');
+    }
+    return null;
+  }, [discountType, discountValue, t]);
+
   // Reset form when dialog opens
   useEffect(() => {
     if (open) {
       if (rule) {
-        // Determine target_type from existing rule
         let targetType: 'ALL' | 'PROFILE' | 'PRODUCT' = 'ALL';
         if (rule.product_id) targetType = 'PRODUCT';
         else if (rule.category_code) targetType = 'PROFILE';
@@ -166,31 +244,33 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
           rule_name: rule.rule_name,
           target_type: targetType,
           profile_value: rule.category_code,
-          product_id: rule.product_id,
           discount_type: rule.discount_type as 'PERCENT' | 'FIXED',
-          discount_value: rule.discount_value,
-          min_qty: rule.min_qty,
-          max_qty: rule.max_qty,
+          discount_value: rule.discount_value.toString(),
+          min_qty: rule.min_qty.toString(),
+          max_qty: rule.max_qty?.toString() || '',
           is_active: rule.is_active,
           is_stepped: false,
         });
         setSteppedDiscounts([]);
+        setSelectedProducts([]);
       } else {
         form.reset({
           rule_name: '',
           target_type: 'ALL',
           profile_value: null,
-          product_id: null,
           discount_type: 'PERCENT',
-          discount_value: 5,
-          min_qty: 100,
-          max_qty: null,
+          discount_value: '',
+          min_qty: '',
+          max_qty: '',
           is_active: true,
           is_stepped: false,
         });
         setSteppedDiscounts([]);
+        setSelectedProducts([]);
       }
       setProductSearch('');
+      setShowMoreProducts(false);
+      setStepErrors({});
     }
   }, [open, rule, form]);
 
@@ -199,31 +279,49 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
     mutationFn: async (data: FormData) => {
       if (!profile?.organization_id) throw new Error('No organization');
 
-      // Determine applies_to and related fields
       let applies_to = 'ALL';
       let category_code: string | null = null;
-      let product_id: string | null = null;
 
       if (data.target_type === 'PROFILE') {
         applies_to = 'CATEGORY';
         category_code = data.profile_value;
       } else if (data.target_type === 'PRODUCT') {
         applies_to = 'PRODUCT';
-        product_id = data.product_id;
       }
 
       if (data.is_stepped && steppedDiscounts.length > 0) {
-        // Create multiple rules for stepped discounts
-        const rules = steppedDiscounts.map((step, index) => ({
-          rule_name: `${data.rule_name} (${t('products.discountForm.step')} ${index + 1})`,
-          applies_to,
+        // Create rules for stepped discounts
+        const productIds = selectedProducts.length > 0 ? selectedProducts.map(p => p.id) : [null];
+        
+        const rules = steppedDiscounts.flatMap((step, stepIndex) => 
+          productIds.map(productId => ({
+            rule_name: `${data.rule_name} (${t('products.discountForm.step')} ${stepIndex + 1})`,
+            applies_to,
+            discount_type: data.discount_type,
+            discount_value: parseFloat(step.value) || 0,
+            min_qty: parseInt(step.minQty) || 0,
+            max_qty: step.maxQty ? parseInt(step.maxQty) : null,
+            is_active: data.is_active,
+            category_code,
+            product_id: productId,
+            organization_id: profile.organization_id,
+          }))
+        );
+
+        const { error } = await supabase.from('discount_rules').insert(rules);
+        if (error) throw error;
+      } else if (data.target_type === 'PRODUCT' && selectedProducts.length > 0) {
+        // Multi-select products - create one rule per product
+        const rules = selectedProducts.map(product => ({
+          rule_name: data.rule_name,
+          applies_to: 'PRODUCT',
           discount_type: data.discount_type,
-          discount_value: step.value,
-          min_qty: step.minQty,
-          max_qty: step.maxQty,
+          discount_value: parseFloat(data.discount_value) || 0,
+          min_qty: parseInt(data.min_qty) || 0,
+          max_qty: data.max_qty ? parseInt(data.max_qty) : null,
           is_active: data.is_active,
-          category_code,
-          product_id,
+          category_code: null,
+          product_id: product.id,
           organization_id: profile.organization_id,
         }));
 
@@ -235,12 +333,12 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
           rule_name: data.rule_name,
           applies_to,
           discount_type: data.discount_type,
-          discount_value: data.discount_value,
-          min_qty: data.min_qty,
-          max_qty: data.max_qty || null,
+          discount_value: parseFloat(data.discount_value) || 0,
+          min_qty: parseInt(data.min_qty) || 0,
+          max_qty: data.max_qty ? parseInt(data.max_qty) : null,
           is_active: data.is_active,
           category_code,
-          product_id,
+          product_id: selectedProducts[0]?.id || null,
           organization_id: profile.organization_id,
         };
 
@@ -271,75 +369,221 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
     },
   });
 
-  const onSubmit = (data: FormData) => {
-    // Validate stepped discounts
-    if (data.is_stepped) {
-      if (steppedDiscounts.length === 0) {
-        toast({ 
-          title: t('common.error'), 
-          description: t('products.discountForm.addAtLeastOneStep'), 
-          variant: 'destructive' 
-        });
-        return;
+  // Validate stepped discounts
+  const validateSteps = useCallback(() => {
+    const errors: Record<string, string> = {};
+    const sorted = [...steppedDiscounts].sort((a, b) => 
+      (parseInt(a.minQty) || 0) - (parseInt(b.minQty) || 0)
+    );
+
+    for (let i = 0; i < sorted.length; i++) {
+      const step = sorted[i];
+      const minVal = parseInt(step.minQty);
+      const maxVal = step.maxQty ? parseInt(step.maxQty) : null;
+
+      // Check min is valid
+      if (!step.minQty || isNaN(minVal)) {
+        errors[`${step.id}-min`] = t('products.discountForm.enterNumber', 'Введите число м²');
       }
-      // Check for overlaps
-      const sorted = [...steppedDiscounts].sort((a, b) => a.minQty - b.minQty);
-      for (let i = 0; i < sorted.length - 1; i++) {
-        const current = sorted[i];
-        const next = sorted[i + 1];
-        if (current.maxQty === null || current.maxQty >= next.minQty) {
-          toast({ 
-            title: t('common.error'), 
-            description: t('products.discountForm.stepsOverlap'), 
-            variant: 'destructive' 
-          });
-          return;
+
+      // Check min < max
+      if (maxVal !== null && !isNaN(minVal) && minVal >= maxVal) {
+        errors[`${step.id}-max`] = t('products.discountForm.minMustBeLessThanMax');
+      }
+
+      // Check value
+      if (!step.value) {
+        errors[`${step.id}-value`] = t('products.discountForm.enterValue', 'Введите значение');
+      } else if (discountType === 'PERCENT') {
+        const val = parseFloat(step.value);
+        if (val < 0 || val > 100) {
+          errors[`${step.id}-value`] = t('products.discountForm.percentRange');
+        }
+      }
+
+      // Check overlaps with next step
+      if (i < sorted.length - 1) {
+        const nextStep = sorted[i + 1];
+        const nextMin = parseInt(nextStep.minQty) || 0;
+        
+        if (maxVal === null) {
+          errors[`${step.id}-max`] = t('products.discountForm.lastStepUnlimited', 'Только последняя ступень может быть без ограничения');
+        } else if (maxVal >= nextMin) {
+          errors[`${step.id}-max`] = t('products.discountForm.stepsOverlap', 'Диапазоны пересекаются');
         }
       }
     }
+
+    setStepErrors(errors);
+    return Object.keys(errors).length === 0;
+  }, [steppedDiscounts, discountType, t]);
+
+  const onSubmit = (data: FormData) => {
+    // Validate additional errors
+    if (volumeError || percentError) {
+      toast({ title: t('common.error'), description: volumeError || percentError, variant: 'destructive' });
+      return;
+    }
+
+    // Validate product selection
+    if (data.target_type === 'PRODUCT' && selectedProducts.length === 0) {
+      toast({ title: t('common.error'), description: t('products.discountForm.selectProduct', 'Выберите товар'), variant: 'destructive' });
+      return;
+    }
+
+    // Validate stepped discounts
+    if (data.is_stepped) {
+      if (steppedDiscounts.length === 0) {
+        toast({ title: t('common.error'), description: t('products.discountForm.addAtLeastOneStep'), variant: 'destructive' });
+        return;
+      }
+      if (!validateSteps()) {
+        toast({ title: t('common.error'), description: t('products.discountForm.fixStepErrors', 'Исправьте ошибки в ступенях'), variant: 'destructive' });
+        return;
+      }
+    }
+    
     mutation.mutate(data);
   };
 
-  // Add stepped discount
+  // Add stepped discount with smart auto-fill
   const addStep = () => {
     const lastStep = steppedDiscounts[steppedDiscounts.length - 1];
-    const newMin = lastStep ? (lastStep.maxQty || lastStep.minQty) + 1 : 100;
+    
+    // Prevent adding if last step has no max (unlimited)
+    if (lastStep && !lastStep.maxQty) {
+      toast({ 
+        title: t('common.info', 'Информация'), 
+        description: t('products.discountForm.cantAddAfterUnlimited', 'Нельзя добавить ступень после ступени без ограничения'),
+        variant: 'default' 
+      });
+      return;
+    }
+    
+    // Auto-fill min from previous max + 1
+    const newMin = lastStep && lastStep.maxQty ? (parseInt(lastStep.maxQty) + 1).toString() : '';
+    
     setSteppedDiscounts([
       ...steppedDiscounts,
-      { id: crypto.randomUUID(), minQty: newMin, maxQty: null, value: 5 }
+      { id: crypto.randomUUID(), minQty: newMin, maxQty: '', value: '' }
     ]);
   };
 
-  const updateStep = (id: string, field: keyof SteppedDiscount, value: number | null) => {
+  // Auto-fill ranges for stepped discounts
+  const autoFillRanges = () => {
+    if (steppedDiscounts.length < 2) return;
+
+    const sorted = [...steppedDiscounts].sort((a, b) => 
+      (parseInt(a.minQty) || 0) - (parseInt(b.minQty) || 0)
+    );
+
+    const updated = sorted.map((step, i) => {
+      if (i < sorted.length - 1) {
+        const nextMin = parseInt(sorted[i + 1].minQty);
+        if (!isNaN(nextMin) && nextMin > 0) {
+          return { ...step, maxQty: (nextMin - 1).toString() };
+        }
+      }
+      return step;
+    });
+
+    setSteppedDiscounts(updated);
+    toast({ title: t('common.success'), description: t('products.discountForm.rangesAutoFilled', 'Диапазоны заполнены') });
+  };
+
+  const updateStep = (id: string, field: keyof SteppedDiscount, value: string) => {
     setSteppedDiscounts(prev => 
       prev.map(step => step.id === id ? { ...step, [field]: value } : step)
     );
+    // Clear error for this field
+    setStepErrors(prev => {
+      const newErrors = { ...prev };
+      delete newErrors[`${id}-${field === 'minQty' ? 'min' : field === 'maxQty' ? 'max' : 'value'}`];
+      return newErrors;
+    });
   };
 
   const removeStep = (id: string) => {
     setSteppedDiscounts(prev => prev.filter(step => step.id !== id));
   };
 
-  // Generate human-readable preview
-  const getDiscountPreview = () => {
-    if (isStepped && steppedDiscounts.length > 0) {
-      return steppedDiscounts.map(step => {
-        const valueStr = discountType === 'PERCENT' ? `${step.value}%` : `${step.value} ₽/м²`;
-        const rangeStr = step.maxQty 
-          ? t('products.discountForm.previewRange', { min: step.minQty, max: step.maxQty })
-          : t('products.discountForm.previewFrom', { min: step.minQty });
-        return t('products.discountForm.previewDiscount', { value: valueStr, range: rangeStr });
-      });
+  // Add product to selection
+  const addProduct = (product: typeof products[0]) => {
+    if (!selectedProducts.find(p => p.id === product.id)) {
+      setSelectedProducts([...selectedProducts, product]);
     }
-    
-    const valueStr = discountType === 'PERCENT' ? `${discountValue}%` : `${discountValue} ₽/м²`;
-    const rangeStr = maxQty 
-      ? t('products.discountForm.previewRange', { min: minQty, max: maxQty })
-      : t('products.discountForm.previewFrom', { min: minQty });
-    return [t('products.discountForm.previewDiscount', { value: valueStr, range: rangeStr })];
+    setProductSearch('');
   };
 
-  const selectedProduct = products?.find(p => p.id === form.watch('product_id'));
+  // Remove product from selection
+  const removeProduct = (productId: string) => {
+    setSelectedProducts(prev => prev.filter(p => p.id !== productId));
+  };
+
+  // Filter out already selected products
+  const availableProducts = products.filter(p => !selectedProducts.find(sp => sp.id === p.id));
+
+  // Generate human-readable preview
+  const getDiscountPreview = () => {
+    const previews: string[] = [];
+    
+    if (isStepped && steppedDiscounts.length > 0) {
+      steppedDiscounts.forEach(step => {
+        const valueStr = discountType === 'PERCENT' ? `${step.value || 0}%` : `${step.value || 0} ₽/м²`;
+        const rangeStr = step.maxQty 
+          ? t('products.discountForm.previewRange', { min: step.minQty || 0, max: step.maxQty })
+          : t('products.discountForm.previewFrom', { min: step.minQty || 0 });
+        previews.push(t('products.discountForm.previewDiscount', { value: valueStr, range: rangeStr }));
+      });
+    } else {
+      const valueStr = discountType === 'PERCENT' ? `${discountValue || 0}%` : `${discountValue || 0} ₽/м²`;
+      const rangeStr = maxQty 
+        ? t('products.discountForm.previewRange', { min: minQty || 0, max: maxQty })
+        : t('products.discountForm.previewFrom', { min: minQty || 0 });
+      previews.push(t('products.discountForm.previewDiscount', { value: valueStr, range: rangeStr }));
+    }
+
+    return previews;
+  };
+
+  // Calculate how many rules will be created
+  const rulesCount = useMemo(() => {
+    if (targetType === 'PRODUCT' && selectedProducts.length > 1) {
+      if (isStepped && steppedDiscounts.length > 0) {
+        return selectedProducts.length * steppedDiscounts.length;
+      }
+      return selectedProducts.length;
+    }
+    if (isStepped && steppedDiscounts.length > 0) {
+      return steppedDiscounts.length;
+    }
+    return 1;
+  }, [targetType, selectedProducts.length, isStepped, steppedDiscounts.length]);
+
+  // Handle integer-only input
+  const handleIntegerInput = (e: React.ChangeEvent<HTMLInputElement>, onChange: (value: string) => void) => {
+    let value = e.target.value;
+    // Remove leading zeros (except for empty or just "0")
+    if (value.length > 1 && value.startsWith('0')) {
+      value = value.replace(/^0+/, '');
+    }
+    // Only allow digits
+    value = value.replace(/[^0-9]/g, '');
+    onChange(value);
+  };
+
+  // Handle decimal input for percentages/fixed
+  const handleDecimalInput = (e: React.ChangeEvent<HTMLInputElement>, onChange: (value: string) => void) => {
+    let value = e.target.value;
+    // Allow digits and one decimal point
+    value = value.replace(/[^0-9.]/g, '');
+    // Only allow one decimal point
+    const parts = value.split('.');
+    if (parts.length > 2) {
+      value = parts[0] + '.' + parts.slice(1).join('');
+    }
+    onChange(value);
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -378,7 +622,12 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
                   <FormItem>
                     <FormControl>
                       <RadioGroup
-                        onValueChange={field.onChange}
+                        onValueChange={(value) => {
+                          field.onChange(value);
+                          if (value !== 'PRODUCT') {
+                            setSelectedProducts([]);
+                          }
+                        }}
                         value={field.value}
                         className="grid grid-cols-1 sm:grid-cols-3 gap-3"
                       >
@@ -455,67 +704,102 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
                 />
               )}
 
-              {/* Product selector */}
+              {/* Product selector - multi-select */}
               {targetType === 'PRODUCT' && (
-                <FormField
-                  control={form.control}
-                  name="product_id"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t('products.discountForm.selectProductLabel')}</FormLabel>
-                      <div className="space-y-2">
-                        <Input
-                          placeholder={t('products.discountForm.searchProduct')}
-                          value={productSearch}
-                          onChange={(e) => setProductSearch(e.target.value)}
-                        />
-                        {selectedProduct && (
-                          <div className="flex items-center gap-2 p-2 bg-primary/10 rounded-md">
-                            <Package className="h-4 w-4" />
-                            <span className="font-medium">{selectedProduct.title}</span>
-                            {selectedProduct.sku && (
-                              <span className="text-xs text-muted-foreground">({selectedProduct.sku})</span>
-                            )}
-                            <Button 
-                              type="button" 
-                              variant="ghost" 
-                              size="sm"
-                              onClick={() => field.onChange(null)}
-                              className="ml-auto h-6 w-6 p-0"
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        )}
-                        {!selectedProduct && products && products.length > 0 && (
-                          <div className="border rounded-md max-h-40 overflow-y-auto">
-                            {products.map(product => (
-                              <button
-                                key={product.id}
-                                type="button"
-                                onClick={() => {
-                                  field.onChange(product.id);
-                                  setProductSearch('');
-                                }}
-                                className="w-full flex items-center gap-2 p-2 text-left hover:bg-muted transition-colors border-b last:border-b-0"
-                              >
-                                <Package className="h-4 w-4 text-muted-foreground" />
-                                <span className="font-medium truncate">{product.title}</span>
-                                {product.sku && (
-                                  <span className="text-xs text-muted-foreground">({product.sku})</span>
-                                )}
-                                {product.profile && (
-                                  <span className="text-xs text-muted-foreground ml-auto">{product.profile}</span>
-                                )}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      <FormMessage />
-                    </FormItem>
+                <div className="space-y-3">
+                  <FormLabel>{t('products.discountForm.selectProductLabel')}</FormLabel>
+                  
+                  {/* Selected products chips */}
+                  {selectedProducts.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {selectedProducts.map(product => (
+                        <Badge key={product.id} variant="secondary" className="flex items-center gap-1 px-2 py-1">
+                          <Package className="h-3 w-3" />
+                          <span className="max-w-[150px] truncate">{product.title || product.sku}</span>
+                          {product.sku && product.title && (
+                            <span className="text-xs text-muted-foreground">({product.sku})</span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => removeProduct(product.id)}
+                            className="ml-1 hover:bg-muted rounded p-0.5"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </Badge>
+                      ))}
+                    </div>
                   )}
-                />
+
+                  {/* Search input */}
+                  <div className="relative">
+                    <Input
+                      placeholder={t('products.discountForm.searchProductPlaceholder', 'Поиск по названию, SKU, профилю...')}
+                      value={productSearch}
+                      onChange={(e) => setProductSearch(e.target.value)}
+                    />
+                    {isSearching && (
+                      <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
+                    )}
+                  </div>
+
+                  {/* Product list */}
+                  {productSearch && availableProducts.length > 0 && (
+                    <div className="border rounded-md max-h-60 overflow-y-auto">
+                      {availableProducts.map(product => (
+                        <button
+                          key={product.id}
+                          type="button"
+                          onClick={() => addProduct(product)}
+                          className="w-full flex items-start gap-2 p-3 text-left hover:bg-muted transition-colors border-b last:border-b-0"
+                        >
+                          <Package className="h-4 w-4 mt-0.5 text-muted-foreground flex-shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium truncate">{product.title}</div>
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              {(product.sku || product.bq_key) && (
+                                <span>{product.sku || product.bq_key}</span>
+                              )}
+                              {product.profile && (
+                                <span>• {product.profile}</span>
+                              )}
+                              {product.thickness_mm && (
+                                <span>• {product.thickness_mm} мм</span>
+                              )}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                      
+                      {hasMoreProducts && !showMoreProducts && (
+                        <button
+                          type="button"
+                          onClick={() => setShowMoreProducts(true)}
+                          className="w-full flex items-center justify-center gap-2 p-2 text-sm text-primary hover:bg-muted"
+                        >
+                          <ChevronDown className="h-4 w-4" />
+                          {t('products.discountForm.showMore', 'Показать ещё')}
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {productSearch && availableProducts.length === 0 && !isSearching && (
+                    <p className="text-sm text-muted-foreground py-2">
+                      {t('products.discountForm.noProductsFound', 'Товары не найдены')}
+                    </p>
+                  )}
+
+                  {/* Info about multiple rules */}
+                  {selectedProducts.length > 1 && (
+                    <div className="flex items-center gap-2 p-2 bg-blue-50 dark:bg-blue-950/20 rounded text-xs text-blue-700 dark:text-blue-400">
+                      <AlertCircle className="h-3 w-3 flex-shrink-0" />
+                      <span>
+                        {t('products.discountForm.multipleRulesInfo', 'Будет создано {{count}} правил (по одному на товар)', { count: selectedProducts.length })}
+                      </span>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
 
@@ -556,8 +840,15 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
                           {t('products.discountValue')} ({discountType === 'PERCENT' ? '%' : '₽/м²'})
                         </FormLabel>
                         <FormControl>
-                          <Input type="number" step="0.01" min="0" {...field} />
+                          <Input
+                            type="text"
+                            inputMode="decimal"
+                            placeholder={discountType === 'PERCENT' ? t('products.discountForm.examplePercent', 'Например: 5') : t('products.discountForm.exampleFixed', 'Например: 100')}
+                            value={field.value}
+                            onChange={(e) => handleDecimalInput(e, field.onChange)}
+                          />
                         </FormControl>
+                        {percentError && <p className="text-sm text-destructive">{percentError}</p>}
                         <FormMessage />
                       </FormItem>
                     )}
@@ -580,7 +871,13 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
                       <FormItem>
                         <FormLabel>{t('products.discountForm.volumeFrom')}</FormLabel>
                         <FormControl>
-                          <Input type="number" min="0" {...field} />
+                          <Input
+                            type="text"
+                            inputMode="numeric"
+                            placeholder={t('products.discountForm.exampleM2', 'Например: 100')}
+                            value={field.value}
+                            onChange={(e) => handleIntegerInput(e, field.onChange)}
+                          />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -595,13 +892,14 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
                         <FormLabel>{t('products.discountForm.volumeTo')}</FormLabel>
                         <FormControl>
                           <Input
-                            type="number"
-                            min="0"
+                            type="text"
+                            inputMode="numeric"
                             placeholder={t('products.discountForm.volumeNoLimit')}
-                            value={field.value ?? ''}
-                            onChange={(e) => field.onChange(e.target.value ? Number(e.target.value) : null)}
+                            value={field.value}
+                            onChange={(e) => handleIntegerInput(e, field.onChange)}
                           />
                         </FormControl>
+                        {volumeError && <p className="text-sm text-destructive">{volumeError}</p>}
                         <FormMessage />
                       </FormItem>
                     )}
@@ -638,72 +936,109 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
                   </FormDescription>
 
                   {steppedDiscounts.length > 0 && (
-                    <div className="border rounded-md overflow-hidden">
-                      <table className="w-full text-sm">
-                        <thead className="bg-muted">
-                          <tr>
-                            <th className="p-2 text-left font-medium">{t('products.discountForm.stepFrom')}</th>
-                            <th className="p-2 text-left font-medium">{t('products.discountForm.stepTo')}</th>
-                            <th className="p-2 text-left font-medium">
-                              {t('products.discountValue')} ({discountType === 'PERCENT' ? '%' : '₽/м²'})
-                            </th>
-                            <th className="p-2 w-10"></th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {steppedDiscounts.map((step) => (
-                            <tr key={step.id} className="border-t">
-                              <td className="p-2">
-                                <Input
-                                  type="number"
-                                  min="0"
-                                  value={step.minQty}
-                                  onChange={(e) => updateStep(step.id, 'minQty', Number(e.target.value))}
-                                  className="h-8"
-                                />
-                              </td>
-                              <td className="p-2">
-                                <Input
-                                  type="number"
-                                  min="0"
-                                  placeholder="∞"
-                                  value={step.maxQty ?? ''}
-                                  onChange={(e) => updateStep(step.id, 'maxQty', e.target.value ? Number(e.target.value) : null)}
-                                  className="h-8"
-                                />
-                              </td>
-                              <td className="p-2">
-                                <Input
-                                  type="number"
-                                  step="0.01"
-                                  min="0"
-                                  value={step.value}
-                                  onChange={(e) => updateStep(step.id, 'value', Number(e.target.value))}
-                                  className="h-8"
-                                />
-                              </td>
-                              <td className="p-2">
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-8 w-8"
-                                  onClick={() => removeStep(step.id)}
-                                >
-                                  <Trash2 className="h-4 w-4 text-destructive" />
-                                </Button>
-                              </td>
+                    <>
+                      <div className="border rounded-md overflow-hidden">
+                        <table className="w-full text-sm">
+                          <thead className="bg-muted">
+                            <tr>
+                              <th className="p-2 text-left font-medium">{t('products.discountForm.stepFrom')}</th>
+                              <th className="p-2 text-left font-medium">{t('products.discountForm.stepTo')}</th>
+                              <th className="p-2 text-left font-medium">
+                                {t('products.discountValue')} ({discountType === 'PERCENT' ? '%' : '₽/м²'})
+                              </th>
+                              <th className="p-2 w-10"></th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                          </thead>
+                          <tbody>
+                            {steppedDiscounts.map((step, index) => (
+                              <tr key={step.id} className="border-t">
+                                <td className="p-2">
+                                  <Input
+                                    type="text"
+                                    inputMode="numeric"
+                                    placeholder={t('products.discountForm.exampleM2', 'Например: 100')}
+                                    value={step.minQty}
+                                    onChange={(e) => handleIntegerInput(e, (v) => updateStep(step.id, 'minQty', v))}
+                                    className={cn("h-8", stepErrors[`${step.id}-min`] && "border-destructive")}
+                                  />
+                                  {stepErrors[`${step.id}-min`] && (
+                                    <p className="text-xs text-destructive mt-1">{stepErrors[`${step.id}-min`]}</p>
+                                  )}
+                                </td>
+                                <td className="p-2">
+                                  <Input
+                                    type="text"
+                                    inputMode="numeric"
+                                    placeholder={index === steppedDiscounts.length - 1 ? '∞' : t('products.discountForm.exampleM2', 'Например: 100')}
+                                    value={step.maxQty}
+                                    onChange={(e) => handleIntegerInput(e, (v) => updateStep(step.id, 'maxQty', v))}
+                                    className={cn("h-8", stepErrors[`${step.id}-max`] && "border-destructive")}
+                                  />
+                                  {stepErrors[`${step.id}-max`] && (
+                                    <p className="text-xs text-destructive mt-1">{stepErrors[`${step.id}-max`]}</p>
+                                  )}
+                                </td>
+                                <td className="p-2">
+                                  <Input
+                                    type="text"
+                                    inputMode="decimal"
+                                    placeholder={discountType === 'PERCENT' ? t('products.discountForm.examplePercent', 'Например: 5') : t('products.discountForm.exampleFixed', 'Например: 100')}
+                                    value={step.value}
+                                    onChange={(e) => handleDecimalInput(e, (v) => updateStep(step.id, 'value', v))}
+                                    className={cn("h-8", stepErrors[`${step.id}-value`] && "border-destructive")}
+                                  />
+                                  {stepErrors[`${step.id}-value`] && (
+                                    <p className="text-xs text-destructive mt-1">{stepErrors[`${step.id}-value`]}</p>
+                                  )}
+                                </td>
+                                <td className="p-2">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8"
+                                    onClick={() => removeStep(step.id)}
+                                  >
+                                    <Trash2 className="h-4 w-4 text-destructive" />
+                                  </Button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {steppedDiscounts.length >= 2 && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={autoFillRanges}
+                          className="gap-2"
+                        >
+                          <Wand2 className="h-4 w-4" />
+                          {t('products.discountForm.autoFillRanges', 'Автозаполнить диапазоны')}
+                        </Button>
+                      )}
+                    </>
                   )}
 
-                  <Button type="button" variant="outline" onClick={addStep} className="w-full">
+                  <Button 
+                    type="button" 
+                    variant="outline" 
+                    onClick={addStep} 
+                    className="w-full"
+                    disabled={steppedDiscounts.length > 0 && !steppedDiscounts[steppedDiscounts.length - 1].maxQty}
+                  >
                     <Plus className="h-4 w-4 mr-2" />
                     {t('products.discountForm.addStep')}
                   </Button>
+                  
+                  {steppedDiscounts.length > 0 && !steppedDiscounts[steppedDiscounts.length - 1].maxQty && (
+                    <p className="text-xs text-muted-foreground">
+                      {t('products.discountForm.cantAddAfterUnlimitedHint', 'Заполните поле "До" в последней ступени, чтобы добавить следующую')}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -732,6 +1067,11 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
                   </p>
                 ))}
               </div>
+              {rulesCount > 1 && (
+                <p className="text-xs text-muted-foreground mt-2">
+                  {t('products.discountForm.willCreateRules', 'Будет создано правил: {{count}}', { count: rulesCount })}
+                </p>
+              )}
             </div>
 
             {/* Actions */}
