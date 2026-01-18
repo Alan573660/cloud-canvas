@@ -398,6 +398,30 @@
       "previewFrom": "from {{min}} m²",
       "addAtLeastOneStep": "Add at least one discount step",
       "stepsOverlap": "Step ranges must not overlap"
+    },
+    "discountGroups": {
+      "name": "Name",
+      "appliesTo": "Applies to",
+      "steps": "Steps",
+      "range": "Range",
+      "active": "Active",
+      "view": "View",
+      "viewTitle": "Discount Details",
+      "targetAllProducts": "All products",
+      "targetProfile": "Profile",
+      "targetProducts": "Products",
+      "profileLabel": "Profile",
+      "productsCount": "{{count}} products",
+      "andMore": "and {{count}} more...",
+      "stepsCount": "{{count}} steps",
+      "partial": "Partial",
+      "partiallyActive": "Partially active",
+      "groupDeleted": "Discount group deleted",
+      "deleteConfirm": "Delete discount \"{{name}}\"? This will remove {{count}} database records.",
+      "productsList": "Products List",
+      "stepsTitle": "Discount Steps ({{count}})",
+      "discountDetails": "Discount Details",
+      "explanation": "This is a discount group. Stored as {{count}} discount_rules records in the database."
     }
   },
   "billing": {
