@@ -119,7 +119,7 @@ export default function ProductsPage() {
       <DiscountRuleDialog 
         open={discountDialogOpen} 
         onOpenChange={setDiscountDialogOpen} 
-        rule={null} 
+        group={null} 
       />
     </div>
   );

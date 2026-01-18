@@ -38,26 +38,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from '@/hooks/use-toast';
 import { Loader2, Plus, Trash2, Package, Layers, ShoppingCart, X, Wand2, AlertCircle, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-// Types
-interface DiscountRule {
-  id: string;
-  rule_name: string;
-  applies_to: string;
-  discount_type: string;
-  discount_value: number;
-  min_qty: number;
-  max_qty: number | null;
-  is_active: boolean;
-  product_id: string | null;
-  category_code: string | null;
-}
-
-interface DiscountRuleDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  rule: DiscountRule | null;
-}
+import { DiscountGroup } from './types/discount-group';
 
 interface SteppedDiscount {
   id: string;
@@ -73,6 +54,12 @@ interface SelectedProduct {
   profile: string | null;
   thickness_mm: number | null;
   bq_key: string | null;
+}
+
+export interface DiscountRuleDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  group: DiscountGroup | null; // Edit group mode, null = create new
 }
 
 // Normalize search query - replace Latin C with Cyrillic С and vice versa
@@ -120,7 +107,7 @@ const formSchema = z.object({
 
 type FormData = z.infer<typeof formSchema>;
 
-export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDialogProps) {
+export function DiscountRuleDialog({ open, onOpenChange, group }: DiscountRuleDialogProps) {
   const { t } = useTranslation();
   const { profile } = useAuth();
   const queryClient = useQueryClient();
@@ -235,24 +222,52 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
   // Reset form when dialog opens
   useEffect(() => {
     if (open) {
-      if (rule) {
+      if (group) {
+        // Editing a group - pre-fill form from group data
         let targetType: 'ALL' | 'PROFILE' | 'PRODUCT' = 'ALL';
-        if (rule.product_id) targetType = 'PRODUCT';
-        else if (rule.category_code) targetType = 'PROFILE';
+        if (group.applies_to === 'PRODUCT') targetType = 'PRODUCT';
+        else if (group.applies_to === 'CATEGORY') targetType = 'PROFILE';
 
+        // Convert group steps to stepped discounts format
+        const hasMultipleSteps = group.steps.length > 1;
+        
         form.reset({
-          rule_name: rule.rule_name,
+          rule_name: group.base_rule_name,
           target_type: targetType,
-          profile_value: rule.category_code,
-          discount_type: rule.discount_type as 'PERCENT' | 'FIXED',
-          discount_value: rule.discount_value.toString(),
-          min_qty: rule.min_qty.toString(),
-          max_qty: rule.max_qty?.toString() || '',
-          is_active: rule.is_active,
-          is_stepped: false,
+          profile_value: group.category_code,
+          discount_type: group.discount_type as 'PERCENT' | 'FIXED',
+          discount_value: hasMultipleSteps ? '' : (group.steps[0]?.discount_value?.toString() || ''),
+          min_qty: hasMultipleSteps ? '' : (group.steps[0]?.min_qty?.toString() || ''),
+          max_qty: hasMultipleSteps ? '' : (group.steps[0]?.max_qty?.toString() || ''),
+          is_active: group.is_active === true,
+          is_stepped: hasMultipleSteps,
         });
-        setSteppedDiscounts([]);
-        setSelectedProducts([]);
+
+        // Set stepped discounts if applicable
+        if (hasMultipleSteps) {
+          setSteppedDiscounts(group.steps.map(step => ({
+            id: step.id,
+            minQty: step.min_qty.toString(),
+            maxQty: step.max_qty?.toString() || '',
+            value: step.discount_value.toString(),
+          })));
+        } else {
+          setSteppedDiscounts([]);
+        }
+
+        // Set selected products if PRODUCT type
+        if (group.applies_to === 'PRODUCT' && group.products.length > 0) {
+          setSelectedProducts(group.products.map(p => ({
+            id: p.id,
+            title: p.title,
+            sku: p.sku,
+            profile: p.profile,
+            thickness_mm: p.thickness_mm,
+            bq_key: p.bq_key,
+          })));
+        } else {
+          setSelectedProducts([]);
+        }
       } else {
         form.reset({
           rule_name: '',
@@ -272,7 +287,7 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
       setShowMoreProducts(false);
       setStepErrors({});
     }
-  }, [open, rule, form]);
+  }, [open, group, form]);
 
   // Mutation for saving
   const mutation = useMutation({
@@ -290,6 +305,17 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
       }
 
       if (data.is_stepped && steppedDiscounts.length > 0) {
+        // If editing a group, delete all existing rules first
+        if (group) {
+          const ruleIdsToDelete = group.rules.map(r => r.id);
+          const { error: deleteError } = await supabase
+            .from('discount_rules')
+            .delete()
+            .in('id', ruleIdsToDelete)
+            .eq('organization_id', profile.organization_id);
+          if (deleteError) throw deleteError;
+        }
+
         // Create rules for stepped discounts
         const productIds = selectedProducts.length > 0 ? selectedProducts.map(p => p.id) : [null];
         
@@ -311,6 +337,17 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
         const { error } = await supabase.from('discount_rules').insert(rules);
         if (error) throw error;
       } else if (data.target_type === 'PRODUCT' && selectedProducts.length > 0) {
+        // If editing a group, delete all existing rules first
+        if (group) {
+          const ruleIdsToDelete = group.rules.map(r => r.id);
+          const { error: deleteError } = await supabase
+            .from('discount_rules')
+            .delete()
+            .in('id', ruleIdsToDelete)
+            .eq('organization_id', profile.organization_id);
+          if (deleteError) throw deleteError;
+        }
+
         // Multi-select products - create one rule per product
         const rules = selectedProducts.map(product => ({
           rule_name: data.rule_name,
@@ -342,13 +379,20 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
           organization_id: profile.organization_id,
         };
 
-        if (rule) {
-          const { error } = await supabase
+        if (group) {
+          // Editing a group: delete all existing rules in the group, then insert new ones
+          const ruleIdsToDelete = group.rules.map(r => r.id);
+          
+          const { error: deleteError } = await supabase
             .from('discount_rules')
-            .update(payload)
-            .eq('id', rule.id)
+            .delete()
+            .in('id', ruleIdsToDelete)
             .eq('organization_id', profile.organization_id);
-          if (error) throw error;
+          if (deleteError) throw deleteError;
+          
+          // Insert the new single rule
+          const { error: insertError } = await supabase.from('discount_rules').insert([payload]);
+          if (insertError) throw insertError;
         } else {
           const { error } = await supabase.from('discount_rules').insert([payload]);
           if (error) throw error;
@@ -358,9 +402,9 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
     onSuccess: () => {
       toast({
         title: t('common.success'),
-        description: rule ? t('products.discountUpdated') : t('products.discountCreated'),
+        description: group ? t('products.discountUpdated') : t('products.discountCreated'),
       });
-      queryClient.invalidateQueries({ queryKey: ['discount-rules'] });
+      queryClient.invalidateQueries({ queryKey: ['discount-rules-all'] });
       onOpenChange(false);
     },
     onError: (error) => {
@@ -590,7 +634,7 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
-            {rule ? t('products.editDiscount') : t('products.newDiscount')}
+            {group ? t('products.editDiscount') : t('products.newDiscount')}
           </DialogTitle>
         </DialogHeader>
 
@@ -919,7 +963,7 @@ export function DiscountRuleDialog({ open, onOpenChange, rule }: DiscountRuleDia
                       <Checkbox
                         checked={field.value}
                         onCheckedChange={field.onChange}
-                        disabled={!!rule}
+                        disabled={!!group}
                       />
                     </FormControl>
                     <FormLabel className="!mt-0 cursor-pointer">

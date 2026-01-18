@@ -1,13 +1,14 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, Check, X } from 'lucide-react';
+import { Plus, Pencil, Trash2, Eye, Check, X, AlertCircle, Package, ShoppingCart, Layers } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
-import { DataTable, Column } from '@/components/ui/data-table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/hooks/use-toast';
+import { Input } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,21 +19,23 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { DiscountRuleDialog } from './DiscountRuleDialog';
-
-interface DiscountRule {
-  id: string;
-  rule_name: string;
-  applies_to: string;
-  discount_type: string;
-  discount_value: number;
-  min_qty: number;
-  max_qty: number | null;
-  is_active: boolean;
-  product_id: string | null;
-  category_code: string | null;
-  created_at: string;
-}
+import { DiscountGroupViewDialog } from './DiscountGroupViewDialog';
+import { DiscountRule, DiscountGroup, groupDiscountRules, ProductInfo } from './types/discount-group';
 
 export function DiscountRulesTab() {
   const { t } = useTranslation();
@@ -40,74 +43,115 @@ export function DiscountRulesTab() {
   const queryClient = useQueryClient();
 
   const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingRule, setEditingRule] = useState<DiscountRule | null>(null);
+  const [editingGroup, setEditingGroup] = useState<DiscountGroup | null>(null);
+  const [viewDialogOpen, setViewDialogOpen] = useState(false);
+  const [viewingGroup, setViewingGroup] = useState<DiscountGroup | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [deletingRule, setDeletingRule] = useState<DiscountRule | null>(null);
+  const [deletingGroup, setDeletingGroup] = useState<DiscountGroup | null>(null);
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['discount-rules', profile?.organization_id, search, page, pageSize],
+  // Fetch all discount rules
+  const { data: rulesData, isLoading: rulesLoading } = useQuery({
+    queryKey: ['discount-rules-all', profile?.organization_id],
     queryFn: async () => {
-      if (!profile?.organization_id) return { data: [], count: 0 };
+      if (!profile?.organization_id) return [];
 
-      let query = supabase
+      const { data, error } = await supabase
         .from('discount_rules')
-        .select('*', { count: 'exact' })
+        .select('*')
         .eq('organization_id', profile.organization_id)
         .order('created_at', { ascending: false });
 
-      if (search) {
-        query = query.ilike('rule_name', `%${search}%`);
-      }
-
-      const from = (page - 1) * pageSize;
-      const to = from + pageSize - 1;
-      query = query.range(from, to);
-
-      const { data, count, error } = await query;
       if (error) throw error;
-
-      return { data: data as DiscountRule[], count: count || 0 };
+      return data as DiscountRule[];
     },
     enabled: !!profile?.organization_id,
   });
 
+  // Fetch products for mapping (only those referenced in rules)
+  const productIds = useMemo(() => {
+    if (!rulesData) return [];
+    return [...new Set(rulesData.map(r => r.product_id).filter(Boolean))] as string[];
+  }, [rulesData]);
+
+  const { data: productsData, isLoading: productsLoading } = useQuery({
+    queryKey: ['discount-products', profile?.organization_id, productIds],
+    queryFn: async () => {
+      if (!profile?.organization_id || productIds.length === 0) return [];
+
+      const { data, error } = await supabase
+        .from('product_catalog')
+        .select('id, title, sku, profile, thickness_mm, coating, bq_key')
+        .eq('organization_id', profile.organization_id)
+        .in('id', productIds);
+
+      if (error) throw error;
+      return data as ProductInfo[];
+    },
+    enabled: !!profile?.organization_id && productIds.length > 0,
+  });
+
+  // Group rules into bundles
+  const groups = useMemo(() => {
+    if (!rulesData) return [];
+    return groupDiscountRules(rulesData, productsData || []);
+  }, [rulesData, productsData]);
+
+  // Filter groups by search
+  const filteredGroups = useMemo(() => {
+    if (!search.trim()) return groups;
+    const searchLower = search.toLowerCase();
+    return groups.filter(g => 
+      g.base_rule_name.toLowerCase().includes(searchLower) ||
+      g.category_code?.toLowerCase().includes(searchLower) ||
+      g.products.some(p => 
+        p.title?.toLowerCase().includes(searchLower) ||
+        p.sku?.toLowerCase().includes(searchLower)
+      )
+    );
+  }, [groups, search]);
+
+  // Delete mutation - deletes all rules in a group
   const deleteMutation = useMutation({
-    mutationFn: async (ruleId: string) => {
+    mutationFn: async (group: DiscountGroup) => {
+      const ruleIds = group.rules.map(r => r.id);
+      
       const { error } = await supabase
         .from('discount_rules')
         .delete()
-        .eq('id', ruleId)
+        .in('id', ruleIds)
         .eq('organization_id', profile!.organization_id);
 
       if (error) throw error;
     },
     onSuccess: () => {
-      toast({ title: t('common.success'), description: t('products.discountDeleted') });
-      queryClient.invalidateQueries({ queryKey: ['discount-rules'] });
+      toast({ title: t('common.success'), description: t('products.discountGroups.groupDeleted') });
+      queryClient.invalidateQueries({ queryKey: ['discount-rules-all'] });
       setDeleteDialogOpen(false);
-      setDeletingRule(null);
+      setDeletingGroup(null);
     },
     onError: (error) => {
       toast({ title: t('common.error'), description: error.message, variant: 'destructive' });
     },
   });
 
-  const handleEdit = (rule: DiscountRule) => {
-    setEditingRule(rule);
+  const handleView = (group: DiscountGroup) => {
+    setViewingGroup(group);
+    setViewDialogOpen(true);
+  };
+
+  const handleEdit = (group: DiscountGroup) => {
+    setEditingGroup(group);
     setDialogOpen(true);
   };
 
-  const handleDelete = (rule: DiscountRule) => {
-    setDeletingRule(rule);
+  const handleDelete = (group: DiscountGroup) => {
+    setDeletingGroup(group);
     setDeleteDialogOpen(true);
   };
 
   const handleCreate = () => {
-    setEditingRule(null);
+    setEditingGroup(null);
     setDialogOpen(true);
   };
 
@@ -122,109 +166,215 @@ export function DiscountRulesTab() {
     }).format(value);
   };
 
-  const columns: Column<DiscountRule>[] = [
-    {
-      key: 'rule_name',
-      header: t('products.ruleName'),
-      cell: (row) => <span className="font-medium">{row.rule_name}</span>,
-    },
-    {
-      key: 'applies_to',
-      header: t('products.appliesTo'),
-      cell: (row) => (
-        <Badge variant="outline">
-          {t(`products.appliesOptions.${row.applies_to.toLowerCase()}`)}
+  const getTargetDisplay = (group: DiscountGroup) => {
+    switch (group.applies_to) {
+      case 'ALL':
+        return (
+          <div className="flex items-center gap-2">
+            <ShoppingCart className="h-4 w-4 text-muted-foreground" />
+            <span>{t('products.discountGroups.targetAllProducts')}</span>
+          </div>
+        );
+      case 'CATEGORY':
+        return (
+          <div className="flex items-center gap-2">
+            <Layers className="h-4 w-4 text-muted-foreground" />
+            <span>{t('products.discountGroups.profileLabel')}: {group.category_code}</span>
+          </div>
+        );
+      case 'PRODUCT':
+        const productCount = group.products.length;
+        const firstProduct = group.products[0];
+        return (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="flex items-center gap-2 cursor-help">
+                  <Package className="h-4 w-4 text-muted-foreground" />
+                  <span className="truncate max-w-[200px]">
+                    {productCount === 1 && firstProduct
+                      ? (firstProduct.title || firstProduct.sku || 'Товар')
+                      : t('products.discountGroups.productsCount', { count: productCount })}
+                  </span>
+                  {productCount > 1 && (
+                    <Badge variant="secondary" className="text-xs">+{productCount - 1}</Badge>
+                  )}
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="max-w-xs">
+                <div className="text-xs space-y-1">
+                  {group.products.slice(0, 5).map(p => (
+                    <div key={p.id} className="truncate">
+                      {p.title || p.sku || p.bq_key}
+                    </div>
+                  ))}
+                  {group.products.length > 5 && (
+                    <div className="text-muted-foreground">
+                      {t('products.discountGroups.andMore', { count: group.products.length - 5 })}
+                    </div>
+                  )}
+                </div>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        );
+      default:
+        return '—';
+    }
+  };
+
+  const getRangeDisplay = (group: DiscountGroup) => {
+    if (group.max_qty_range === null) {
+      return `${t('products.discountForm.volumeFrom').toLowerCase()} ${group.min_qty_range} м² → ∞`;
+    }
+    return `${group.min_qty_range} – ${group.max_qty_range} м²`;
+  };
+
+  const getActiveDisplay = (group: DiscountGroup) => {
+    if (group.is_active === true) {
+      return (
+        <Badge className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+          <Check className="h-3 w-3 mr-1" />
+          {t('common.yes')}
         </Badge>
-      ),
-    },
-    {
-      key: 'discount_type',
-      header: t('products.discountType'),
-      cell: (row) => t(`products.discountTypes.${row.discount_type.toLowerCase()}`),
-    },
-    {
-      key: 'discount_value',
-      header: t('products.discountValue'),
-      cell: (row) => (
-        <span className="font-semibold text-green-600">
-          -{formatDiscountValue(row.discount_type, row.discount_value)}
-        </span>
-      ),
-    },
-    {
-      key: 'min_qty',
-      header: t('products.minQty'),
-      cell: (row) => row.min_qty,
-    },
-    {
-      key: 'max_qty',
-      header: t('products.maxQty'),
-      cell: (row) => row.max_qty ?? '∞',
-    },
-    {
-      key: 'is_active',
-      header: t('products.isActive'),
-      cell: (row) =>
-        row.is_active ? (
-          <Badge className="bg-green-100 text-green-800">
-            <Check className="h-3 w-3 mr-1" />
-            {t('common.yes')}
-          </Badge>
-        ) : (
-          <Badge variant="secondary">
-            <X className="h-3 w-3 mr-1" />
-            {t('common.no')}
-          </Badge>
-        ),
-    },
-    {
-      key: 'actions',
-      header: t('common.actions'),
-      cell: (row) => (
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" onClick={() => handleEdit(row)}>
-            <Pencil className="h-4 w-4" />
-          </Button>
-          <Button variant="ghost" size="icon" onClick={() => handleDelete(row)}>
-            <Trash2 className="h-4 w-4 text-destructive" />
-          </Button>
-        </div>
-      ),
-    },
-  ];
+      );
+    } else if (group.is_active === false) {
+      return (
+        <Badge variant="secondary">
+          <X className="h-3 w-3 mr-1" />
+          {t('common.no')}
+        </Badge>
+      );
+    }
+    return (
+      <Badge variant="outline" className="border-yellow-500 text-yellow-600 dark:text-yellow-400">
+        <AlertCircle className="h-3 w-3 mr-1" />
+        {t('products.discountGroups.partial')}
+      </Badge>
+    );
+  };
+
+  const isLoading = rulesLoading || productsLoading;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold">{t('products.discountRules')}</h2>
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex-1 max-w-sm">
+          <Input
+            placeholder={t('common.search')}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
         <Button onClick={handleCreate}>
           <Plus className="h-4 w-4 mr-2" />
           {t('products.newDiscount')}
         </Button>
       </div>
 
-      <DataTable
-        columns={columns}
-        data={data?.data || []}
-        loading={isLoading}
-        searchPlaceholder={t('common.search')}
-        onSearch={setSearch}
-        searchValue={search}
-        page={page}
-        pageSize={pageSize}
-        totalCount={data?.count || 0}
-        onPageChange={setPage}
-        onPageSizeChange={(size) => {
-          setPageSize(size);
-          setPage(1);
-        }}
-        emptyMessage={t('products.noDiscounts')}
-      />
+      {isLoading ? (
+        <div className="space-y-3">
+          {[1, 2, 3].map(i => (
+            <Skeleton key={i} className="h-16 w-full" />
+          ))}
+        </div>
+      ) : filteredGroups.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+          <Package className="h-12 w-12 mb-4 opacity-50" />
+          <p>{t('products.noDiscounts')}</p>
+        </div>
+      ) : (
+        <div className="border rounded-lg overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t('products.discountGroups.name')}</TableHead>
+                <TableHead>{t('products.discountGroups.appliesTo')}</TableHead>
+                <TableHead>{t('products.discountType')}</TableHead>
+                <TableHead>{t('products.discountGroups.steps')}</TableHead>
+                <TableHead>{t('products.discountGroups.range')}</TableHead>
+                <TableHead>{t('products.discountGroups.active')}</TableHead>
+                <TableHead className="text-right">{t('common.actions')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredGroups.map((group) => (
+                <TableRow key={group.id}>
+                  <TableCell className="font-medium">{group.base_rule_name}</TableCell>
+                  <TableCell>{getTargetDisplay(group)}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline">
+                      {group.discount_type === 'PERCENT' ? '%' : '₽/м²'}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    {group.steps.length > 1 ? (
+                      <Badge variant="secondary">
+                        {t('products.discountGroups.stepsCount', { count: group.steps.length })}
+                      </Badge>
+                    ) : (
+                      <span className="text-green-600 dark:text-green-400 font-medium">
+                        -{formatDiscountValue(group.discount_type, group.steps[0]?.discount_value || 0)}
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground text-sm">
+                    {getRangeDisplay(group)}
+                  </TableCell>
+                  <TableCell>{getActiveDisplay(group)}</TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex items-center justify-end gap-1">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="ghost" size="icon" onClick={() => handleView(group)}>
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{t('products.discountGroups.view')}</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="ghost" size="icon" onClick={() => handleEdit(group)}>
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{t('common.edit')}</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button variant="ghost" size="icon" onClick={() => handleDelete(group)}>
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{t('common.delete')}</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
 
       <DiscountRuleDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
-        rule={editingRule}
+        group={editingGroup}
+      />
+
+      <DiscountGroupViewDialog
+        open={viewDialogOpen}
+        onOpenChange={setViewDialogOpen}
+        group={viewingGroup}
       />
 
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
@@ -232,13 +382,16 @@ export function DiscountRulesTab() {
           <AlertDialogHeader>
             <AlertDialogTitle>{t('common.confirm')}</AlertDialogTitle>
             <AlertDialogDescription>
-              {t('products.deleteDiscountConfirm', { name: deletingRule?.rule_name })}
+              {t('products.discountGroups.deleteConfirm', { 
+                name: deletingGroup?.base_rule_name,
+                count: deletingGroup?.rules.length || 0 
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => deletingRule && deleteMutation.mutate(deletingRule.id)}
+              onClick={() => deletingGroup && deleteMutation.mutate(deletingGroup)}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {t('common.delete')}

@@ -429,6 +429,30 @@
       "previewFrom": "от {{min}} м²",
       "addAtLeastOneStep": "Добавьте хотя бы одну ступень скидки",
       "stepsOverlap": "Диапазоны ступеней не должны пересекаться"
+    },
+    "discountGroups": {
+      "name": "Название",
+      "appliesTo": "Применяется к",
+      "steps": "Ступени",
+      "range": "Диапазон",
+      "active": "Активна",
+      "view": "Посмотреть",
+      "viewTitle": "Детали скидки",
+      "targetAllProducts": "На все товары",
+      "targetProfile": "Профиль",
+      "targetProducts": "Товары",
+      "profileLabel": "Профиль",
+      "productsCount": "{{count}} товаров",
+      "andMore": "и ещё {{count}}...",
+      "stepsCount": "{{count}} ступеней",
+      "partial": "Частично",
+      "partiallyActive": "Частично активна",
+      "groupDeleted": "Группа скидок удалена",
+      "deleteConfirm": "Удалить скидку «{{name}}»? Будет удалено {{count}} записей из базы.",
+      "productsList": "Список товаров",
+      "stepsTitle": "Ступени скидки ({{count}})",
+      "discountDetails": "Параметры скидки",
+      "explanation": "Это группа скидок. В базе хранится как {{count}} записей discount_rules."
     }
   },
   "billing": {
