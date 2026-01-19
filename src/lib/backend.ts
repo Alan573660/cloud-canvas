@@ -1,40 +1,68 @@
 /**
  * Backend configuration for external API calls
- * Uses env variables if available, otherwise falls back to hardcoded defaults.
- * This allows the app to work in Lovable without configuring secrets.
+ * PRODUCTION MODE: No fallbacks - all env variables are required.
+ * 
+ * Required env variables:
+ * - VITE_IMPORT_WORKER_URL: Cloud Run Import Worker URL
+ * - VITE_GCS_BUCKET: GCS bucket for legacy flows (optional, but logged if missing)
+ * 
+ * Edge Functions use (via Supabase secrets, NOT in frontend):
+ * - IMPORT_WORKER_URL
+ * - IMPORT_SHARED_SECRET
  */
 
-// Fallback constants (used when env vars are not set)
-const FALLBACK_IMPORT_WORKER_URL = 'https://price-import-worker-s2ikab6a6a-uc.a.run.app';
-const FALLBACK_GCS_BUCKET = 'm2-prices-my-project-39021-1686504586397';
-
-// Import Worker URL (Cloud Run) - used by Edge Functions, not directly from browser
-const envWorkerUrl = import.meta.env.VITE_IMPORT_WORKER_URL;
-export const IMPORT_WORKER_URL = envWorkerUrl || FALLBACK_IMPORT_WORKER_URL;
-
-// GCS Bucket for price files (legacy, now using Supabase Storage)
-const envGcsBucket = import.meta.env.VITE_GCS_BUCKET;
-export const GCS_BUCKET = envGcsBucket || FALLBACK_GCS_BUCKET;
-
-// Supabase Storage bucket for imports
+// Supabase Storage bucket for imports (fixed name, must be created in Supabase Dashboard)
 export const STORAGE_BUCKET = 'imports';
 
-// Log warnings if using fallbacks (only once on module load)
-if (!envWorkerUrl) {
-  console.warn('[backend] VITE_IMPORT_WORKER_URL not set, Edge Functions will use fallback');
-}
-if (!envGcsBucket) {
-  console.warn('[backend] VITE_GCS_BUCKET not set, using fallback (for legacy GCS flows)');
+// Import Worker URL - used for display purposes only (actual calls go through Edge Functions)
+const envWorkerUrl = import.meta.env.VITE_IMPORT_WORKER_URL as string | undefined;
+
+// GCS Bucket - legacy, kept for reference/display only
+const envGcsBucket = import.meta.env.VITE_GCS_BUCKET as string | undefined;
+
+// Validate required configuration
+function validateConfig(): { workerUrl: string; gcsBucket: string | null } {
+  if (!envWorkerUrl) {
+    const error = '[backend] CRITICAL: VITE_IMPORT_WORKER_URL is not configured. Import functionality will not work.';
+    console.error(error);
+    // Don't throw here - let UI handle gracefully
+  }
+  
+  if (!envGcsBucket) {
+    console.warn('[backend] VITE_GCS_BUCKET not set (legacy GCS flow disabled)');
+  }
+  
+  return {
+    workerUrl: envWorkerUrl || '',
+    gcsBucket: envGcsBucket || null,
+  };
 }
 
-// Export info for UI display
+const config = validateConfig();
+
+// Export constants (may be empty if not configured)
+export const IMPORT_WORKER_URL = config.workerUrl;
+export const GCS_BUCKET = config.gcsBucket || '';
+
+// Export info for UI display and validation
 export const BackendConfig = {
   importWorkerUrl: IMPORT_WORKER_URL,
   gcsBucket: GCS_BUCKET,
   storageBucket: STORAGE_BUCKET,
-  isUsingFallbackWorkerUrl: !envWorkerUrl,
-  isUsingFallbackBucket: !envGcsBucket,
+  isConfigured: Boolean(envWorkerUrl),
+  isMissingWorkerUrl: !envWorkerUrl,
+  isMissingGcsBucket: !envGcsBucket,
 };
+
+/**
+ * Check if import functionality is properly configured
+ * @throws Error if required configuration is missing
+ */
+export function assertImportConfigured(): void {
+  if (!envWorkerUrl) {
+    throw new Error('Import not configured: VITE_IMPORT_WORKER_URL environment variable is required');
+  }
+}
 
 // Supported file formats for import
 export const SUPPORTED_IMPORT_FORMATS = ['csv', 'xlsx'] as const;
