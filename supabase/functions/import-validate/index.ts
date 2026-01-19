@@ -5,9 +5,9 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Cloud Run Import Worker URL
-const IMPORT_WORKER_URL = Deno.env.get('IMPORT_WORKER_URL') || 
-  'https://price-import-worker-s2ikab6a6a-uc.a.run.app';
+// Cloud Run Import Worker URL (from secrets)
+const IMPORT_WORKER_URL = Deno.env.get('IMPORT_WORKER_URL');
+const IMPORT_SHARED_SECRET = Deno.env.get('IMPORT_SHARED_SECRET');
 
 interface ValidateRequest {
   organization_id: string;
@@ -137,10 +137,30 @@ Deno.serve(async (req) => {
 
     console.log('[import-validate] Got signed URL, calling worker...');
 
-    // Call Cloud Run Import Worker
+    // Validate secrets
+    if (!IMPORT_WORKER_URL) {
+      console.error('[import-validate] IMPORT_WORKER_URL secret not configured');
+      return new Response(
+        JSON.stringify({ error: 'Server configuration error: IMPORT_WORKER_URL not set' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (!IMPORT_SHARED_SECRET) {
+      console.error('[import-validate] IMPORT_SHARED_SECRET secret not configured');
+      return new Response(
+        JSON.stringify({ error: 'Server configuration error: IMPORT_SHARED_SECRET not set' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Call Cloud Run Import Worker with shared secret
     const workerResponse = await fetch(`${IMPORT_WORKER_URL}/api/import/validate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-Import-Secret': IMPORT_SHARED_SECRET 
+      },
       body: JSON.stringify({
         organization_id: body.organization_id,
         import_job_id: body.import_job_id,
