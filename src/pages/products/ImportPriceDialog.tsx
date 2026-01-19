@@ -27,7 +27,6 @@ import {
   isFormatSupported, 
   generateStoragePath,
   ImportGatewayApi,
-  BackendConfig,
   STORAGE_BUCKET,
   type FileFormat 
 } from '@/lib/backend';
@@ -395,25 +394,10 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
               </Card>
             )}
 
-            {/* Backend config info (read-only) */}
-            <details className="text-xs text-muted-foreground">
-              <summary className="cursor-pointer hover:text-foreground">
-                {t('import.backendConfig', 'Конфигурация бэкенда')}
-              </summary>
-              <div className="mt-2 p-2 bg-muted/50 rounded space-y-1 font-mono text-[10px]">
-                <div className="flex items-center gap-1 flex-wrap">
-                  <span className="text-muted-foreground">Storage:</span>
-                  <span className="break-all">{BackendConfig.storageBucket}</span>
-                </div>
-                <div className="flex items-center gap-1 flex-wrap">
-                  <span className="text-muted-foreground">Worker:</span>
-                  <span className="break-all">{BackendConfig.importWorkerUrl || '(not configured)'}</span>
-                  {BackendConfig.isMissingWorkerUrl && (
-                    <Badge variant="destructive" className="text-[9px] px-1 py-0">missing</Badge>
-                  )}
-                </div>
-              </div>
-            </details>
+            {/* Storage info (read-only, minimal) */}
+            <div className="text-xs text-muted-foreground font-mono">
+              Storage: {STORAGE_BUCKET}
+            </div>
           </div>
         )}
 
