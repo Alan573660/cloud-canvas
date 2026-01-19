@@ -407,9 +407,9 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                 </div>
                 <div className="flex items-center gap-1 flex-wrap">
                   <span className="text-muted-foreground">Worker:</span>
-                  <span className="break-all">{BackendConfig.importWorkerUrl}</span>
-                  {BackendConfig.isUsingFallbackWorkerUrl && (
-                    <Badge variant="outline" className="text-[9px] px-1 py-0">fallback</Badge>
+                  <span className="break-all">{BackendConfig.importWorkerUrl || '(not configured)'}</span>
+                  {BackendConfig.isMissingWorkerUrl && (
+                    <Badge variant="destructive" className="text-[9px] px-1 py-0">missing</Badge>
                   )}
                 </div>
               </div>
