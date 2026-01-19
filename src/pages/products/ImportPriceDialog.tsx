@@ -110,22 +110,31 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
         .from(STORAGE_BUCKET)
         .upload(storagePath, file, {
           cacheControl: '3600',
-          upsert: true,
+          upsert: false,
         });
 
       if (uploadError) {
         console.error('[ImportPriceDialog] Upload error:', uploadError);
+        
+        // Handle 409 Conflict (file already exists)
+        const is409 = uploadError.message?.includes('already exists') || 
+                      uploadError.message?.includes('Duplicate') ||
+                      (uploadError as any).statusCode === 409;
+        
+        const userMessage = is409 
+          ? 'Файл с таким именем уже загружен для этого импорта. Создайте новый импорт.'
+          : `Upload failed: ${uploadError.message}`;
         
         // Update job status to FAILED
         await supabase
           .from('import_jobs')
           .update({ 
             status: 'FAILED',
-            error_message: `Upload failed: ${uploadError.message}`
+            error_message: userMessage
           })
           .eq('id', job.id);
 
-        throw new Error(`Failed to upload file: ${uploadError.message}`);
+        throw new Error(userMessage);
       }
 
       setUploadProgress(100);
