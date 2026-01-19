@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { 
   Upload, FileSpreadsheet, AlertTriangle, Loader2, Info, 
-  Check, Copy, ChevronRight, PlayCircle, CheckCircle2, XCircle
+  Check, ChevronRight, PlayCircle, CheckCircle2, XCircle
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -20,13 +20,15 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
+import { Progress } from '@/components/ui/progress';
 import { toast } from '@/hooks/use-toast';
 import { 
   getFileFormat, 
   isFormatSupported, 
-  generateGcsUri, 
-  ImportWorkerApi,
+  generateStoragePath,
+  ImportGatewayApi,
   BackendConfig,
+  STORAGE_BUCKET,
   type FileFormat 
 } from '@/lib/backend';
 
@@ -36,11 +38,11 @@ interface ImportPriceDialogProps {
   onSuccess?: () => void;
 }
 
-type ImportStep = 'upload' | 'pending' | 'validating' | 'validated' | 'publishing' | 'done' | 'error';
+type ImportStep = 'upload' | 'uploading' | 'pending' | 'validating' | 'validated' | 'publishing' | 'done' | 'error';
 
 interface CreatedJob {
   id: string;
-  gcsUri: string;
+  storagePath: string;
   fileFormat: FileFormat;
 }
 
@@ -56,10 +58,10 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
   // Multi-step state
   const [step, setStep] = useState<ImportStep>('upload');
   const [createdJob, setCreatedJob] = useState<CreatedJob | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Create import job mutation
+  // Create import job and upload file mutation
   const createJobMutation = useMutation({
     mutationFn: async () => {
       if (!profile?.organization_id || !file) throw new Error('Invalid state');
@@ -71,7 +73,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
         throw new Error(`Format ${fileFormat.toUpperCase()} is not yet supported`);
       }
 
-      // Create import job record
+      // Step 1: Create import job record
       const { data: job, error: insertError } = await supabase
         .from('import_jobs')
         .insert({
@@ -90,28 +92,56 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
 
       if (insertError) throw insertError;
 
-      // Generate and save GCS URI
-      const gcsUri = generateGcsUri(profile.organization_id, job.id, file.name);
+      console.info('[ImportPriceDialog] Job created:', job.id);
+
+      // Step 2: Generate storage path
+      const storagePath = generateStoragePath(profile.organization_id, job.id, file.name);
       
-      const { error: updateError } = await supabase
+      // Save storage path in file_url
+      await supabase
         .from('import_jobs')
-        .update({ file_url: gcsUri })
+        .update({ file_url: `storage://${STORAGE_BUCKET}/${storagePath}` })
         .eq('id', job.id);
 
-      if (updateError) {
-        console.error('[ImportPriceDialog] Failed to save gcs_uri:', updateError);
-        // Don't fail - job is created
+      // Step 3: Upload file to Supabase Storage
+      setStep('uploading');
+      setUploadProgress(10);
+
+      const { error: uploadError } = await supabase.storage
+        .from(STORAGE_BUCKET)
+        .upload(storagePath, file, {
+          cacheControl: '3600',
+          upsert: true,
+        });
+
+      if (uploadError) {
+        console.error('[ImportPriceDialog] Upload error:', uploadError);
+        
+        // Update job status to FAILED
+        await supabase
+          .from('import_jobs')
+          .update({ 
+            status: 'FAILED',
+            error_message: `Upload failed: ${uploadError.message}`
+          })
+          .eq('id', job.id);
+
+        throw new Error(`Failed to upload file: ${uploadError.message}`);
       }
 
-      console.info('[ImportPriceDialog] Job created:', job.id);
-      console.info('[ImportPriceDialog] GCS URI:', gcsUri);
+      setUploadProgress(100);
+      console.info('[ImportPriceDialog] File uploaded to:', storagePath);
 
-      return { id: job.id, gcsUri, fileFormat };
+      return { id: job.id, storagePath, fileFormat };
     },
     onSuccess: (data) => {
       setCreatedJob(data);
       setStep('pending');
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
+      toast({
+        title: t('import.uploadComplete', 'Файл загружен'),
+        description: t('import.readyToValidate', 'Теперь можно запустить проверку.'),
+      });
     },
     onError: (error) => {
       console.error('[ImportPriceDialog] Error:', error);
@@ -120,42 +150,35 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     },
   });
 
-  // Validate mutation
+  // Validate mutation - calls Edge Function gateway
   const validateMutation = useMutation({
     mutationFn: async () => {
       if (!profile?.organization_id || !createdJob) throw new Error('Invalid state');
 
-      // Update status to VALIDATING
-      await supabase
-        .from('import_jobs')
-        .update({ status: 'VALIDATING' })
-        .eq('id', createdJob.id);
-
       setStep('validating');
 
-      // Call validate endpoint
-      const response = await fetch(ImportWorkerApi.validate, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      // Call Edge Function gateway
+      const { data, error } = await supabase.functions.invoke(ImportGatewayApi.validate, {
+        body: {
           organization_id: profile.organization_id,
           import_job_id: createdJob.id,
-          gcs_uri: createdJob.gcsUri,
+          file_path: createdJob.storagePath,
           file_format: createdJob.fileFormat,
-          dry_run: true,
-        }),
+        },
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('[ImportPriceDialog] Validate error:', errorText);
-        throw new Error(parseWorkerError(errorText));
+      if (error) {
+        console.error('[ImportPriceDialog] Validate error:', error);
+        throw new Error(error.message || 'Validation failed');
       }
 
-      const result = await response.json();
-      console.info('[ImportPriceDialog] Validate result:', result);
-      
-      return result;
+      // Check for error in response body
+      if (data?.error) {
+        throw new Error(data.error);
+      }
+
+      console.info('[ImportPriceDialog] Validate result:', data);
+      return data;
     },
     onSuccess: () => {
       setStep('validated');
@@ -167,71 +190,47 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     },
     onError: async (error) => {
       console.error('[ImportPriceDialog] Validate failed:', error);
-      
-      // Update status to FAILED
-      if (createdJob) {
-        await supabase
-          .from('import_jobs')
-          .update({ 
-            status: 'FAILED',
-            error_message: error instanceof Error ? error.message : 'Validation failed'
-          })
-          .eq('id', createdJob.id);
-      }
-      
       setErrorMessage(error instanceof Error ? error.message : 'Validation failed');
       setStep('error');
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
     },
   });
 
-  // Publish mutation
+  // Publish mutation - calls Edge Function gateway
   const publishMutation = useMutation({
     mutationFn: async () => {
       if (!profile?.organization_id || !createdJob) throw new Error('Invalid state');
 
-      // Update status to APPLYING
-      await supabase
-        .from('import_jobs')
-        .update({ status: 'APPLYING' })
-        .eq('id', createdJob.id);
-
       setStep('publishing');
 
-      // Call publish endpoint
-      const response = await fetch(ImportWorkerApi.publish, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      // Call Edge Function gateway
+      const { data, error } = await supabase.functions.invoke(ImportGatewayApi.publish, {
+        body: {
           organization_id: profile.organization_id,
           import_job_id: createdJob.id,
-          gcs_uri: createdJob.gcsUri,
+          file_path: createdJob.storagePath,
           file_format: createdJob.fileFormat,
           archive_before_replace: archiveBeforeReplace,
-          dry_run: false,
-        }),
+        },
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('[ImportPriceDialog] Publish error:', errorText);
-        throw new Error(parseWorkerError(errorText));
+      if (error) {
+        console.error('[ImportPriceDialog] Publish error:', error);
+        throw new Error(error.message || 'Publish failed');
       }
 
-      const result = await response.json();
-      console.info('[ImportPriceDialog] Publish result:', result);
-      
-      // Update status to DONE
-      await supabase
-        .from('import_jobs')
-        .update({ status: 'DONE', finished_at: new Date().toISOString() })
-        .eq('id', createdJob.id);
-      
-      return result;
+      // Check for error in response body
+      if (data?.error) {
+        throw new Error(data.error);
+      }
+
+      console.info('[ImportPriceDialog] Publish result:', data);
+      return data;
     },
     onSuccess: () => {
       setStep('done');
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
       toast({
         title: t('import.publishSuccess', 'Импорт завершён'),
         description: t('import.publishSuccessDesc', 'Каталог успешно обновлён'),
@@ -240,18 +239,6 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     },
     onError: async (error) => {
       console.error('[ImportPriceDialog] Publish failed:', error);
-      
-      // Update status to FAILED
-      if (createdJob) {
-        await supabase
-          .from('import_jobs')
-          .update({ 
-            status: 'FAILED',
-            error_message: error instanceof Error ? error.message : 'Publish failed'
-          })
-          .eq('id', createdJob.id);
-      }
-      
       setErrorMessage(error instanceof Error ? error.message : 'Publish failed');
       setStep('error');
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
@@ -264,7 +251,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     setArchiveBeforeReplace(true);
     setStep('upload');
     setCreatedJob(null);
-    setCopied(false);
+    setUploadProgress(0);
     setErrorMessage(null);
   };
 
@@ -289,15 +276,6 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     }
   };
 
-  const handleCopyGcsUri = async () => {
-    if (createdJob?.gcsUri) {
-      await navigator.clipboard.writeText(createdJob.gcsUri);
-      setCopied(true);
-      toast({ description: t('common.copied', 'Скопировано в буфер обмена') });
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
-
   const fileFormat = file ? getFileFormat(file.name) : null;
   const isFormatAvailable = fileFormat ? isFormatSupported(fileFormat) : true;
 
@@ -313,7 +291,8 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
           </DialogTitle>
           <DialogDescription>
             {step === 'upload' && t('catalog.uploadPriceDesc', 'Загрузите файл прайс-листа для обновления каталога')}
-            {step === 'pending' && t('import.stepUploadFile', 'Загрузите файл в GCS и нажмите Проверить')}
+            {step === 'uploading' && t('import.uploadingFile', 'Загрузка файла...')}
+            {step === 'pending' && t('import.readyToValidate', 'Файл загружен. Запустите проверку.')}
             {step === 'validating' && t('import.validating', 'Проверка файла...')}
             {step === 'validated' && t('import.validated', 'Файл проверен. Можете опубликовать.')}
             {step === 'publishing' && t('import.publishing', 'Публикация данных...')}
@@ -423,16 +402,13 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
               </summary>
               <div className="mt-2 p-2 bg-muted/50 rounded space-y-1 font-mono text-[10px]">
                 <div className="flex items-center gap-1 flex-wrap">
+                  <span className="text-muted-foreground">Storage:</span>
+                  <span className="break-all">{BackendConfig.storageBucket}</span>
+                </div>
+                <div className="flex items-center gap-1 flex-wrap">
                   <span className="text-muted-foreground">Worker:</span>
                   <span className="break-all">{BackendConfig.importWorkerUrl}</span>
                   {BackendConfig.isUsingFallbackWorkerUrl && (
-                    <Badge variant="outline" className="text-[9px] px-1 py-0">fallback</Badge>
-                  )}
-                </div>
-                <div className="flex items-center gap-1 flex-wrap">
-                  <span className="text-muted-foreground">Bucket:</span>
-                  <span className="break-all">{BackendConfig.gcsBucket}</span>
-                  {BackendConfig.isUsingFallbackBucket && (
                     <Badge variant="outline" className="text-[9px] px-1 py-0">fallback</Badge>
                   )}
                 </div>
@@ -441,63 +417,53 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
           </div>
         )}
 
-        {/* Step 2: Pending - show GCS path */}
+        {/* Step 1.5: Uploading */}
+        {step === 'uploading' && (
+          <div className="py-6 space-y-4">
+            <div className="text-center">
+              <Loader2 className="h-10 w-10 mx-auto animate-spin text-primary mb-3" />
+              <p className="text-sm text-muted-foreground">
+                {t('import.uploadingToStorage', 'Загрузка файла в хранилище...')}
+              </p>
+            </div>
+            <Progress value={uploadProgress} className="h-2" />
+          </div>
+        )}
+
+        {/* Step 2: Pending - file uploaded, ready to validate */}
         {step === 'pending' && createdJob && (
           <div className="space-y-4">
-            <Card className="bg-muted/30">
-              <CardContent className="p-4 space-y-3">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <CheckCircle2 className="h-4 w-4 text-green-600" />
-                  {t('import.jobCreated', 'Задача создана')}
+            <Card className="bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-800">
+              <CardContent className="p-4 flex items-start gap-3">
+                <CheckCircle2 className="h-5 w-5 text-green-600 mt-0.5" />
+                <div>
+                  <p className="font-medium text-green-800 dark:text-green-300">
+                    {t('import.fileUploaded', 'Файл загружен')}
+                  </p>
+                  <p className="text-xs text-green-700 dark:text-green-400 mt-1">
+                    {t('import.clickValidate', 'Нажмите "Проверить" для валидации данных.')}
+                  </p>
                 </div>
-                
-                <div className="space-y-2">
-                  <Label className="text-xs text-muted-foreground">
-                    {t('import.gcsPath', 'Путь GCS для загрузки файла')}:
-                  </Label>
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 p-2 bg-background border rounded text-xs break-all font-mono">
-                      {createdJob.gcsUri}
-                    </code>
-                    <Button 
-                      variant="outline" 
-                      size="icon" 
-                      onClick={handleCopyGcsUri}
-                      className="flex-shrink-0"
-                    >
-                      {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                    </Button>
-                  </div>
-                </div>
-
-                <Card className="bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800">
-                  <CardContent className="p-3">
-                    <p className="text-xs text-amber-800 dark:text-amber-300">
-                      <strong>{t('import.uploadInstruction', 'Инструкция')}:</strong><br />
-                      {t('import.uploadInstructionText', 'Загрузите файл в указанный путь GCS с помощью gsutil или Cloud Console, затем нажмите "Проверить".')}
-                    </p>
-                    <code className="block mt-2 p-2 bg-background/50 rounded text-xs font-mono">
-                      gsutil cp {file?.name || 'file.csv'} {createdJob.gcsUri}
-                    </code>
-                  </CardContent>
-                </Card>
               </CardContent>
             </Card>
 
-            <div className="flex gap-2">
-              <Button 
-                onClick={() => validateMutation.mutate()}
-                disabled={validateMutation.isPending}
-                className="flex-1"
-              >
-                {validateMutation.isPending ? (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                ) : (
-                  <PlayCircle className="h-4 w-4 mr-2" />
-                )}
-                {t('import.validate', 'Проверить')}
-              </Button>
+            <div className="p-3 bg-muted/30 rounded-lg">
+              <p className="text-xs text-muted-foreground mb-1">{t('import.storagePath', 'Путь в хранилище')}:</p>
+              <code className="text-xs font-mono break-all">{createdJob.storagePath}</code>
             </div>
+
+            <Button 
+              onClick={() => validateMutation.mutate()}
+              disabled={validateMutation.isPending}
+              className="w-full"
+            >
+              {validateMutation.isPending ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <PlayCircle className="h-4 w-4 mr-2" />
+              )}
+              {t('import.validate', 'Проверить')}
+            </Button>
           </div>
         )}
 
@@ -595,6 +561,10 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                 </div>
               </CardContent>
             </Card>
+
+            <Button variant="outline" onClick={resetForm} className="w-full">
+              {t('common.tryAgain', 'Попробовать снова')}
+            </Button>
           </div>
         )}
 
@@ -624,7 +594,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
             </Button>
           )}
 
-          {(step === 'done' || step === 'error') && (
+          {(step === 'done') && (
             <Button onClick={handleClose}>
               {t('common.close', 'Закрыть')}
             </Button>
@@ -633,30 +603,4 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
       </DialogContent>
     </Dialog>
   );
-}
-
-/**
- * Parse worker error response to user-friendly message
- */
-function parseWorkerError(errorText: string): string {
-  try {
-    const parsed = JSON.parse(errorText);
-    if (parsed.error) return parsed.error;
-    if (parsed.message) return parsed.message;
-  } catch {
-    // Not JSON
-  }
-  
-  // Common errors
-  if (errorText.includes('not found') || errorText.includes('404')) {
-    return 'Файл не найден в GCS. Проверьте, что файл загружен по указанному пути.';
-  }
-  if (errorText.includes('permission') || errorText.includes('403')) {
-    return 'Нет прав доступа к файлу. Проверьте права на bucket.';
-  }
-  if (errorText.includes('parse') || errorText.includes('invalid')) {
-    return 'Ошибка при разборе файла. Проверьте формат данных.';
-  }
-  
-  return errorText.length > 200 ? errorText.slice(0, 200) + '...' : errorText;
 }
