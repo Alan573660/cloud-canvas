@@ -26,6 +26,7 @@ import {
   isFormatSupported, 
   generateGcsUri, 
   ImportWorkerApi,
+  BackendConfig,
   type FileFormat 
 } from '@/lib/backend';
 
@@ -414,6 +415,29 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                 </CardContent>
               </Card>
             )}
+
+            {/* Backend config info (read-only) */}
+            <details className="text-xs text-muted-foreground">
+              <summary className="cursor-pointer hover:text-foreground">
+                {t('import.backendConfig', 'Конфигурация бэкенда')}
+              </summary>
+              <div className="mt-2 p-2 bg-muted/50 rounded space-y-1 font-mono text-[10px]">
+                <div className="flex items-center gap-1 flex-wrap">
+                  <span className="text-muted-foreground">Worker:</span>
+                  <span className="break-all">{BackendConfig.importWorkerUrl}</span>
+                  {BackendConfig.isUsingFallbackWorkerUrl && (
+                    <Badge variant="outline" className="text-[9px] px-1 py-0">fallback</Badge>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 flex-wrap">
+                  <span className="text-muted-foreground">Bucket:</span>
+                  <span className="break-all">{BackendConfig.gcsBucket}</span>
+                  {BackendConfig.isUsingFallbackBucket && (
+                    <Badge variant="outline" className="text-[9px] px-1 py-0">fallback</Badge>
+                  )}
+                </div>
+              </div>
+            </details>
           </div>
         )}
 
