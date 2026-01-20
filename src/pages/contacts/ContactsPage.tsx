@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Pencil, Trash2, Eye } from 'lucide-react';
@@ -26,6 +26,8 @@ import { PermissionDenied } from '@/components/ui/permission-denied';
 import { ContactForm } from './ContactForm';
 import { ContactDetailDialog } from './ContactDetailDialog';
 import { showErrorToast } from '@/lib/error-utils';
+import { sanitizeSearchQuery } from '@/lib/security-utils';
+import { logListView, logRecordView } from '@/lib/audit-utils';
 import { toast } from 'sonner';
 
 interface Contact {
@@ -56,6 +58,13 @@ export default function ContactsPage() {
   // Check if current user can manage contacts based on role
   const canManageContacts = profile?.role && CAN_MANAGE_CONTACTS.includes(profile.role);
 
+  // Audit log on mount
+  useEffect(() => {
+    if (profile?.organization_id) {
+      logListView(profile.organization_id, 'contacts');
+    }
+  }, [profile?.organization_id]);
+
   const { data, isLoading, error: fetchError } = useQuery({
     queryKey: ['contacts', profile?.organization_id, search, page, pageSize],
     queryFn: async () => {
@@ -67,10 +76,14 @@ export default function ContactsPage() {
         .eq('organization_id', profile.organization_id)
         .order('created_at', { ascending: false });
 
+      // Escape search input for ILIKE
       if (search) {
-        query = query.or(
-          `full_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%`
-        );
+        const escaped = sanitizeSearchQuery(search);
+        if (escaped) {
+          query = query.or(
+            `full_name.ilike.%${escaped}%,email.ilike.%${escaped}%,phone.ilike.%${escaped}%`
+          );
+        }
       }
 
       const from = (page - 1) * pageSize;
@@ -147,7 +160,13 @@ export default function ContactsPage() {
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => setViewingContact(row)}
+            onClick={() => {
+              // Audit log record view
+              if (profile?.organization_id) {
+                logRecordView(profile.organization_id, 'contacts', row.id);
+              }
+              setViewingContact(row);
+            }}
             title="Подробнее"
           >
             <Eye className="h-4 w-4" />

@@ -90,7 +90,8 @@ const menuGroups: MenuGroup[] = [
     labelKey: 'nav.communications',
     items: [
       { key: 'email', icon: Mail, path: '/email' },
-      { key: 'calls', icon: Phone, path: '/calls' },
+      // Calls hidden from accountant
+      { key: 'calls', icon: Phone, path: '/calls', roles: ['owner', 'admin', 'operator'] },
     ],
   },
   {

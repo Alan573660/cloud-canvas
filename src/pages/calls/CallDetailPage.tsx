@@ -7,6 +7,7 @@ import {
   Calendar, Timer, Smile, Meh, Frown
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -25,9 +26,10 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { DetailPageSkeleton } from '@/components/ui/page-skeleton';
-import { NotFound } from '@/components/ui/permission-denied';
+import { NotFound, PermissionDenied } from '@/components/ui/permission-denied';
 import { openSignedUrl } from '@/lib/file-utils';
 import { showErrorToast } from '@/lib/error-utils';
+import { hasPermission } from '@/lib/security-utils';
 import { format } from 'date-fns';
 import { ru, enUS } from 'date-fns/locale';
 
@@ -63,8 +65,16 @@ export default function CallDetailPage() {
   const { t, i18n } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { profile } = useAuth();
 
   const dateLocale = i18n.language === 'ru' ? ru : enUS;
+
+  // Role check: accountant cannot access calls
+  const canViewCalls = hasPermission(profile?.role, 'calls', 'view');
+  
+  if (!canViewCalls && profile) {
+    return <PermissionDenied />;
+  }
 
   // Fetch call session
   const { data: call, isLoading, error } = useQuery({

@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router-dom';
-import { useForm } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useAuth } from '@/contexts/AuthContext';
@@ -14,16 +14,70 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
+  FormDescription,
 } from '@/components/ui/form';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Progress } from '@/components/ui/progress';
 import { toast } from 'sonner';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Check, X, AlertTriangle } from 'lucide-react';
+
+// Common leaked/weak passwords to block (sample list)
+const WEAK_PASSWORDS = new Set([
+  'password', 'password123', '123456', '12345678', '123456789',
+  'qwerty', 'qwerty123', 'letmein', 'welcome', 'admin', 'admin123',
+  'login', 'abc123', 'monkey', 'master', 'dragon', 'passw0rd',
+  '1234567890', 'password1', 'iloveyou', 'trustno1', 'sunshine',
+  'princess', 'football', 'baseball', 'welcome1', 'shadow', 'superman',
+  'michael', 'ninja', '12345', '1234567', '654321', 'password!',
+]);
+
+// Password strength calculation
+function calculatePasswordStrength(password: string): { score: number; issues: string[] } {
+  const issues: string[] = [];
+  let score = 0;
+
+  if (password.length >= 8) score += 20;
+  else issues.push('Минимум 8 символов');
+
+  if (password.length >= 12) score += 10;
+
+  if (/[a-z]/.test(password)) score += 15;
+  else issues.push('Добавьте строчные буквы');
+
+  if (/[A-Z]/.test(password)) score += 15;
+  else issues.push('Добавьте заглавные буквы');
+
+  if (/[0-9]/.test(password)) score += 20;
+  else issues.push('Добавьте цифры');
+
+  if (/[^a-zA-Z0-9]/.test(password)) score += 20;
+  else issues.push('Добавьте спецсимволы (!@#$%...)');
+
+  // Penalty for weak passwords
+  if (WEAK_PASSWORDS.has(password.toLowerCase())) {
+    score = 0;
+    issues.unshift('Этот пароль слишком распространён');
+  }
+
+  return { score: Math.min(score, 100), issues };
+}
 
 const registerSchema = z.object({
-  fullName: z.string().min(2, 'Минимум 2 символа'),
-  email: z.string().email('Некорректный email'),
-  password: z.string().min(6, 'Минимум 6 символов'),
-  confirmPassword: z.string().min(6, 'Минимум 6 символов'),
+  fullName: z.string().min(2, 'Минимум 2 символа').max(100, 'Максимум 100 символов'),
+  email: z.string().email('Некорректный email').max(255, 'Максимум 255 символов'),
+  password: z
+    .string()
+    .min(8, 'Минимум 8 символов')
+    .max(128, 'Максимум 128 символов')
+    .refine(
+      (val) => !WEAK_PASSWORDS.has(val.toLowerCase()),
+      'Этот пароль слишком распространён и небезопасен'
+    )
+    .refine(
+      (val) => /[A-Z]/.test(val) && /[a-z]/.test(val) && /[0-9]/.test(val),
+      'Пароль должен содержать заглавные, строчные буквы и цифры'
+    ),
+  confirmPassword: z.string().min(8, 'Минимум 8 символов'),
 }).refine((data) => data.password === data.confirmPassword, {
   message: 'Пароли не совпадают',
   path: ['confirmPassword'],
@@ -45,7 +99,30 @@ export default function RegisterPage() {
       password: '',
       confirmPassword: '',
     },
+    mode: 'onChange', // Validate on change for real-time feedback
   });
+
+  // Watch password for strength indicator
+  const watchedPassword = useWatch({ control: form.control, name: 'password' });
+  
+  const passwordStrength = useMemo(() => {
+    if (!watchedPassword) return { score: 0, issues: [] };
+    return calculatePasswordStrength(watchedPassword);
+  }, [watchedPassword]);
+
+  const getStrengthColor = (score: number) => {
+    if (score < 30) return 'bg-destructive';
+    if (score < 60) return 'bg-yellow-500';
+    if (score < 80) return 'bg-blue-500';
+    return 'bg-green-500';
+  };
+
+  const getStrengthLabel = (score: number) => {
+    if (score < 30) return 'Слабый';
+    if (score < 60) return 'Средний';
+    if (score < 80) return 'Хороший';
+    return 'Отличный';
+  };
 
   // Handle redirect after auth state changes
   useEffect(() => {
@@ -178,6 +255,45 @@ export default function RegisterPage() {
                         {...field} 
                       />
                     </FormControl>
+                    {/* Password strength indicator */}
+                    {watchedPassword && watchedPassword.length > 0 && (
+                      <div className="space-y-2 mt-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">Сложность пароля</span>
+                          <span className={`font-medium ${
+                            passwordStrength.score < 30 ? 'text-destructive' :
+                            passwordStrength.score < 60 ? 'text-yellow-600' :
+                            passwordStrength.score < 80 ? 'text-blue-600' : 'text-green-600'
+                          }`}>
+                            {getStrengthLabel(passwordStrength.score)}
+                          </span>
+                        </div>
+                        <Progress 
+                          value={passwordStrength.score} 
+                          className="h-1.5"
+                        />
+                        {passwordStrength.issues.length > 0 && (
+                          <ul className="text-xs space-y-1 mt-1">
+                            {passwordStrength.issues.slice(0, 3).map((issue, i) => (
+                              <li key={i} className="flex items-center gap-1 text-muted-foreground">
+                                {WEAK_PASSWORDS.has(watchedPassword.toLowerCase()) ? (
+                                  <AlertTriangle className="h-3 w-3 text-destructive" />
+                                ) : (
+                                  <X className="h-3 w-3 text-muted-foreground" />
+                                )}
+                                {issue}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {passwordStrength.score >= 80 && (
+                          <div className="flex items-center gap-1 text-xs text-green-600">
+                            <Check className="h-3 w-3" />
+                            Надёжный пароль
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <FormMessage />
                   </FormItem>
                 )}
