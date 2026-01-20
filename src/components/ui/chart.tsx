@@ -65,26 +65,42 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
     return null;
   }
 
-  return (
-    <style
-      dangerouslySetInnerHTML={{
-        __html: Object.entries(THEMES)
-          .map(
-            ([theme, prefix]) => `
-${prefix} [data-chart=${id}] {
-${colorConfig
-  .map(([key, itemConfig]) => {
-    const color = itemConfig.theme?.[theme as keyof typeof itemConfig.theme] || itemConfig.color;
-    return color ? `  --color-${key}: ${color};` : null;
-  })
-  .join("\n")}
-}
-`,
-          )
-          .join("\n"),
-      }}
-    />
-  );
+  // Build CSS rules safely without dangerouslySetInnerHTML
+  const cssRules = React.useMemo(() => {
+    const rules: string[] = [];
+    
+    Object.entries(THEMES).forEach(([theme, prefix]) => {
+      const cssVars = colorConfig
+        .map(([key, itemConfig]) => {
+          const color = itemConfig.theme?.[theme as keyof typeof itemConfig.theme] || itemConfig.color;
+          // Sanitize: only allow valid CSS color values (hex, hsl, rgb, named colors)
+          if (color && /^[a-zA-Z0-9#(),.\s%-]+$/.test(color)) {
+            return `  --color-${key}: ${color};`;
+          }
+          return null;
+        })
+        .filter(Boolean)
+        .join('\n');
+      
+      if (cssVars) {
+        rules.push(`${prefix} [data-chart=${id}] {\n${cssVars}\n}`);
+      }
+    });
+    
+    return rules.join('\n');
+  }, [id, colorConfig]);
+
+  // Use a style element with textContent instead of dangerouslySetInnerHTML
+  // This approach creates styles safely
+  const styleRef = React.useRef<HTMLStyleElement | null>(null);
+  
+  React.useLayoutEffect(() => {
+    if (styleRef.current) {
+      styleRef.current.textContent = cssRules;
+    }
+  }, [cssRules]);
+
+  return <style ref={styleRef} />;
 };
 
 const ChartTooltip = RechartsPrimitive.Tooltip;

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -12,9 +12,12 @@ import { Button } from '@/components/ui/button';
 import { DataTable, Column } from '@/components/ui/data-table';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { PageSkeleton } from '@/components/ui/page-skeleton';
+import { PermissionDenied } from '@/components/ui/permission-denied';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { showErrorToast } from '@/lib/error-utils';
+import { sanitizeSearchQuery, hasPermission } from '@/lib/security-utils';
+import { logListView } from '@/lib/audit-utils';
 import {
   Select,
   SelectContent,
@@ -78,6 +81,21 @@ export default function CallsPage() {
   const { profile } = useAuth();
   const navigate = useNavigate();
 
+  // Role check: accountant cannot access calls
+  const canViewCalls = hasPermission(profile?.role, 'calls', 'view');
+  
+  // Audit log on mount (only if allowed)
+  useEffect(() => {
+    if (profile?.organization_id && canViewCalls) {
+      logListView(profile.organization_id, 'contacts'); // Using contacts as proxy for call_sessions audit
+    }
+  }, [profile?.organization_id, canViewCalls]);
+
+  // If accountant, show permission denied
+  if (!canViewCalls && profile) {
+    return <PermissionDenied />;
+  }
+
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -119,8 +137,12 @@ export default function CallsPage() {
         query = query.lte('created_at', endOfDay(dateRange.to).toISOString());
       }
 
+      // Escape search for ILIKE
       if (search) {
-        query = query.or(`from_phone.ilike.%${search}%,to_phone.ilike.%${search}%`);
+        const escaped = sanitizeSearchQuery(search);
+        if (escaped) {
+          query = query.or(`from_phone.ilike.%${escaped}%,to_phone.ilike.%${escaped}%`);
+        }
       }
 
       const from = (page - 1) * pageSize;

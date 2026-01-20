@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Pencil, Trash2, AlertCircle, Eye, ChevronDown, ChevronUp } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { sanitizeSearchQuery } from '@/lib/security-utils';
+import { logListView } from '@/lib/audit-utils';
 import { Button } from '@/components/ui/button';
 import { DataTable, Column } from '@/components/ui/data-table';
 import {
@@ -66,6 +68,13 @@ export default function CompaniesPage() {
   // Check permissions based on role
   const canManageCompanies = profile?.role && CAN_MANAGE_COMPANIES.includes(profile.role);
   const canViewCompanies = profile?.role && CAN_VIEW_COMPANIES.includes(profile.role);
+
+  // Audit logging
+  useEffect(() => {
+    if (profile?.organization_id) {
+      logListView(profile.organization_id, 'buyer_companies');
+    }
+  }, [profile?.organization_id]);
 
   const { data, isLoading, error: fetchError } = useQuery({
     queryKey: ['companies', profile?.organization_id, search, page, pageSize],
