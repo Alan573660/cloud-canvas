@@ -4,7 +4,11 @@
     "autoCorrections": "Auto-corrections",
     "sanitizeId": "Sanitize ID (only A-Z, 0-9, ._-)",
     "normalizePrice": "Normalize price (comma→dot)",
-    "trimText": "Trim whitespace"
+    "trimText": "Trim whitespace",
+    "excludeRow": "Exclude row",
+    "excludeAllErrors": "Exclude all errored",
+    "rowExcluded": "Row {{row}} excluded",
+    "rowsExcluded": "Excluded {{count}} rows"
   },
   "analytics": {
     "description": "Usage, revenue and operations statistics",

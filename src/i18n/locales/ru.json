@@ -4,7 +4,11 @@
     "autoCorrections": "Авто-исправления",
     "sanitizeId": "Очистить ID (только A-Z, 0-9, ._-)",
     "normalizePrice": "Нормализовать цену (запятая→точка)",
-    "trimText": "Убрать пробелы по краям"
+    "trimText": "Убрать пробелы по краям",
+    "excludeRow": "Исключить строку",
+    "excludeAllErrors": "Исключить все ошибочные",
+    "rowExcluded": "Строка {{row}} исключена",
+    "rowsExcluded": "Исключено строк: {{count}}"
   },
   "common": {
     "loading": "Загрузка...",

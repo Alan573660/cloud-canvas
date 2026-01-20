@@ -13,7 +13,9 @@ import {
   FileWarning,
   Upload,
   RefreshCw,
-  Trash2
+  Trash2,
+  XCircle,
+  Ban
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -162,6 +164,81 @@ export function ImportTab() {
   const handleDeleteSelected = () => {
     if (selectedIds.size === 0) return;
     deleteMutation.mutate(Array.from(selectedIds));
+  };
+
+  // Exclude single row mutation
+  const excludeRowMutation = useMutation({
+    mutationFn: async ({ jobId, rowNumber }: { jobId: string; rowNumber: number }) => {
+      if (!profile?.organization_id) throw new Error('No organization');
+
+      const { error } = await supabase
+        .from('import_staging_rows')
+        .update({ validation_status: 'EXCLUDED' })
+        .eq('organization_id', profile.organization_id)
+        .eq('import_job_id', jobId)
+        .eq('row_number', rowNumber);
+
+      if (error) throw error;
+      return rowNumber;
+    },
+    onSuccess: (rowNumber) => {
+      toast.success(t('import.rowExcluded', { row: rowNumber }));
+      queryClient.invalidateQueries({ queryKey: ['import-errors'] });
+      queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
+    },
+    onError: (error: any) => {
+      console.error('Exclude row error:', error);
+      if (error.code === '42501' || error.message?.includes('policy')) {
+        toast.error(t('common.permissionDenied', 'Недостаточно прав'));
+      } else {
+        toast.error(t('common.error', 'Ошибка'));
+      }
+    },
+  });
+
+  // Exclude all errored rows mutation
+  const excludeAllErrorsMutation = useMutation({
+    mutationFn: async (jobId: string) => {
+      if (!profile?.organization_id || !errors) throw new Error('No data');
+
+      // Get unique row numbers from errors
+      const rowNumbers = [...new Set(errors.filter(e => e.row_number != null).map(e => e.row_number!))];
+      
+      if (rowNumbers.length === 0) return 0;
+
+      const { error } = await supabase
+        .from('import_staging_rows')
+        .update({ validation_status: 'EXCLUDED' })
+        .eq('organization_id', profile.organization_id)
+        .eq('import_job_id', jobId)
+        .in('row_number', rowNumbers);
+
+      if (error) throw error;
+      return rowNumbers.length;
+    },
+    onSuccess: (count) => {
+      toast.success(t('import.rowsExcluded', { count }));
+      queryClient.invalidateQueries({ queryKey: ['import-errors'] });
+      queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
+    },
+    onError: (error: any) => {
+      console.error('Exclude all errors:', error);
+      if (error.code === '42501' || error.message?.includes('policy')) {
+        toast.error(t('common.permissionDenied', 'Недостаточно прав'));
+      } else {
+        toast.error(t('common.error', 'Ошибка'));
+      }
+    },
+  });
+
+  const handleExcludeRow = (jobId: string, rowNumber: number | null) => {
+    if (rowNumber == null) return;
+    excludeRowMutation.mutate({ jobId, rowNumber });
+  };
+
+  const handleExcludeAllErrors = () => {
+    if (!selectedJob) return;
+    excludeAllErrorsMutation.mutate(selectedJob.id);
   };
 
   // Fetch import jobs
@@ -436,7 +513,7 @@ export function ImportTab() {
 
       {/* Errors Dialog */}
       <Dialog open={errorsDialogOpen} onOpenChange={setErrorsDialogOpen}>
-        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <FileWarning className="h-5 w-5 text-red-600" />
@@ -446,6 +523,25 @@ export function ImportTab() {
               {selectedJob?.file_name} — {selectedJob?.invalid_rows} {t('import.invalidRows')}
             </DialogDescription>
           </DialogHeader>
+          
+          {/* Bulk exclude button */}
+          {errors && errors.length > 0 && selectedJob && (
+            <div className="flex justify-end mb-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleExcludeAllErrors}
+                disabled={excludeAllErrorsMutation.isPending}
+              >
+                {excludeAllErrorsMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Ban className="h-4 w-4 mr-2" />
+                )}
+                {t('import.excludeAllErrors', 'Исключить все ошибочные')}
+              </Button>
+            </div>
+          )}
           
           {loadingErrors ? (
             <div className="flex items-center justify-center p-8">
@@ -459,6 +555,7 @@ export function ImportTab() {
                   <TableHead className="w-[120px]">{t('import.column')}</TableHead>
                   <TableHead>{t('import.message')}</TableHead>
                   <TableHead className="w-[150px]">{t('import.rawValue')}</TableHead>
+                  <TableHead className="w-[100px] text-right">{t('common.actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -469,6 +566,19 @@ export function ImportTab() {
                     <TableCell className="text-sm">{err.message}</TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground truncate max-w-[150px]">
                       {err.raw_value || '—'}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {err.row_number != null && selectedJob && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleExcludeRow(selectedJob.id, err.row_number)}
+                          disabled={excludeRowMutation.isPending}
+                          title={t('import.excludeRow', 'Исключить строку')}
+                        >
+                          <XCircle className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
