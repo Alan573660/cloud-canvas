@@ -545,7 +545,9 @@
     "continueMapping": "Continue",
     "fillRequiredFields": "Map all required fields",
     "columnMappingStep": "Column Mapping",
-    "mappingHint": "Select which file column corresponds to each catalog field"
+    "mappingHint": "Select which file column corresponds to each catalog field",
+    "hasErrors": "There are errors in {{count}} rows",
+    "onlyValidWillBePublished": "Only valid rows will be published ({{count}} of {{total}})"
   },
   "settings": {
     "title": "Settings",

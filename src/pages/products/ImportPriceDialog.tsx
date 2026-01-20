@@ -68,6 +68,12 @@ interface ValidateResponse {
   invalid_rows?: number;
 }
 
+interface ValidationStats {
+  totalRows: number;
+  validRows: number;
+  invalidRows: number;
+}
+
 export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPriceDialogProps) {
   const { t } = useTranslation();
   const { profile } = useAuth();
@@ -87,6 +93,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
   const [detectedColumns, setDetectedColumns] = useState<string[]>([]);
   const [missingRequired, setMissingRequired] = useState<string[]>([]);
   const [suggestions, setSuggestions] = useState<Record<string, string[]>>({});
+  const [validationStats, setValidationStats] = useState<ValidationStats | null>(null);
   const [columnMapping, setColumnMapping] = useState<ColumnMapping>({});
 
   // Create import job and upload file mutation
@@ -217,7 +224,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     onSuccess: (data) => {
       if (!data) return;
 
-      // Check if mapping is required
+      // Check if mapping is required (only when ok=false AND specific error code)
       if (!data.ok && data.error_code === 'MISSING_REQUIRED_COLUMNS') {
         console.info('[ImportPriceDialog] Mapping required, showing mapping UI');
         setDetectedColumns(data.detected_columns || []);
@@ -237,7 +244,14 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
         return;
       }
 
-      // Validation passed
+      // Save validation stats (for showing warning about errors)
+      setValidationStats({
+        totalRows: data.total_rows || 0,
+        validRows: data.valid_rows || 0,
+        invalidRows: data.invalid_rows || 0,
+      });
+
+      // Validation passed (ok=true) - allow publish even if there are some invalid rows
       setStep('validated');
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
       toast({
@@ -315,6 +329,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     setMissingRequired([]);
     setSuggestions({});
     setColumnMapping({});
+    setValidationStats(null);
   };
 
   const handleClose = () => {
@@ -565,6 +580,26 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                 </div>
               </CardContent>
             </Card>
+
+            {/* Warning about rows with errors */}
+            {validationStats && validationStats.invalidRows > 0 && (
+              <Card className="bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800">
+                <CardContent className="p-3 flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                  <div className="text-xs text-amber-800 dark:text-amber-300">
+                    <p className="font-medium">
+                      {t('import.hasErrors', 'Есть ошибки в {{count}} строках', { count: validationStats.invalidRows })}
+                    </p>
+                    <p className="mt-1">
+                      {t('import.onlyValidWillBePublished', 'Будут опубликованы только валидные строки ({{count}} из {{total}})', { 
+                        count: validationStats.validRows, 
+                        total: validationStats.totalRows 
+                      })}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             {dryRun ? (
               <Card className="bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800">
