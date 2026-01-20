@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { 
   Upload, FileSpreadsheet, AlertTriangle, Loader2, Info, 
-  Check, ChevronRight, PlayCircle, CheckCircle2, XCircle
+  Check, ChevronRight, PlayCircle, CheckCircle2, XCircle, HelpCircle
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -30,6 +30,7 @@ import {
   STORAGE_BUCKET,
   type FileFormat 
 } from '@/lib/backend';
+import { ColumnMappingStep, REQUIRED_FIELDS, type ColumnMapping } from './ColumnMappingStep';
 
 interface ImportPriceDialogProps {
   open: boolean;
@@ -37,12 +38,34 @@ interface ImportPriceDialogProps {
   onSuccess?: () => void;
 }
 
-type ImportStep = 'upload' | 'uploading' | 'pending' | 'validating' | 'validated' | 'publishing' | 'done' | 'error';
+type ImportStep = 
+  | 'upload' 
+  | 'uploading' 
+  | 'pending' 
+  | 'validating' 
+  | 'mapping'  // New step for column mapping
+  | 'validated' 
+  | 'publishing' 
+  | 'done' 
+  | 'error';
 
 interface CreatedJob {
   id: string;
   storagePath: string;
   fileFormat: FileFormat;
+}
+
+interface ValidateResponse {
+  ok: boolean;
+  import_job_id: string;
+  error_code?: string;
+  error?: string;
+  detected_columns?: string[];
+  missing_required?: string[];
+  suggestions?: Record<string, string[]>;
+  total_rows?: number;
+  valid_rows?: number;
+  invalid_rows?: number;
 }
 
 export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPriceDialogProps) {
@@ -59,6 +82,12 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
   const [createdJob, setCreatedJob] = useState<CreatedJob | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Column mapping state
+  const [detectedColumns, setDetectedColumns] = useState<string[]>([]);
+  const [missingRequired, setMissingRequired] = useState<string[]>([]);
+  const [suggestions, setSuggestions] = useState<Record<string, string[]>>({});
+  const [columnMapping, setColumnMapping] = useState<ColumnMapping>({});
 
   // Create import job and upload file mutation
   const createJobMutation = useMutation({
@@ -122,7 +151,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                       (uploadError as any).statusCode === 409;
         
         const userMessage = is409 
-          ? 'Файл с таким именем уже загружен для этого импорта. Создайте новый импорт.'
+          ? t('import.fileAlreadyExists', 'Файл с таким именем уже загружен для этого импорта. Создайте новый импорт.')
           : `Upload failed: ${uploadError.message}`;
         
         // Update job status to FAILED
@@ -160,18 +189,20 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
 
   // Validate mutation - calls Edge Function gateway
   const validateMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (mappingToUse?: ColumnMapping) => {
       if (!profile?.organization_id || !createdJob) throw new Error('Invalid state');
 
       setStep('validating');
 
-      // Call Edge Function gateway
-      const { data, error } = await supabase.functions.invoke(ImportGatewayApi.validate, {
+      // Call Edge Function gateway with optional mapping
+      const { data, error } = await supabase.functions.invoke<ValidateResponse>(ImportGatewayApi.validate, {
         body: {
           organization_id: profile.organization_id,
           import_job_id: createdJob.id,
           file_path: createdJob.storagePath,
           file_format: createdJob.fileFormat,
+          mapping: mappingToUse || null,
+          options: null,
         },
       });
 
@@ -180,15 +211,33 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
         throw new Error(error.message || 'Validation failed');
       }
 
-      // Check for error in response body
-      if (data?.error) {
-        throw new Error(data.error);
-      }
-
       console.info('[ImportPriceDialog] Validate result:', data);
       return data;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      if (!data) return;
+
+      // Check if mapping is required
+      if (!data.ok && data.error_code === 'MISSING_REQUIRED_COLUMNS') {
+        console.info('[ImportPriceDialog] Mapping required, showing mapping UI');
+        setDetectedColumns(data.detected_columns || []);
+        setMissingRequired(data.missing_required || []);
+        setSuggestions(data.suggestions || {});
+        
+        // Pre-populate mapping from suggestions
+        const initialMapping: ColumnMapping = {};
+        Object.entries(data.suggestions || {}).forEach(([field, cols]) => {
+          if (cols && cols.length > 0) {
+            initialMapping[field] = cols[0];
+          }
+        });
+        setColumnMapping(initialMapping);
+        
+        setStep('mapping');
+        return;
+      }
+
+      // Validation passed
       setStep('validated');
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
       toast({
@@ -211,7 +260,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
 
       setStep('publishing');
 
-      // Call Edge Function gateway
+      // Call Edge Function gateway with mapping if set
       const { data, error } = await supabase.functions.invoke(ImportGatewayApi.publish, {
         body: {
           organization_id: profile.organization_id,
@@ -219,6 +268,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
           file_path: createdJob.storagePath,
           file_format: createdJob.fileFormat,
           archive_before_replace: archiveBeforeReplace,
+          mapping: Object.keys(columnMapping).length > 0 ? columnMapping : null,
         },
       });
 
@@ -261,6 +311,10 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     setCreatedJob(null);
     setUploadProgress(0);
     setErrorMessage(null);
+    setDetectedColumns([]);
+    setMissingRequired([]);
+    setSuggestions({});
+    setColumnMapping({});
   };
 
   const handleClose = () => {
@@ -284,14 +338,21 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     }
   };
 
+  const handleValidateWithMapping = () => {
+    validateMutation.mutate(columnMapping);
+  };
+
   const fileFormat = file ? getFileFormat(file.name) : null;
   const isFormatAvailable = fileFormat ? isFormatSupported(fileFormat) : true;
 
   const isLoading = createJobMutation.isPending || validateMutation.isPending || publishMutation.isPending;
 
+  // Check if all required fields are mapped
+  const allRequiredMapped = REQUIRED_FIELDS.every((f) => !!columnMapping[f]);
+
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className={step === 'mapping' ? 'max-w-2xl max-h-[85vh] overflow-y-auto' : 'max-w-lg'}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Upload className="h-5 w-5" />
@@ -302,6 +363,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
             {step === 'uploading' && t('import.uploadingFile', 'Загрузка файла...')}
             {step === 'pending' && t('import.readyToValidate', 'Файл загружен. Запустите проверку.')}
             {step === 'validating' && t('import.validating', 'Проверка файла...')}
+            {step === 'mapping' && t('import.mappingStep', 'Сопоставьте колонки файла с полями каталога')}
             {step === 'validated' && t('import.validated', 'Файл проверен. Можете опубликовать.')}
             {step === 'publishing' && t('import.publishing', 'Публикация данных...')}
             {step === 'done' && t('import.done', 'Импорт успешно завершён')}
@@ -362,6 +424,17 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
               </Card>
             )}
 
+            {/* Auto-mapping info */}
+            <Card className="bg-muted/30 border-muted">
+              <CardContent className="p-3 flex items-start gap-2">
+                <HelpCircle className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+                <div className="text-xs text-muted-foreground">
+                  <p className="font-medium mb-1">{t('import.autoMappingTitle', 'Автоматическое распознавание')}</p>
+                  <p>{t('import.autoMappingDesc', 'Можно загрузить CSV/XLSX в любом порядке колонок; система распознаёт автоматически. Если не распознано — вы выбираете соответствие колонок один раз.')}</p>
+                </div>
+              </CardContent>
+            </Card>
+
             {/* Options */}
             <div className="space-y-3">
               <div className="flex items-center justify-between p-3 border rounded-lg">
@@ -402,11 +475,6 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                 </CardContent>
               </Card>
             )}
-
-            {/* Storage info (read-only, minimal) */}
-            <div className="text-xs text-muted-foreground font-mono">
-              Storage: {STORAGE_BUCKET}
-            </div>
           </div>
         )}
 
@@ -446,7 +514,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
             </div>
 
             <Button 
-              onClick={() => validateMutation.mutate()}
+              onClick={() => validateMutation.mutate(undefined)}
               disabled={validateMutation.isPending}
               className="w-full"
             >
@@ -468,6 +536,17 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
               {t('import.validatingDesc', 'Проверяем структуру и данные файла...')}
             </p>
           </div>
+        )}
+
+        {/* Step 3.5: Column Mapping */}
+        {step === 'mapping' && (
+          <ColumnMappingStep
+            detectedColumns={detectedColumns}
+            missingRequired={missingRequired}
+            suggestions={suggestions}
+            mapping={columnMapping}
+            onMappingChange={setColumnMapping}
+          />
         )}
 
         {/* Step 4: Validated */}
@@ -577,6 +656,25 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                   <Upload className="h-4 w-4 mr-2" />
                 )}
                 {t('catalog.startImport', 'Начать импорт')}
+              </Button>
+            </>
+          )}
+
+          {step === 'mapping' && (
+            <>
+              <Button variant="outline" onClick={handleClose}>
+                {t('common.cancel')}
+              </Button>
+              <Button
+                onClick={handleValidateWithMapping}
+                disabled={!allRequiredMapped || validateMutation.isPending}
+              >
+                {validateMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Check className="h-4 w-4 mr-2" />
+                )}
+                {t('common.next', 'Далее')}
               </Button>
             </>
           )}

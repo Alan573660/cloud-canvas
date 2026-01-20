@@ -9,11 +9,34 @@ const corsHeaders = {
 const IMPORT_WORKER_URL = Deno.env.get('IMPORT_WORKER_URL');
 const IMPORT_SHARED_SECRET = Deno.env.get('IMPORT_SHARED_SECRET');
 
+// Column mapping types
+interface ColumnMapping {
+  [targetField: string]: string; // targetField -> sourceColumn
+}
+
 interface ValidateRequest {
   organization_id: string;
   import_job_id: string;
   file_path: string; // Path in Supabase Storage: {org_id}/{job_id}/{filename}
   file_format: 'csv' | 'xlsx' | 'jsonl' | 'parquet';
+  mapping?: ColumnMapping | null; // Optional column mapping
+  options?: {
+    skip_header?: boolean;
+    delimiter?: string;
+  } | null;
+}
+
+interface ValidateResponse {
+  ok: boolean;
+  import_job_id: string;
+  error_code?: string;
+  error?: string;
+  detected_columns?: string[];
+  missing_required?: string[];
+  suggestions?: Record<string, string[]>;
+  total_rows?: number;
+  valid_rows?: number;
+  invalid_rows?: number;
 }
 
 Deno.serve(async (req) => {
@@ -28,7 +51,7 @@ Deno.serve(async (req) => {
     if (!authHeader) {
       console.error('[import-validate] No authorization header');
       return new Response(
-        JSON.stringify({ error: 'Unauthorized' }),
+        JSON.stringify({ ok: false, error: 'Unauthorized', error_code: 'UNAUTHORIZED' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -48,7 +71,7 @@ Deno.serve(async (req) => {
     if (authError || !user) {
       console.error('[import-validate] Auth error:', authError);
       return new Response(
-        JSON.stringify({ error: 'Unauthorized', details: authError?.message }),
+        JSON.stringify({ ok: false, error: 'Unauthorized', error_code: 'UNAUTHORIZED', details: authError?.message }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -59,13 +82,14 @@ Deno.serve(async (req) => {
       user_id: user.id, 
       organization_id: body.organization_id,
       import_job_id: body.import_job_id,
-      file_format: body.file_format 
+      file_format: body.file_format,
+      has_mapping: !!body.mapping
     });
 
     // Validate required fields
     if (!body.organization_id || !body.import_job_id || !body.file_path || !body.file_format) {
       return new Response(
-        JSON.stringify({ error: 'Missing required fields' }),
+        JSON.stringify({ ok: false, error: 'Missing required fields', error_code: 'MISSING_FIELDS' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -83,7 +107,7 @@ Deno.serve(async (req) => {
     if (profileError || !profile) {
       console.error('[import-validate] Profile error:', profileError);
       return new Response(
-        JSON.stringify({ error: 'Profile not found' }),
+        JSON.stringify({ ok: false, error: 'Profile not found', error_code: 'PROFILE_NOT_FOUND' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -94,7 +118,7 @@ Deno.serve(async (req) => {
         request_org: body.organization_id
       });
       return new Response(
-        JSON.stringify({ error: 'Access denied to this organization' }),
+        JSON.stringify({ ok: false, error: 'Access denied to this organization', error_code: 'ACCESS_DENIED' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -125,12 +149,13 @@ Deno.serve(async (req) => {
         .update({ 
           status: 'FAILED', 
           error_message: 'File not found in storage',
+          error_code: 'FILE_NOT_FOUND',
           finished_at: new Date().toISOString()
         })
         .eq('id', body.import_job_id);
 
       return new Response(
-        JSON.stringify({ error: 'File not found in storage. Please upload the file first.' }),
+        JSON.stringify({ ok: false, error: 'File not found in storage. Please upload the file first.', error_code: 'FILE_NOT_FOUND' }),
         { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -141,7 +166,7 @@ Deno.serve(async (req) => {
     if (!IMPORT_WORKER_URL) {
       console.error('[import-validate] IMPORT_WORKER_URL secret not configured');
       return new Response(
-        JSON.stringify({ error: 'Server configuration error: IMPORT_WORKER_URL not set' }),
+        JSON.stringify({ ok: false, error: 'Server configuration error: IMPORT_WORKER_URL not set', error_code: 'CONFIG_ERROR' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -149,43 +174,104 @@ Deno.serve(async (req) => {
     if (!IMPORT_SHARED_SECRET) {
       console.error('[import-validate] IMPORT_SHARED_SECRET secret not configured');
       return new Response(
-        JSON.stringify({ error: 'Server configuration error: IMPORT_SHARED_SECRET not set' }),
+        JSON.stringify({ ok: false, error: 'Server configuration error: IMPORT_SHARED_SECRET not set', error_code: 'CONFIG_ERROR' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     // Call Cloud Run Import Worker with shared secret
+    const workerPayload: Record<string, unknown> = {
+      organization_id: body.organization_id,
+      import_job_id: body.import_job_id,
+      file_url: signedUrlData.signedUrl,
+      file_format: body.file_format,
+      dry_run: true,
+    };
+
+    // Add mapping if provided
+    if (body.mapping) {
+      workerPayload.mapping = body.mapping;
+    }
+
+    // Add options if provided
+    if (body.options) {
+      workerPayload.options = body.options;
+    }
+
     const workerResponse = await fetch(`${IMPORT_WORKER_URL}/api/import/validate`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
         'X-Import-Secret': IMPORT_SHARED_SECRET 
       },
-      body: JSON.stringify({
-        organization_id: body.organization_id,
-        import_job_id: body.import_job_id,
-        file_url: signedUrlData.signedUrl,
-        file_format: body.file_format,
-        dry_run: true,
-      }),
+      body: JSON.stringify(workerPayload),
     });
 
     const workerResult = await workerResponse.text();
     console.log('[import-validate] Worker response:', workerResponse.status, workerResult);
 
+    // Parse worker result
+    let result: Record<string, unknown>;
+    try {
+      result = JSON.parse(workerResult);
+    } catch {
+      result = { message: workerResult };
+    }
+
+    // Check for MISSING_REQUIRED_COLUMNS error - this triggers mapping UI
     if (!workerResponse.ok) {
-      // Update job status to FAILED
+      const isMissingColumns = 
+        result.error_code === 'MISSING_REQUIRED_COLUMNS' ||
+        (result.detail && typeof result.detail === 'string' && result.detail.includes('Missing required columns')) ||
+        (Array.isArray(result.missing_required) && result.missing_required.length > 0);
+
+      if (isMissingColumns) {
+        // Return special response for mapping UI
+        const response: ValidateResponse = {
+          ok: false,
+          import_job_id: body.import_job_id,
+          error_code: 'MISSING_REQUIRED_COLUMNS',
+          error: result.detail as string || 'Missing required columns',
+          detected_columns: result.detected_columns as string[] || [],
+          missing_required: result.missing_required as string[] || ['id', 'price_rub_m2'],
+          suggestions: result.suggestions as Record<string, string[]> || {},
+        };
+
+        // Update job status to PENDING_MAPPING
+        await supabaseAdmin
+          .from('import_jobs')
+          .update({ 
+            status: 'QUEUED', // Keep as QUEUED, waiting for mapping
+            error_code: 'MISSING_REQUIRED_COLUMNS',
+          })
+          .eq('id', body.import_job_id);
+
+        console.log('[import-validate] Missing columns, returning for mapping UI');
+
+        return new Response(
+          JSON.stringify(response),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Other errors - mark as failed
       await supabaseAdmin
         .from('import_jobs')
         .update({ 
           status: 'FAILED', 
-          error_message: workerResult.slice(0, 500),
+          error_message: (result.detail || result.error || workerResult).toString().slice(0, 500),
           finished_at: new Date().toISOString()
         })
         .eq('id', body.import_job_id);
 
       return new Response(
-        workerResult,
+        JSON.stringify({ 
+          ok: false, 
+          import_job_id: body.import_job_id,
+          error: result.detail || result.error || workerResult,
+          error_code: result.error_code || 'VALIDATION_ERROR',
+          ...result 
+        }),
         { 
           status: workerResponse.status, 
           headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
@@ -193,29 +279,25 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Update job status - worker should have updated it, but ensure it's not stuck
+    // Success - update job status
     await supabaseAdmin
       .from('import_jobs')
       .update({ status: 'QUEUED' }) // Ready for publish
       .eq('id', body.import_job_id)
       .eq('status', 'VALIDATING'); // Only if still validating
 
-    // Parse worker result
-    let result;
-    try {
-      result = JSON.parse(workerResult);
-    } catch {
-      result = { message: workerResult };
-    }
-
     console.log('[import-validate] Success');
 
+    const successResponse: ValidateResponse = {
+      ok: true,
+      import_job_id: body.import_job_id,
+      total_rows: result.total_rows as number,
+      valid_rows: result.valid_rows as number,
+      invalid_rows: result.invalid_rows as number,
+    };
+
     return new Response(
-      JSON.stringify({ 
-        success: true, 
-        import_job_id: body.import_job_id,
-        ...result 
-      }),
+      JSON.stringify(successResponse),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
@@ -223,7 +305,7 @@ Deno.serve(async (req) => {
     console.error('[import-validate] Unexpected error:', error);
     const message = error instanceof Error ? error.message : 'Unknown error';
     return new Response(
-      JSON.stringify({ error: 'Internal server error', details: message }),
+      JSON.stringify({ ok: false, error: 'Internal server error', error_code: 'INTERNAL_ERROR', details: message }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }

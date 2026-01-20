@@ -9,12 +9,18 @@ const corsHeaders = {
 const IMPORT_WORKER_URL = Deno.env.get('IMPORT_WORKER_URL');
 const IMPORT_SHARED_SECRET = Deno.env.get('IMPORT_SHARED_SECRET');
 
+// Column mapping types
+interface ColumnMapping {
+  [targetField: string]: string; // targetField -> sourceColumn
+}
+
 interface PublishRequest {
   organization_id: string;
   import_job_id: string;
   file_path: string; // Path in Supabase Storage
   file_format: 'csv' | 'xlsx' | 'jsonl' | 'parquet';
   archive_before_replace?: boolean;
+  mapping?: ColumnMapping | null; // Column mapping from validate step
 }
 
 Deno.serve(async (req) => {
@@ -29,7 +35,7 @@ Deno.serve(async (req) => {
     if (!authHeader) {
       console.error('[import-publish] No authorization header');
       return new Response(
-        JSON.stringify({ error: 'Unauthorized' }),
+        JSON.stringify({ ok: false, error: 'Unauthorized', error_code: 'UNAUTHORIZED' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -49,7 +55,7 @@ Deno.serve(async (req) => {
     if (authError || !user) {
       console.error('[import-publish] Auth error:', authError);
       return new Response(
-        JSON.stringify({ error: 'Unauthorized', details: authError?.message }),
+        JSON.stringify({ ok: false, error: 'Unauthorized', error_code: 'UNAUTHORIZED', details: authError?.message }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -61,13 +67,14 @@ Deno.serve(async (req) => {
       organization_id: body.organization_id,
       import_job_id: body.import_job_id,
       file_format: body.file_format,
-      archive_before_replace: body.archive_before_replace
+      archive_before_replace: body.archive_before_replace,
+      has_mapping: !!body.mapping
     });
 
     // Validate required fields
     if (!body.organization_id || !body.import_job_id || !body.file_path || !body.file_format) {
       return new Response(
-        JSON.stringify({ error: 'Missing required fields' }),
+        JSON.stringify({ ok: false, error: 'Missing required fields', error_code: 'MISSING_FIELDS' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -85,7 +92,7 @@ Deno.serve(async (req) => {
     if (profileError || !profile) {
       console.error('[import-publish] Profile error:', profileError);
       return new Response(
-        JSON.stringify({ error: 'Profile not found' }),
+        JSON.stringify({ ok: false, error: 'Profile not found', error_code: 'PROFILE_NOT_FOUND' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -93,7 +100,7 @@ Deno.serve(async (req) => {
     if (profile.organization_id !== body.organization_id) {
       console.error('[import-publish] Organization mismatch');
       return new Response(
-        JSON.stringify({ error: 'Access denied to this organization' }),
+        JSON.stringify({ ok: false, error: 'Access denied to this organization', error_code: 'ACCESS_DENIED' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -103,7 +110,7 @@ Deno.serve(async (req) => {
     if (!allowedRoles.includes(profile.role)) {
       console.error('[import-publish] Insufficient role:', profile.role);
       return new Response(
-        JSON.stringify({ error: 'Insufficient permissions. Only admins can publish imports.' }),
+        JSON.stringify({ ok: false, error: 'Insufficient permissions. Only admins can publish imports.', error_code: 'INSUFFICIENT_PERMISSIONS' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -133,12 +140,13 @@ Deno.serve(async (req) => {
         .update({ 
           status: 'FAILED', 
           error_message: 'File not found in storage',
+          error_code: 'FILE_NOT_FOUND',
           finished_at: new Date().toISOString()
         })
         .eq('id', body.import_job_id);
 
       return new Response(
-        JSON.stringify({ error: 'File not found in storage' }),
+        JSON.stringify({ ok: false, error: 'File not found in storage', error_code: 'FILE_NOT_FOUND' }),
         { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -149,7 +157,7 @@ Deno.serve(async (req) => {
     if (!IMPORT_WORKER_URL) {
       console.error('[import-publish] IMPORT_WORKER_URL secret not configured');
       return new Response(
-        JSON.stringify({ error: 'Server configuration error: IMPORT_WORKER_URL not set' }),
+        JSON.stringify({ ok: false, error: 'Server configuration error: IMPORT_WORKER_URL not set', error_code: 'CONFIG_ERROR' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -157,9 +165,24 @@ Deno.serve(async (req) => {
     if (!IMPORT_SHARED_SECRET) {
       console.error('[import-publish] IMPORT_SHARED_SECRET secret not configured');
       return new Response(
-        JSON.stringify({ error: 'Server configuration error: IMPORT_SHARED_SECRET not set' }),
+        JSON.stringify({ ok: false, error: 'Server configuration error: IMPORT_SHARED_SECRET not set', error_code: 'CONFIG_ERROR' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
+    }
+
+    // Build worker payload
+    const workerPayload: Record<string, unknown> = {
+      organization_id: body.organization_id,
+      import_job_id: body.import_job_id,
+      file_url: signedUrlData.signedUrl,
+      file_format: body.file_format,
+      archive_before_replace: body.archive_before_replace ?? true,
+      dry_run: false,
+    };
+
+    // Add mapping if provided
+    if (body.mapping) {
+      workerPayload.mapping = body.mapping;
     }
 
     // Call Cloud Run Import Worker with shared secret
@@ -169,14 +192,7 @@ Deno.serve(async (req) => {
         'Content-Type': 'application/json',
         'X-Import-Secret': IMPORT_SHARED_SECRET 
       },
-      body: JSON.stringify({
-        organization_id: body.organization_id,
-        import_job_id: body.import_job_id,
-        file_url: signedUrlData.signedUrl,
-        file_format: body.file_format,
-        archive_before_replace: body.archive_before_replace ?? true,
-        dry_run: false,
-      }),
+      body: JSON.stringify(workerPayload),
     });
 
     const workerResult = await workerResponse.text();
@@ -192,8 +208,22 @@ Deno.serve(async (req) => {
         })
         .eq('id', body.import_job_id);
 
+      // Parse error for structured response
+      let errorResult;
+      try {
+        errorResult = JSON.parse(workerResult);
+      } catch {
+        errorResult = { error: workerResult };
+      }
+
       return new Response(
-        workerResult,
+        JSON.stringify({ 
+          ok: false, 
+          import_job_id: body.import_job_id,
+          error: errorResult.detail || errorResult.error || workerResult,
+          error_code: errorResult.error_code || 'PUBLISH_ERROR',
+          ...errorResult 
+        }),
         { 
           status: workerResponse.status, 
           headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
@@ -222,7 +252,7 @@ Deno.serve(async (req) => {
 
     return new Response(
       JSON.stringify({ 
-        success: true, 
+        ok: true, 
         import_job_id: body.import_job_id,
         status: 'DONE',
         ...result 
@@ -234,7 +264,7 @@ Deno.serve(async (req) => {
     console.error('[import-publish] Unexpected error:', error);
     const message = error instanceof Error ? error.message : 'Unknown error';
     return new Response(
-      JSON.stringify({ error: 'Internal server error', details: message }),
+      JSON.stringify({ ok: false, error: 'Internal server error', error_code: 'INTERNAL_ERROR', details: message }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
