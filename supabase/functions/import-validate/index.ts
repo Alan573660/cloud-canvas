@@ -213,7 +213,7 @@ Deno.serve(async (req) => {
     });
 
     const workerResult = await workerResponse.text();
-    console.log('[import-validate] Worker response:', workerResponse.status, workerResult);
+    console.log('[import-validate] Worker response:', workerResponse.status, workerResult.slice(0, 500));
 
     // Parse worker result
     let result: Record<string, unknown>;
@@ -223,8 +223,9 @@ Deno.serve(async (req) => {
       result = { message: workerResult };
     }
 
-    // Check for MISSING_REQUIRED_COLUMNS error - this triggers mapping UI
+    // Handle worker errors with better messaging
     if (!workerResponse.ok) {
+      // Check for MISSING_REQUIRED_COLUMNS error - this triggers mapping UI
       const isMissingColumns = 
         result.error_code === 'MISSING_REQUIRED_COLUMNS' ||
         (result.detail && typeof result.detail === 'string' && result.detail.includes('Missing required columns')) ||
@@ -259,26 +260,46 @@ Deno.serve(async (req) => {
         );
       }
 
-      // Other errors - mark as failed
+      // Extract meaningful error message from worker response
+      const workerErrorMessage = 
+        result.detail || 
+        result.error || 
+        result.message || 
+        (workerResponse.status === 500 ? 'Worker internal error - check worker logs and configuration' : workerResult);
+
+      // Log detailed error for debugging
+      console.error('[import-validate] Worker error:', {
+        status: workerResponse.status,
+        error_code: result.error_code,
+        message: workerErrorMessage,
+        raw: workerResult.slice(0, 200)
+      });
+
+      // Update job with detailed error
       await supabaseAdmin
         .from('import_jobs')
         .update({ 
           status: 'FAILED', 
-          error_message: (result.detail || result.error || workerResult).toString().slice(0, 500),
+          error_message: String(workerErrorMessage).slice(0, 500),
+          error_code: result.error_code as string || 'WORKER_ERROR',
           finished_at: new Date().toISOString()
         })
         .eq('id', body.import_job_id);
 
+      // Return detailed error to UI
       return new Response(
         JSON.stringify({ 
           ok: false, 
           import_job_id: body.import_job_id,
-          error: result.detail || result.error || workerResult,
-          error_code: result.error_code || 'VALIDATION_ERROR',
-          ...result 
+          error: workerErrorMessage,
+          error_code: result.error_code || 'WORKER_ERROR',
+          message: `Worker returned ${workerResponse.status}: ${String(workerErrorMessage).slice(0, 200)}`,
+          detected_columns: result.detected_columns,
+          missing_required: result.missing_required,
+          suggestions: result.suggestions,
         }),
         { 
-          status: workerResponse.status, 
+          status: 200, // Return 200 so UI can parse error details
           headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
         }
       );
