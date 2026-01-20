@@ -1,4 +1,7 @@
 {
+  "import": {
+    "deletedCount": "Удалено записей: {{count}}"
+  },
   "common": {
     "loading": "Загрузка...",
     "error": "Ошибка",

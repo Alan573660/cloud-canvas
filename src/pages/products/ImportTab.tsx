@@ -12,7 +12,8 @@ import {
   Eye, 
   FileWarning,
   Upload,
-  RefreshCw
+  RefreshCw,
+  Trash2
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -21,6 +22,8 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import { toast } from 'sonner';
 import {
   Table,
   TableBody,
@@ -87,6 +90,79 @@ export function ImportTab() {
   const [errorsDialogOpen, setErrorsDialogOpen] = useState(false);
   const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
   const [selectedJob, setSelectedJob] = useState<ImportJob | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Delete mutation
+  const deleteMutation = useMutation({
+    mutationFn: async (jobIds: string[]) => {
+      if (!profile?.organization_id) throw new Error('No organization');
+      
+      // 1. Delete from import_errors
+      const { error: errorsError } = await supabase
+        .from('import_errors')
+        .delete()
+        .eq('organization_id', profile.organization_id)
+        .in('import_job_id', jobIds);
+      
+      if (errorsError) throw errorsError;
+      
+      // 2. Delete from import_staging_rows
+      const { error: stagingError } = await supabase
+        .from('import_staging_rows')
+        .delete()
+        .eq('organization_id', profile.organization_id)
+        .in('import_job_id', jobIds);
+      
+      if (stagingError) throw stagingError;
+      
+      // 3. Delete from import_jobs
+      const { error: jobsError } = await supabase
+        .from('import_jobs')
+        .delete()
+        .eq('organization_id', profile.organization_id)
+        .in('id', jobIds);
+      
+      if (jobsError) throw jobsError;
+      
+      return jobIds.length;
+    },
+    onSuccess: (count) => {
+      toast.success(t('import.deletedCount', { count }));
+      setSelectedIds(new Set());
+      queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
+    },
+    onError: (error: any) => {
+      console.error('Delete error:', error);
+      if (error.code === '42501' || error.message?.includes('policy')) {
+        toast.error(t('common.permissionDenied', 'Недостаточно прав'));
+      } else {
+        toast.error(t('common.error', 'Ошибка'));
+      }
+    },
+  });
+
+  const handleSelectAll = (checked: boolean) => {
+    if (checked && jobs) {
+      setSelectedIds(new Set(jobs.map(j => j.id)));
+    } else {
+      setSelectedIds(new Set());
+    }
+  };
+
+  const handleSelectOne = (jobId: string, checked: boolean) => {
+    const newSet = new Set(selectedIds);
+    if (checked) {
+      newSet.add(jobId);
+    } else {
+      newSet.delete(jobId);
+    }
+    setSelectedIds(newSet);
+  };
+
+  const handleDeleteSelected = () => {
+    if (selectedIds.size === 0) return;
+    deleteMutation.mutate(Array.from(selectedIds));
+  };
 
   // Fetch import jobs
   const { data: jobs, isLoading, refetch } = useQuery({
@@ -228,12 +304,40 @@ export function ImportTab() {
         </div>
       </div>
 
+      {/* Delete Selected Button */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg border">
+          <span className="text-sm text-muted-foreground">
+            {t('common.selected', 'Выбрано')}: {selectedIds.size}
+          </span>
+          <Button 
+            variant="destructive" 
+            size="sm"
+            onClick={handleDeleteSelected}
+            disabled={deleteMutation.isPending}
+          >
+            {deleteMutation.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4 mr-2" />
+            )}
+            {t('common.deleteSelected', 'Удалить выбранные')}
+          </Button>
+        </div>
+      )}
+
       {/* Jobs Table */}
       {jobs && jobs.length > 0 ? (
         <Card>
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-[50px]">
+                  <Checkbox 
+                    checked={jobs.length > 0 && selectedIds.size === jobs.length}
+                    onCheckedChange={handleSelectAll}
+                  />
+                </TableHead>
                 <TableHead className="w-[180px]">{t('common.date')}</TableHead>
                 <TableHead>{t('import.totalRows')}</TableHead>
                 <TableHead>{t('import.validRows')}</TableHead>
@@ -245,7 +349,13 @@ export function ImportTab() {
             </TableHeader>
             <TableBody>
               {jobs.map((job) => (
-                <TableRow key={job.id}>
+                <TableRow key={job.id} className={selectedIds.has(job.id) ? 'bg-muted/50' : ''}>
+                  <TableCell>
+                    <Checkbox
+                      checked={selectedIds.has(job.id)}
+                      onCheckedChange={(checked) => handleSelectOne(job.id, !!checked)}
+                    />
+                  </TableCell>
                   <TableCell>
                     <div>
                       <p className="text-sm font-medium">
