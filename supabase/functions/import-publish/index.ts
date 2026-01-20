@@ -178,6 +178,8 @@ Deno.serve(async (req) => {
       file_format: body.file_format,
       archive_before_replace: body.archive_before_replace ?? true,
       dry_run: false,
+      // Allow partial publish - import valid rows even if some rows have errors
+      allow_partial: true,
     };
 
     // Add mapping if provided
