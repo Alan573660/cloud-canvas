@@ -15,7 +15,9 @@ import {
   RefreshCw,
   Trash2,
   XCircle,
-  Ban
+  Ban,
+  RotateCcw,
+  FileEdit
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -48,6 +50,7 @@ import {
   AccordionTrigger,
 } from '@/components/ui/accordion';
 import { ImportPriceDialog } from './ImportPriceDialog';
+import { StagingRowEditor } from './StagingRowEditor';
 
 interface ImportJob {
   id: string;
@@ -93,6 +96,10 @@ export function ImportTab() {
   const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
   const [selectedJob, setSelectedJob] = useState<ImportJob | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  
+  // Staging row editor state
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorRowNumber, setEditorRowNumber] = useState<number>(0);
 
   // Delete mutation
   const deleteMutation = useMutation({
@@ -231,6 +238,37 @@ export function ImportTab() {
     },
   });
 
+  // Reset exclusions mutation
+  const resetExclusionsMutation = useMutation({
+    mutationFn: async (jobId: string) => {
+      if (!profile?.organization_id) throw new Error('No organization');
+
+      const { error, count } = await supabase
+        .from('import_staging_rows')
+        .update({ validation_status: 'INVALID' })
+        .eq('organization_id', profile.organization_id)
+        .eq('import_job_id', jobId)
+        .eq('validation_status', 'EXCLUDED');
+
+      if (error) throw error;
+      return count ?? 0;
+    },
+    onSuccess: (count) => {
+      toast.success(t('import.exclusionsReset', 'Сброшено исключений: {{count}}', { count }));
+      queryClient.invalidateQueries({ queryKey: ['import-errors'] });
+      queryClient.invalidateQueries({ queryKey: ['import-preview'] });
+      queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
+    },
+    onError: (error: any) => {
+      console.error('Reset exclusions error:', error);
+      if (error.code === '42501' || error.message?.includes('policy')) {
+        toast.error(t('common.permissionDenied', 'Недостаточно прав'));
+      } else {
+        toast.error(t('common.error', 'Ошибка'));
+      }
+    },
+  });
+
   const handleExcludeRow = (jobId: string, rowNumber: number | null) => {
     if (rowNumber == null) return;
     excludeRowMutation.mutate({ jobId, rowNumber });
@@ -239,6 +277,16 @@ export function ImportTab() {
   const handleExcludeAllErrors = () => {
     if (!selectedJob) return;
     excludeAllErrorsMutation.mutate(selectedJob.id);
+  };
+
+  const handleResetExclusions = () => {
+    if (!selectedJob) return;
+    resetExclusionsMutation.mutate(selectedJob.id);
+  };
+
+  const handleOpenRowEditor = (rowNumber: number) => {
+    setEditorRowNumber(rowNumber);
+    setEditorOpen(true);
   };
 
   // Fetch import jobs
@@ -524,9 +572,22 @@ export function ImportTab() {
             </DialogDescription>
           </DialogHeader>
           
-          {/* Bulk exclude button */}
+          {/* Bulk action buttons */}
           {errors && errors.length > 0 && selectedJob && (
-            <div className="flex justify-end mb-2">
+            <div className="flex justify-end gap-2 mb-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleResetExclusions}
+                disabled={resetExclusionsMutation.isPending}
+              >
+                {resetExclusionsMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <RotateCcw className="h-4 w-4 mr-2" />
+                )}
+                {t('import.resetExclusions', 'Сбросить исключения')}
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -555,7 +616,7 @@ export function ImportTab() {
                   <TableHead className="w-[120px]">{t('import.column')}</TableHead>
                   <TableHead>{t('import.message')}</TableHead>
                   <TableHead className="w-[150px]">{t('import.rawValue')}</TableHead>
-                  <TableHead className="w-[100px] text-right">{t('common.actions')}</TableHead>
+                  <TableHead className="w-[140px] text-right">{t('common.actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -569,15 +630,25 @@ export function ImportTab() {
                     </TableCell>
                     <TableCell className="text-right">
                       {err.row_number != null && selectedJob && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleExcludeRow(selectedJob.id, err.row_number)}
-                          disabled={excludeRowMutation.isPending}
-                          title={t('import.excludeRow', 'Исключить строку')}
-                        >
-                          <XCircle className="h-4 w-4 text-muted-foreground hover:text-destructive" />
-                        </Button>
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleOpenRowEditor(err.row_number!)}
+                            title={t('import.openRow', 'Открыть строку')}
+                          >
+                            <FileEdit className="h-4 w-4 text-muted-foreground hover:text-primary" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleExcludeRow(selectedJob.id, err.row_number)}
+                            disabled={excludeRowMutation.isPending}
+                            title={t('import.excludeRow', 'Исключить строку')}
+                          >
+                            <XCircle className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+                          </Button>
+                        </div>
                       )}
                     </TableCell>
                   </TableRow>
@@ -589,6 +660,16 @@ export function ImportTab() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Staging Row Editor */}
+      {selectedJob && (
+        <StagingRowEditor
+          open={editorOpen}
+          onOpenChange={setEditorOpen}
+          jobId={selectedJob.id}
+          rowNumber={editorRowNumber}
+        />
+      )}
 
       {/* Preview Dialog */}
       <Dialog open={previewDialogOpen} onOpenChange={setPreviewDialogOpen}>

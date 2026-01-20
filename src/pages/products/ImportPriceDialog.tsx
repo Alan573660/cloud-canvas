@@ -756,19 +756,22 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
 
           {step === 'mapping' && (
             <>
-              <Button variant="outline" onClick={handleClose}>
-                {t('common.cancel')}
+              <Button variant="outline" onClick={() => setStep('pending')}>
+                {t('common.back', 'Назад')}
+              </Button>
+              <Button variant="ghost" onClick={handleClose}>
+                {t('common.close', 'Закрыть')}
               </Button>
               <Button
                 onClick={handleValidateWithMapping}
-                disabled={!allRequiredMapped || validateMutation.isPending}
+                disabled={!allRequiredMapped || validateMutation.isPending || detectedColumns.length === 0}
               >
                 {validateMutation.isPending ? (
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 ) : (
                   <Check className="h-4 w-4 mr-2" />
                 )}
-                {t('common.next', 'Далее')}
+                {t('import.validateAndContinue', 'Проверить')}
               </Button>
             </>
           )}
