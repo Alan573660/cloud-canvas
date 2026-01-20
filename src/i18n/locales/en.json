@@ -1,4 +1,7 @@
 {
+  "import": {
+    "deletedCount": "Deleted {{count}} records"
+  },
   "analytics": {
     "description": "Usage, revenue and operations statistics",
     "last7days": "7 days",
