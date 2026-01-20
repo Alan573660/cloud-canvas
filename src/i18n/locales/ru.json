@@ -1,6 +1,10 @@
 {
   "import": {
-    "deletedCount": "Удалено записей: {{count}}"
+    "deletedCount": "Удалено записей: {{count}}",
+    "autoCorrections": "Авто-исправления",
+    "sanitizeId": "Очистить ID (только A-Z, 0-9, ._-)",
+    "normalizePrice": "Нормализовать цену (запятая→точка)",
+    "trimText": "Убрать пробелы по краям"
   },
   "common": {
     "loading": "Загрузка...",

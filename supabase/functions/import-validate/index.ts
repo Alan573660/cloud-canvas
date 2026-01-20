@@ -23,6 +23,11 @@ interface ValidateRequest {
   options?: {
     skip_header?: boolean;
     delimiter?: string;
+    transform?: {
+      sanitize_id?: boolean;
+      normalize_price?: boolean;
+      trim_text?: boolean;
+    };
   } | null;
 }
 

@@ -21,6 +21,13 @@ interface PublishRequest {
   file_format: 'csv' | 'xlsx' | 'jsonl' | 'parquet';
   archive_before_replace?: boolean;
   mapping?: ColumnMapping | null; // Column mapping from validate step
+  options?: {
+    transform?: {
+      sanitize_id?: boolean;
+      normalize_price?: boolean;
+      trim_text?: boolean;
+    };
+  } | null;
 }
 
 Deno.serve(async (req) => {
@@ -185,6 +192,11 @@ Deno.serve(async (req) => {
     // Add mapping if provided
     if (body.mapping) {
       workerPayload.mapping = body.mapping;
+    }
+
+    // Add options (including transform) if provided
+    if (body.options) {
+      workerPayload.options = body.options;
     }
 
     // Call Cloud Run Import Worker with shared secret

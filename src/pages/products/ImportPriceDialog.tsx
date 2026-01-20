@@ -83,6 +83,13 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
   const [dryRun, setDryRun] = useState(false);
   const [archiveBeforeReplace, setArchiveBeforeReplace] = useState(true);
   
+  // Auto-correction options
+  const [transformOptions, setTransformOptions] = useState({
+    sanitize_id: true,
+    normalize_price: true,
+    trim_text: true,
+  });
+  
   // Multi-step state
   const [step, setStep] = useState<ImportStep>('upload');
   const [createdJob, setCreatedJob] = useState<CreatedJob | null>(null);
@@ -201,7 +208,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
 
       setStep('validating');
 
-      // Call Edge Function gateway with optional mapping
+      // Call Edge Function gateway with optional mapping and transform options
       const { data, error } = await supabase.functions.invoke<ValidateResponse>(ImportGatewayApi.validate, {
         body: {
           organization_id: profile.organization_id,
@@ -209,7 +216,9 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
           file_path: createdJob.storagePath,
           file_format: createdJob.fileFormat,
           mapping: mappingToUse || null,
-          options: null,
+          options: {
+            transform: transformOptions,
+          },
         },
       });
 
@@ -274,7 +283,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
 
       setStep('publishing');
 
-      // Call Edge Function gateway with mapping if set
+      // Call Edge Function gateway with mapping and transform options
       const { data, error } = await supabase.functions.invoke(ImportGatewayApi.publish, {
         body: {
           organization_id: profile.organization_id,
@@ -283,6 +292,9 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
           file_format: createdJob.fileFormat,
           archive_before_replace: archiveBeforeReplace,
           mapping: Object.keys(columnMapping).length > 0 ? columnMapping : null,
+          options: {
+            transform: transformOptions,
+          },
         },
       });
 
@@ -321,6 +333,11 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     setFile(null);
     setDryRun(false);
     setArchiveBeforeReplace(true);
+    setTransformOptions({
+      sanitize_id: true,
+      normalize_price: true,
+      trim_text: true,
+    });
     setStep('upload');
     setCreatedJob(null);
     setUploadProgress(0);
@@ -478,6 +495,48 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                 />
               </div>
             </div>
+
+            {/* Auto-corrections block */}
+            <Card className="border-dashed">
+              <CardContent className="p-3 space-y-2">
+                <p className="text-xs font-medium text-muted-foreground mb-2">
+                  {t('import.autoCorrections', 'Авто-исправления')}
+                </p>
+                
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="sanitize-id" className="text-xs cursor-pointer">
+                    {t('import.sanitizeId', 'Очистить ID (только A-Z, 0-9, ._-)')}
+                  </Label>
+                  <Switch
+                    id="sanitize-id"
+                    checked={transformOptions.sanitize_id}
+                    onCheckedChange={(checked) => setTransformOptions(prev => ({ ...prev, sanitize_id: checked }))}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="normalize-price" className="text-xs cursor-pointer">
+                    {t('import.normalizePrice', 'Нормализовать цену (запятая→точка)')}
+                  </Label>
+                  <Switch
+                    id="normalize-price"
+                    checked={transformOptions.normalize_price}
+                    onCheckedChange={(checked) => setTransformOptions(prev => ({ ...prev, normalize_price: checked }))}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="trim-text" className="text-xs cursor-pointer">
+                    {t('import.trimText', 'Убрать пробелы по краям')}
+                  </Label>
+                  <Switch
+                    id="trim-text"
+                    checked={transformOptions.trim_text}
+                    onCheckedChange={(checked) => setTransformOptions(prev => ({ ...prev, trim_text: checked }))}
+                  />
+                </div>
+              </CardContent>
+            </Card>
 
             {/* Info about dry run */}
             {dryRun && (

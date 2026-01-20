@@ -1,6 +1,10 @@
 {
   "import": {
-    "deletedCount": "Deleted {{count}} records"
+    "deletedCount": "Deleted {{count}} records",
+    "autoCorrections": "Auto-corrections",
+    "sanitizeId": "Sanitize ID (only A-Z, 0-9, ._-)",
+    "normalizePrice": "Normalize price (comma→dot)",
+    "trimText": "Trim whitespace"
   },
   "analytics": {
     "description": "Usage, revenue and operations statistics",
