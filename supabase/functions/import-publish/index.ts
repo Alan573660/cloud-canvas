@@ -210,37 +210,55 @@ Deno.serve(async (req) => {
     });
 
     const workerResult = await workerResponse.text();
-    console.log('[import-publish] Worker response:', workerResponse.status, workerResult);
+    console.log('[import-publish] Worker response:', workerResponse.status, workerResult.slice(0, 500));
 
     if (!workerResponse.ok) {
-      await supabaseAdmin
-        .from('import_jobs')
-        .update({ 
-          status: 'FAILED', 
-          error_message: workerResult.slice(0, 500),
-          finished_at: new Date().toISOString()
-        })
-        .eq('id', body.import_job_id);
-
       // Parse error for structured response
-      let errorResult;
+      let errorResult: Record<string, unknown>;
       try {
         errorResult = JSON.parse(workerResult);
       } catch {
         errorResult = { error: workerResult };
       }
 
+      const workerErrorMessage =
+        (errorResult.detail as string) ||
+        (errorResult.error as string) ||
+        (errorResult.message as string) ||
+        (workerResponse.status === 500
+          ? 'Worker internal error - check worker logs and configuration'
+          : workerResult);
+
+      console.error('[import-publish] Worker error:', {
+        status: workerResponse.status,
+        error_code: errorResult.error_code,
+        message: workerErrorMessage,
+        raw: workerResult.slice(0, 200),
+      });
+
+      await supabaseAdmin
+        .from('import_jobs')
+        .update({
+          status: 'FAILED',
+          error_message: String(workerErrorMessage).slice(0, 500),
+          error_code: (errorResult.error_code as string) || 'PUBLISH_ERROR',
+          finished_at: new Date().toISOString(),
+        })
+        .eq('id', body.import_job_id);
+
+      // Return 200 so UI can always parse and show the message (no blank screen)
       return new Response(
-        JSON.stringify({ 
-          ok: false, 
+        JSON.stringify({
+          ok: false,
           import_job_id: body.import_job_id,
-          error: errorResult.detail || errorResult.error || workerResult,
-          error_code: errorResult.error_code || 'PUBLISH_ERROR',
-          ...errorResult 
+          error: workerErrorMessage,
+          error_code: (errorResult.error_code as string) || 'PUBLISH_ERROR',
+          message: `Worker returned ${workerResponse.status}: ${String(workerErrorMessage).slice(0, 200)}`,
+          ...errorResult,
         }),
-        { 
-          status: workerResponse.status, 
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         }
       );
     }
