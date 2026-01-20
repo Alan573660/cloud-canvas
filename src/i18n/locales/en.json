@@ -531,7 +531,21 @@
       "validating": "Validating",
       "applying": "Applying",
       "done": "Done"
-    }
+    },
+    "mappingRequired": "Column mapping required",
+    "mappingDescription": "System couldn't detect required columns. Please map them manually.",
+    "mappingAutoHint": "Upload CSV/XLSX in any column order — system recognizes automatically. If not recognized, you map columns once.",
+    "detectedColumns": "Detected columns",
+    "requiredFields": "Required fields",
+    "optionalFields": "Optional fields",
+    "selectColumn": "Select column",
+    "skip": "Skip",
+    "notMapped": "Not mapped",
+    "suggestions": "Suggestions",
+    "continueMapping": "Continue",
+    "fillRequiredFields": "Map all required fields",
+    "columnMappingStep": "Column Mapping",
+    "mappingHint": "Select which file column corresponds to each catalog field"
   },
   "settings": {
     "title": "Settings",
