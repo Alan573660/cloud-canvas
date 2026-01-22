@@ -263,11 +263,11 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Update job status to DONE
+    // Update job status to COMPLETED (DB constraint allows only specific statuses)
     await supabaseAdmin
       .from('import_jobs')
       .update({ 
-        status: 'DONE',
+        status: 'COMPLETED',
         finished_at: new Date().toISOString()
       })
       .eq('id', body.import_job_id);
@@ -286,7 +286,7 @@ Deno.serve(async (req) => {
       JSON.stringify({ 
         ok: true, 
         import_job_id: body.import_job_id,
-        status: 'DONE',
+        status: 'COMPLETED',
         ...result 
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

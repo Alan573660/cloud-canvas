@@ -107,14 +107,14 @@ export function CatalogStatsCards() {
       bgColor: 'bg-violet-50 dark:bg-violet-950/20',
     },
     {
-      icon: lastImport?.status === 'DONE' ? History : lastImport?.status === 'FAILED' ? AlertTriangle : TrendingUp,
+      icon: lastImport?.status === 'COMPLETED' ? History : lastImport?.status === 'FAILED' ? AlertTriangle : TrendingUp,
       label: t('catalog.lastImport', 'Последний импорт'),
       value: lastImport 
         ? formatDistanceToNow(new Date(lastImport.created_at), { addSuffix: true, locale: dateLocale })
         : t('catalog.noImports', 'Нет'),
       subValue: lastImport?.invalid_rows && lastImport.invalid_rows > 0 
         ? `${lastImport.invalid_rows} ${t('catalog.errors', 'ошибок')}`
-        : lastImport?.status === 'DONE' 
+        : lastImport?.status === 'COMPLETED' 
           ? t('catalog.success', 'успешно')
           : lastImport?.status === 'FAILED'
             ? t('catalog.failed', 'ошибка')
