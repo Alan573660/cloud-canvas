@@ -305,10 +305,10 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Success - update job status
+    // Success - update job status to VALIDATED (DB constraint allows only specific statuses)
     await supabaseAdmin
       .from('import_jobs')
-      .update({ status: 'QUEUED' }) // Ready for publish
+      .update({ status: 'VALIDATED' }) // Ready for publish
       .eq('id', body.import_job_id)
       .eq('status', 'VALIDATING'); // Only if still validating
 

@@ -359,12 +359,13 @@ export function ImportTab() {
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case 'DONE':
+      case 'COMPLETED':
         return <CheckCircle className="h-4 w-4 text-green-600" />;
       case 'FAILED':
         return <AlertCircle className="h-4 w-4 text-red-600" />;
       case 'QUEUED':
       case 'VALIDATING':
+      case 'VALIDATED':
       case 'APPLYING':
         return <Loader2 className="h-4 w-4 text-amber-600 animate-spin" />;
       default:
@@ -374,10 +375,11 @@ export function ImportTab() {
 
   const getStatusVariant = (status: string): 'success' | 'error' | 'warning' | 'default' => {
     switch (status) {
-      case 'DONE': return 'success';
+      case 'COMPLETED': return 'success';
       case 'FAILED': return 'error';
       case 'QUEUED':
       case 'VALIDATING':
+      case 'VALIDATED':
       case 'APPLYING': return 'warning';
       default: return 'default';
     }
