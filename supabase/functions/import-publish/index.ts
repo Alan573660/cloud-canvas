@@ -125,7 +125,7 @@ Deno.serve(async (req) => {
     // Update import job status to APPLYING
     const { error: updateError } = await supabaseAdmin
       .from('import_jobs')
-      .update({ status: 'APPLYING' })
+      .update({ status: 'APPLYING', started_at: new Date().toISOString() })
       .eq('id', body.import_job_id)
       .eq('organization_id', body.organization_id);
 
@@ -199,97 +199,50 @@ Deno.serve(async (req) => {
       workerPayload.options = body.options;
     }
 
-    // Call Cloud Run Import Worker with shared secret
-    const workerResponse = await fetch(`${IMPORT_WORKER_URL}/api/import/publish`, {
+    // ASYNC FIRE-AND-FORGET: Call Cloud Run Import Worker
+    // Worker will update import_jobs.status directly when done (COMPLETED/FAILED)
+    // This prevents Edge Function timeout on large files (70k+ rows)
+    fetch(`${IMPORT_WORKER_URL}/api/import/publish`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
         'X-Import-Secret': IMPORT_SHARED_SECRET 
       },
       body: JSON.stringify(workerPayload),
-    });
-
-    const workerResult = await workerResponse.text();
-    console.log('[import-publish] Worker response:', workerResponse.status, workerResult.slice(0, 500));
-
-    if (!workerResponse.ok) {
-      // Parse error for structured response
-      let errorResult: Record<string, unknown>;
-      try {
-        errorResult = JSON.parse(workerResult);
-      } catch {
-        errorResult = { error: workerResult };
+    }).then(async (workerResponse) => {
+      const workerResult = await workerResponse.text();
+      console.log('[import-publish] Worker async response:', workerResponse.status, workerResult.slice(0, 500));
+      
+      // Worker should update status itself, but log if there's an issue
+      if (!workerResponse.ok) {
+        console.error('[import-publish] Worker async error:', workerResponse.status, workerResult.slice(0, 200));
       }
-
-      const workerErrorMessage =
-        (errorResult.detail as string) ||
-        (errorResult.error as string) ||
-        (errorResult.message as string) ||
-        (workerResponse.status === 500
-          ? 'Worker internal error - check worker logs and configuration'
-          : workerResult);
-
-      console.error('[import-publish] Worker error:', {
-        status: workerResponse.status,
-        error_code: errorResult.error_code,
-        message: workerErrorMessage,
-        raw: workerResult.slice(0, 200),
-      });
-
-      await supabaseAdmin
+    }).catch((err) => {
+      console.error('[import-publish] Worker async fetch error:', err);
+      // Attempt to mark job as failed if worker call completely failed
+      supabaseAdmin
         .from('import_jobs')
         .update({
           status: 'FAILED',
-          error_message: String(workerErrorMessage).slice(0, 500),
-          error_code: (errorResult.error_code as string) || 'PUBLISH_ERROR',
+          error_message: `Worker unreachable: ${err.message}`,
+          error_code: 'WORKER_UNREACHABLE',
           finished_at: new Date().toISOString(),
         })
-        .eq('id', body.import_job_id);
+        .eq('id', body.import_job_id)
+        .then(() => {});
+    });
 
-      // Return 200 so UI can always parse and show the message (no blank screen)
-      return new Response(
-        JSON.stringify({
-          ok: false,
-          import_job_id: body.import_job_id,
-          error: workerErrorMessage,
-          error_code: (errorResult.error_code as string) || 'PUBLISH_ERROR',
-          message: `Worker returned ${workerResponse.status}: ${String(workerErrorMessage).slice(0, 200)}`,
-          ...errorResult,
-        }),
-        {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
-      );
-    }
+    console.log('[import-publish] Worker call dispatched (async), returning immediately');
 
-    // Update job status to COMPLETED (DB constraint allows only specific statuses)
-    await supabaseAdmin
-      .from('import_jobs')
-      .update({ 
-        status: 'COMPLETED',
-        finished_at: new Date().toISOString()
-      })
-      .eq('id', body.import_job_id);
-
-    // Parse worker result
-    let result;
-    try {
-      result = JSON.parse(workerResult);
-    } catch {
-      result = { message: workerResult };
-    }
-
-    console.log('[import-publish] Success, import job completed');
-
+    // Return immediately - UI will poll import_jobs.status
     return new Response(
       JSON.stringify({ 
         ok: true, 
         import_job_id: body.import_job_id,
-        status: 'COMPLETED',
-        ...result 
+        status: 'APPLYING',
+        message: 'Import started. Processing in background. Poll import_jobs for status updates.'
       }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { status: 202, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
   } catch (error) {

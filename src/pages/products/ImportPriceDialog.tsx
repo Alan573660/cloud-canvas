@@ -276,7 +276,29 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     },
   });
 
-  // Publish mutation - calls Edge Function gateway
+  // Poll for job completion (async publish)
+  const pollJobStatus = async (jobId: string, maxAttempts = 120): Promise<'COMPLETED' | 'FAILED'> => {
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise(resolve => setTimeout(resolve, 3000)); // Poll every 3 seconds
+      
+      const { data: job } = await supabase
+        .from('import_jobs')
+        .select('status, error_message, error_code')
+        .eq('id', jobId)
+        .single();
+      
+      if (job?.status === 'COMPLETED') {
+        return 'COMPLETED';
+      }
+      if (job?.status === 'FAILED') {
+        throw new Error(job.error_message || 'Import failed');
+      }
+      // Continue polling for APPLYING status
+    }
+    throw new Error('Import timeout - job did not complete in time');
+  };
+
+  // Publish mutation - calls Edge Function gateway (async)
   const publishMutation = useMutation({
     mutationFn: async () => {
       if (!profile?.organization_id || !createdJob) throw new Error('Invalid state');
@@ -284,6 +306,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
       setStep('publishing');
 
       // Call Edge Function gateway with mapping and transform options
+      // Note: Edge function returns 202 immediately, worker processes async
       const { data, error } = await supabase.functions.invoke(ImportGatewayApi.publish, {
         body: {
           organization_id: profile.organization_id,
@@ -303,12 +326,16 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
         throw new Error(error.message || 'Publish failed');
       }
 
-      // Check for error in response body
-      if (data?.error) {
+      // Check for immediate error in response body
+      if (data?.ok === false && data?.error) {
         throw new Error(data.error);
       }
 
-      console.info('[ImportPriceDialog] Publish result:', data);
+      console.info('[ImportPriceDialog] Publish dispatched (async):', data);
+      
+      // Poll for completion since worker runs async
+      await pollJobStatus(createdJob.id);
+      
       return data;
     },
     onSuccess: () => {
