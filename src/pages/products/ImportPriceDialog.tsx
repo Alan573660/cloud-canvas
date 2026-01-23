@@ -286,13 +286,14 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
   });
 
   // Poll for job completion (async publish)
-  const pollJobStatus = async (jobId: string, maxAttempts = 120): Promise<'COMPLETED' | 'FAILED'> => {
+  // For large files (70k+ rows), BigQuery load can take 10-15 minutes
+  const pollJobStatus = async (jobId: string, maxAttempts = 300): Promise<'COMPLETED' | 'FAILED'> => {
     for (let i = 0; i < maxAttempts; i++) {
       await new Promise(resolve => setTimeout(resolve, 3000)); // Poll every 3 seconds
       
       const { data: job } = await supabase
         .from('import_jobs')
-        .select('status, error_message, error_code')
+        .select('status, error_message, error_code, summary')
         .eq('id', jobId)
         .single();
       
@@ -302,9 +303,19 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
       if (job?.status === 'FAILED') {
         throw new Error(job.error_message || 'Import failed');
       }
+      
+      // Log progress for debugging (every 10 polls = 30 sec)
+      if (i > 0 && i % 10 === 0) {
+        const summary = job?.summary as Record<string, unknown> | null;
+        const stage = summary?.stage || 'processing';
+        const progress = summary?.progress || 0;
+        console.info(`[ImportPriceDialog] Polling ${i}/${maxAttempts}: status=${job?.status}, stage=${stage}, progress=${progress}%`);
+      }
+      
       // Continue polling for APPLYING status
     }
-    throw new Error('Import timeout - job did not complete in time');
+    // 300 attempts × 3s = 15 minutes max
+    throw new Error('Import timeout - job did not complete in 15 minutes. Check Import tab for status.');
   };
 
   // Publish mutation - calls Edge Function gateway (async)
@@ -358,8 +369,22 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
       onSuccess?.();
     },
     onError: async (error) => {
+      const errorMsg = error instanceof Error ? error.message : 'Publish failed';
       console.error('[ImportPriceDialog] Publish failed:', error);
-      setErrorMessage(error instanceof Error ? error.message : 'Publish failed');
+      
+      // If it's a timeout, don't show error - the job may still be running in background
+      // User can track progress via ActiveImportBanner
+      if (errorMsg.includes('timeout') || errorMsg.includes('15 minutes')) {
+        toast({
+          title: t('import.publishInProgress', 'Импорт выполняется'),
+          description: t('import.publishInProgressDesc', 'Обработка большого файла занимает время. Прогресс отображается в баннере вверху страницы.'),
+        });
+        onOpenChange(false); // Close dialog gracefully
+        queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
+        return;
+      }
+      
+      setErrorMessage(errorMsg);
       setStep('error');
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
     },
