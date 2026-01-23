@@ -570,9 +570,13 @@
       "failed": "Failed",
       "queued": "Queued",
       "validating": "Validating",
+      "validated": "Validated",
       "applying": "Applying",
+      "applyingLong": "Processing large file",
       "done": "Done"
     },
+    "rows": "rows",
+    "largeFileHint": "large file, this may take several minutes",
     "mappingRequired": "Column mapping required",
     "mappingDescription": "System couldn't detect required columns. Please map them manually.",
     "mappingAutoHint": "Upload CSV/XLSX in any column order — system recognizes automatically. If not recognized, you map columns once.",

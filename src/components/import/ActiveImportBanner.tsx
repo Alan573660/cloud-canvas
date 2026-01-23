@@ -24,6 +24,7 @@ export function ActiveImportBanner({ onNavigateToImport, className }: ActiveImpo
     isInProgress, 
     isCompleted, 
     isFailed, 
+    isApplyingLong,
     clearActiveJob,
     getStepInfo 
   } = useActiveImportJob();
@@ -46,7 +47,12 @@ export function ActiveImportBanner({ onNavigateToImport, className }: ActiveImpo
       case 'QUEUED': return t('import.status.queued', 'Подготовка...');
       case 'VALIDATING': return t('import.status.validating', 'Проверка файла...');
       case 'VALIDATED': return t('import.status.validated', 'Файл проверен');
-      case 'APPLYING': return t('import.status.applying', 'Применение изменений...');
+      case 'APPLYING': 
+        // Show longer message if applying takes time (large files)
+        if (isApplyingLong) {
+          return t('import.status.applyingLong', 'Обработка большого файла...');
+        }
+        return t('import.status.applying', 'Применение изменений...');
       case 'COMPLETED': return t('import.status.completed', 'Импорт завершён');
       case 'FAILED': return t('import.status.failed', 'Ошибка импорта');
       default: return activeJob.status;
@@ -92,8 +98,16 @@ export function ActiveImportBanner({ onNavigateToImport, className }: ActiveImpo
               <div className="flex justify-between text-xs text-muted-foreground">
                 <span>
                   {stepInfo.steps[stepInfo.currentIdx]?.label || ''}
+                  {isApplyingLong && (
+                    <span className="ml-2 text-amber-600">
+                      ({t('import.largeFileHint', 'большой файл, это может занять несколько минут')})
+                    </span>
+                  )}
                 </span>
                 <span>
+                  {activeJob.total_rows > 0 && (
+                    <span className="mr-2">{activeJob.total_rows.toLocaleString()} {t('import.rows', 'строк')}</span>
+                  )}
                   {Math.round(stepInfo.progress)}%
                 </span>
               </div>

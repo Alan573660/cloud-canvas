@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 
 const STORAGE_KEY = 'active_import_job_id';
 const POLL_INTERVAL = 3000; // 3 seconds
+const APPLYING_LONG_THRESHOLD_MS = 60000; // 1 minute - consider "long" if applying takes more
 
 export interface ActiveImportJob {
   id: string;
@@ -101,6 +102,11 @@ export function useActiveImportJob() {
   const isInProgress = activeJob ? IN_PROGRESS_STATUSES.includes(activeJob.status) : false;
   const isCompleted = activeJob?.status === 'COMPLETED';
   const isFailed = activeJob?.status === 'FAILED';
+  
+  // Check if APPLYING is taking longer than expected (for large files)
+  const isApplyingLong = activeJob?.status === 'APPLYING' && activeJob.created_at
+    ? (Date.now() - new Date(activeJob.created_at).getTime()) > APPLYING_LONG_THRESHOLD_MS
+    : false;
 
   // Get step info for UI
   const getStepInfo = useCallback(() => {
@@ -133,6 +139,7 @@ export function useActiveImportJob() {
     isInProgress,
     isCompleted,
     isFailed,
+    isApplyingLong,
     setActiveJobId,
     clearActiveJob,
     getStepInfo,
