@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { 
@@ -31,6 +31,7 @@ import {
   type FileFormat 
 } from '@/lib/backend';
 import { ColumnMappingStep, REQUIRED_FIELDS, type ColumnMapping } from './ColumnMappingStep';
+import { useActiveImportJob } from '@/hooks/use-active-import';
 
 interface ImportPriceDialogProps {
   open: boolean;
@@ -78,6 +79,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
   const { t } = useTranslation();
   const { profile } = useAuth();
   const queryClient = useQueryClient();
+  const { setActiveJobId } = useActiveImportJob();
 
   const [file, setFile] = useState<File | null>(null);
   const [dryRun, setDryRun] = useState(false);
@@ -102,6 +104,13 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
   const [suggestions, setSuggestions] = useState<Record<string, string[]>>({});
   const [validationStats, setValidationStats] = useState<ValidationStats | null>(null);
   const [columnMapping, setColumnMapping] = useState<ColumnMapping>({});
+
+  // Save job ID to localStorage when created
+  useEffect(() => {
+    if (createdJob?.id) {
+      setActiveJobId(createdJob.id);
+    }
+  }, [createdJob?.id, setActiveJobId]);
 
   // Create import job and upload file mutation
   const createJobMutation = useMutation({

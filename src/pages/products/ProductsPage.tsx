@@ -12,10 +12,13 @@ import { ImportTab } from './ImportTab';
 import { PriceQuoteDialog } from './PriceQuoteDialog';
 import { DiscountRuleDialog } from './DiscountRuleDialog';
 import { ImportPriceDialog } from './ImportPriceDialog';
+import { ActiveImportBanner } from '@/components/import/ActiveImportBanner';
+import { useActiveImportJob } from '@/hooks/use-active-import';
 
 export default function ProductsPage() {
   const { t } = useTranslation();
   const { profile } = useAuth();
+  const { isInProgress } = useActiveImportJob();
 
   const [activeTab, setActiveTab] = useState('products');
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -24,8 +27,17 @@ export default function ProductsPage() {
 
   const canManageDiscounts = profile?.role === 'owner' || profile?.role === 'admin';
 
+  const handleNavigateToImport = () => {
+    setActiveTab('import');
+  };
+
   return (
     <div className="space-y-6">
+      {/* Active Import Banner */}
+      <ActiveImportBanner 
+        onNavigateToImport={handleNavigateToImport}
+      />
+
       {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
         <div>
@@ -65,7 +77,12 @@ export default function ProductsPage() {
               {canManageDiscounts && (
                 <TabsTrigger value="discounts">{t('products.discounts')}</TabsTrigger>
               )}
-              <TabsTrigger value="import">{t('catalog.importTab', 'Импорт')}</TabsTrigger>
+              <TabsTrigger value="import" className="relative">
+                {t('catalog.importTab', 'Импорт')}
+                {isInProgress && (
+                  <span className="absolute -top-1 -right-1 w-2 h-2 bg-primary rounded-full animate-pulse" />
+                )}
+              </TabsTrigger>
               <TabsTrigger value="pricing">{t('catalog.pricingTab', 'Проверка цены')}</TabsTrigger>
             </TabsList>
 
