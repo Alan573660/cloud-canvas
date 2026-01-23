@@ -25,7 +25,20 @@
     "noColumnsDetected": "Could not recognize headers. Make sure the first row contains column names.",
     "foundColumns": "Found {{count}} columns",
     "selectMappings": "Select mappings for catalog fields",
-    "requiredFieldMissing": "Required field"
+    "requiredFieldMissing": "Required field",
+    "status": {
+      "queued": "Preparing...",
+      "validating": "Validating file...",
+      "validated": "File validated",
+      "applying": "Applying changes...",
+      "completed": "Import completed",
+      "failed": "Import failed"
+    },
+    "inserted": "inserted",
+    "updated": "updated",
+    "total": "total",
+    "viewDetails": "View details",
+    "inProgress": "Import in progress"
   },
   "analytics": {
     "description": "Usage, revenue and operations statistics",

@@ -51,6 +51,9 @@ import {
 } from '@/components/ui/accordion';
 import { ImportPriceDialog } from './ImportPriceDialog';
 import { StagingRowEditor } from './StagingRowEditor';
+import { ActiveImportBanner } from '@/components/import/ActiveImportBanner';
+import { ImportStepIndicator } from '@/components/import/ImportStepIndicator';
+import { useActiveImportJob } from '@/hooks/use-active-import';
 
 interface ImportJob {
   id: string;
@@ -411,6 +414,9 @@ export function ImportTab() {
 
   return (
     <div className="space-y-6">
+      {/* Active Import Progress */}
+      <ActiveImportBanner className="mb-2" />
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
