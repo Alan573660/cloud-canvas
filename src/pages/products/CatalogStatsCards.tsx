@@ -7,32 +7,38 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatDistanceToNow } from 'date-fns';
 import { ru, enUS } from 'date-fns/locale';
+import { fetchCatalogFacets } from '@/lib/catalog-api';
 
 export function CatalogStatsCards() {
   const { t, i18n } = useTranslation();
   const { profile } = useAuth();
   const dateLocale = i18n.language === 'ru' ? ru : enUS;
 
-  // Products stats
+  // Products stats from BigQuery API (total) + Supabase (overrides count)
   const { data: productStats, isLoading: loadingProducts } = useQuery({
     queryKey: ['catalog-stats-products', profile?.organization_id],
     queryFn: async () => {
-      if (!profile?.organization_id) return { total: 0, active: 0 };
+      if (!profile?.organization_id) return { total: 0, inactive: 0 };
       
-      const { count: total } = await supabase
-        .from('product_catalog')
-        .select('*', { count: 'exact', head: true })
-        .eq('organization_id', profile.organization_id);
-
-      const { count: active } = await supabase
+      // Get total from BigQuery via Catalog API facets
+      const facets = await fetchCatalogFacets({ organization_id: profile.organization_id });
+      const total = facets.total;
+      
+      // Count inactive overrides in Supabase (is_active=false)
+      const { count: inactiveCount } = await supabase
         .from('product_catalog')
         .select('*', { count: 'exact', head: true })
         .eq('organization_id', profile.organization_id)
-        .eq('is_active', true);
+        .eq('is_active', false);
 
-      return { total: total || 0, active: active || 0 };
+      return { 
+        total, 
+        inactive: inactiveCount || 0,
+        active: total - (inactiveCount || 0),
+      };
     },
     enabled: !!profile?.organization_id,
+    staleTime: 60_000, // 1 minute
   });
 
   // Discounts stats
@@ -83,17 +89,17 @@ export function CatalogStatsCards() {
     {
       icon: PackageCheck,
       label: t('catalog.activeProducts', 'Активные товары'),
-      value: productStats?.active ?? 0,
-      subValue: `${t('catalog.ofTotal', 'из')} ${productStats?.total ?? 0}`,
+      value: productStats?.active?.toLocaleString('ru-RU') ?? 0,
+      subValue: `${t('catalog.ofTotal', 'из')} ${productStats?.total?.toLocaleString('ru-RU') ?? 0}`,
       color: 'text-emerald-600',
       bgColor: 'bg-emerald-50 dark:bg-emerald-950/20',
     },
     {
       icon: Package,
       label: t('catalog.totalProducts', 'Всего товаров'),
-      value: productStats?.total ?? 0,
-      subValue: productStats?.active !== productStats?.total 
-        ? `${productStats?.total ? productStats.total - (productStats.active || 0) : 0} ${t('catalog.inactive', 'неактивн.')}`
+      value: productStats?.total?.toLocaleString('ru-RU') ?? 0,
+      subValue: productStats?.inactive 
+        ? `${productStats.inactive} ${t('catalog.inactive', 'неактивн.')}`
         : t('catalog.allActive', 'все активны'),
       color: 'text-blue-600',
       bgColor: 'bg-blue-50 dark:bg-blue-950/20',

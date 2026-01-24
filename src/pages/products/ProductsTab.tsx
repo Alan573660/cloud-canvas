@@ -242,7 +242,7 @@ export function ProductsTab() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t('common.all')}</SelectItem>
-              {facets?.cat_names.map((c) => (
+              {facets?.categories.map((c) => (
                 <SelectItem key={c} value={c}>{c}</SelectItem>
               ))}
             </SelectContent>
