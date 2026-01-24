@@ -40,23 +40,24 @@ interface LegacyProduct {
   updated_at: string;
 }
 
+// Map new BigQuery item to legacy format for existing dialogs
 function toLegacyProduct(item: CatalogItemWithOverrides): LegacyProduct {
   return {
-    id: item.bq_id,
-    sku: item.sku,
+    id: item.id,
+    sku: item.id, // Use id as SKU
     title: item.title,
-    profile: item.profile,
-    coating: item.coating,
-    thickness_mm: item.thickness_mm,
-    width_work_mm: item.width_work_mm,
-    width_full_mm: item.width_full_mm,
-    weight_kg_m2: item.weight_kg_m2,
-    base_price_rub_m2: item.base_price_rub_m2,
+    profile: item.cat_name, // cat_name is the category/profile
+    coating: null, // Not in new API
+    thickness_mm: null, // Not in new API
+    width_work_mm: null, // Not in new API
+    width_full_mm: null, // Not in new API
+    weight_kg_m2: null, // Not in new API
+    base_price_rub_m2: item.price_rub_m2,
     is_active: item.is_active,
-    notes: item.notes,
-    bq_key: item.bq_id,
-    created_at: item.created_at,
-    updated_at: item.updated_at,
+    notes: null, // Not in new API
+    bq_key: item.id,
+    created_at: '', // Not in new API
+    updated_at: '', // Not in new API
   };
 }
 
@@ -67,10 +68,9 @@ export function ProductsTab() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(15);
 
-  // Filters
-  const [profileFilter, setProfileFilter] = useState<string>('all');
-  const [thicknessFilter, setThicknessFilter] = useState<string>('all');
-  const [coatingFilter, setCoatingFilter] = useState<string>('all');
+  // Filters - adapted to new API fields
+  const [unitFilter, setUnitFilter] = useState<string>('all');
+  const [catNameFilter, setCatNameFilter] = useState<string>('all');
   const [activeFilter, setActiveFilter] = useState<string>('all');
 
   // Dialog states
@@ -83,13 +83,11 @@ export function ProductsTab() {
   // BigQuery API hooks
   const { facets, isLoading: facetsLoading } = useCatalogFacets();
   const { items, totalCount, isLoading } = useCatalogItems({
-    search: search || undefined,
+    q: search || undefined,
     page,
     pageSize,
-    profile: profileFilter !== 'all' ? profileFilter : undefined,
-    coating: coatingFilter !== 'all' ? coatingFilter : undefined,
-    thickness: thicknessFilter !== 'all' ? parseFloat(thicknessFilter) : undefined,
-    isActive: activeFilter !== 'all' ? activeFilter === 'true' : undefined,
+    unit: unitFilter !== 'all' ? unitFilter : undefined,
+    catName: catNameFilter !== 'all' ? catNameFilter : undefined,
   });
 
   const toggleActiveMutation = useToggleProductActive();
@@ -129,40 +127,30 @@ export function ProductsTab() {
       cell: (row) => (
         <div className="min-w-[200px]">
           <p className="font-medium truncate">{row.title || t('catalog.noTitle', 'Без названия')}</p>
-          <p className="text-xs text-muted-foreground font-mono">{row.sku || '—'}</p>
+          <p className="text-xs text-muted-foreground font-mono">{row.id || '—'}</p>
         </div>
       ),
     },
     {
-      key: 'profile',
-      header: t('products.profile'),
+      key: 'cat_name',
+      header: t('products.category', 'Категория'),
       cell: (row) => (
         <Badge variant="outline" className="font-mono">
-          {row.profile || '—'}
+          {row.cat_name || '—'}
         </Badge>
       ),
     },
     {
-      key: 'thickness_mm',
-      header: t('products.thickness'),
-      cell: (row) => row.thickness_mm ? `${row.thickness_mm} ${t('catalog.mm', 'мм')}` : '—',
+      key: 'unit',
+      header: t('products.unit', 'Ед.'),
+      cell: (row) => row.unit || '—',
     },
     {
-      key: 'coating',
-      header: t('products.coating'),
-      cell: (row) => row.coating || '—',
-    },
-    {
-      key: 'width_work_mm',
-      header: t('products.widthWork'),
-      cell: (row) => row.width_work_mm ? `${row.width_work_mm} ${t('catalog.mm', 'мм')}` : '—',
-    },
-    {
-      key: 'base_price_rub_m2',
+      key: 'price_rub_m2',
       header: t('products.basePrice'),
       cell: (row) => (
         <span className="font-semibold text-primary">
-          {formatCurrency(row.base_price_rub_m2)}/м²
+          {formatCurrency(row.price_rub_m2)}/м²
         </span>
       ),
     },
@@ -173,7 +161,7 @@ export function ProductsTab() {
         <Switch
           checked={row.is_active}
           onCheckedChange={(checked) => 
-            toggleActiveMutation.mutate({ bqId: row.bq_id, isActive: checked })
+            toggleActiveMutation.mutate({ bqKey: row.id, isActive: checked })
           }
           disabled={toggleActiveMutation.isPending}
         />
@@ -233,60 +221,44 @@ export function ProductsTab() {
   ];
 
   const clearFilters = () => {
-    setProfileFilter('all');
-    setThicknessFilter('all');
-    setCoatingFilter('all');
+    setUnitFilter('all');
+    setCatNameFilter('all');
     setActiveFilter('all');
     setSearch('');
     setPage(1);
   };
 
-  const hasActiveFilters = profileFilter !== 'all' || thicknessFilter !== 'all' || coatingFilter !== 'all' || activeFilter !== 'all' || search !== '';
+  const hasActiveFilters = unitFilter !== 'all' || catNameFilter !== 'all' || activeFilter !== 'all' || search !== '';
 
   return (
     <div className="space-y-4">
       {/* Filters */}
       <div className="flex flex-wrap gap-3 p-4 bg-muted/30 rounded-lg border">
         <div className="flex flex-col gap-1">
-          <Label className="text-xs text-muted-foreground">{t('products.profile')}</Label>
-          <Select value={profileFilter} onValueChange={setProfileFilter}>
-            <SelectTrigger className="w-[140px] h-9">
+          <Label className="text-xs text-muted-foreground">{t('products.category', 'Категория')}</Label>
+          <Select value={catNameFilter} onValueChange={setCatNameFilter}>
+            <SelectTrigger className="w-[180px] h-9">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t('common.all')}</SelectItem>
-              {facets?.profiles.map((p) => (
-                <SelectItem key={p} value={p}>{p}</SelectItem>
+              {facets?.cat_names.map((c) => (
+                <SelectItem key={c} value={c}>{c}</SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
 
         <div className="flex flex-col gap-1">
-          <Label className="text-xs text-muted-foreground">{t('products.thickness')}</Label>
-          <Select value={thicknessFilter} onValueChange={setThicknessFilter}>
+          <Label className="text-xs text-muted-foreground">{t('products.unit', 'Единица')}</Label>
+          <Select value={unitFilter} onValueChange={setUnitFilter}>
             <SelectTrigger className="w-[120px] h-9">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t('common.all')}</SelectItem>
-              {facets?.thicknesses.map((th) => (
-                <SelectItem key={th} value={String(th)}>{th} мм</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="flex flex-col gap-1">
-          <Label className="text-xs text-muted-foreground">{t('products.coating')}</Label>
-          <Select value={coatingFilter} onValueChange={setCoatingFilter}>
-            <SelectTrigger className="w-[140px] h-9">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">{t('common.all')}</SelectItem>
-              {facets?.coatings.map((c) => (
-                <SelectItem key={c} value={c}>{c}</SelectItem>
+              {facets?.units.map((u) => (
+                <SelectItem key={u} value={u}>{u}</SelectItem>
               ))}
             </SelectContent>
           </Select>

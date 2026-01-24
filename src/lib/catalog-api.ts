@@ -6,31 +6,23 @@
  */
 
 // Cloud Run API base URL (pricing-api-saas)
-const CATALOG_API_BASE = import.meta.env.VITE_CATALOG_API_URL || 'https://pricing-api-saas-XXXXX.run.app';
+const CATALOG_API_BASE = import.meta.env.VITE_CATALOG_API_URL || 'https://pricing-api-saas-37830921583.us-central1.run.app';
 
 // ============= Types =============
 
+/** Raw item from BigQuery API */
 export interface CatalogItem {
-  bq_id: string;           // BigQuery primary key
-  sku: string | null;
+  id: string;              // BigQuery primary key (bq_key)
   title: string | null;
-  profile: string | null;
-  coating: string | null;
-  thickness_mm: number | null;
-  width_work_mm: number | null;
-  width_full_mm: number | null;
-  weight_kg_m2: number | null;
-  base_price_rub_m2: number;
+  cat_name: string | null; // Category name (profile equivalent)
+  cat_tree: string | null; // Full category path
   unit: string | null;
-  currency: string | null;
-  notes: string | null;
-  created_at: string;
-  updated_at: string;
+  cur: string | null;      // Currency
+  price_rub_m2: number;    // Base price
 }
 
+/** Item with Supabase overrides merged */
 export interface CatalogItemWithOverrides extends CatalogItem {
-  // Required for DataTable compatibility
-  id: string;
   // Overrides from Supabase
   is_active: boolean;
   pinned: boolean;
@@ -40,28 +32,23 @@ export interface CatalogItemWithOverrides extends CatalogItem {
 }
 
 export interface CatalogFacets {
-  profiles: string[];
-  coatings: string[];
-  thicknesses: number[];
+  units: string[];
+  cat_names: string[];
 }
 
 export interface CatalogItemsRequest {
   organization_id: string;
-  page?: number;
-  page_size?: number;
-  search?: string;
-  profile?: string;
-  coating?: string;
-  thickness_mm?: number;
-  is_active?: boolean;
+  limit?: number;
+  offset?: number;
+  q?: string;              // Search query
+  unit?: string;
+  cat_name?: string;
+  sort?: string;
 }
 
 export interface CatalogItemsResponse {
   items: CatalogItem[];
-  total_count: number;
-  page: number;
-  page_size: number;
-  has_next: boolean;
+  total: number;
 }
 
 export interface CatalogFacetsRequest {
@@ -79,13 +66,12 @@ export async function fetchCatalogItems(
   const url = new URL(`${CATALOG_API_BASE}/api/catalog/items`);
   
   url.searchParams.set('organization_id', params.organization_id);
-  if (params.page) url.searchParams.set('page', String(params.page));
-  if (params.page_size) url.searchParams.set('page_size', String(params.page_size));
-  if (params.search) url.searchParams.set('search', params.search);
-  if (params.profile) url.searchParams.set('profile', params.profile);
-  if (params.coating) url.searchParams.set('coating', params.coating);
-  if (params.thickness_mm !== undefined) url.searchParams.set('thickness_mm', String(params.thickness_mm));
-  if (params.is_active !== undefined) url.searchParams.set('is_active', String(params.is_active));
+  if (params.limit) url.searchParams.set('limit', String(params.limit));
+  if (params.offset !== undefined) url.searchParams.set('offset', String(params.offset));
+  if (params.q) url.searchParams.set('q', params.q);
+  if (params.unit) url.searchParams.set('unit', params.unit);
+  if (params.cat_name) url.searchParams.set('cat_name', params.cat_name);
+  if (params.sort) url.searchParams.set('sort', params.sort);
 
   const response = await fetch(url.toString(), {
     method: 'GET',
@@ -129,7 +115,7 @@ export async function fetchCatalogFacets(
 // ============= Supabase Overrides =============
 
 export interface ProductOverride {
-  bq_id: string;
+  bq_key: string;          // Matches item.id from BQ
   is_active: boolean;
   pinned?: boolean;
   custom_name?: string | null;
@@ -139,16 +125,16 @@ export interface ProductOverride {
 
 /**
  * Merge BigQuery items with Supabase overrides
+ * Overrides are matched by product_catalog.bq_key == item.id
  */
 export function mergeWithOverrides(
   items: CatalogItem[],
   overrides: Map<string, ProductOverride>
 ): CatalogItemWithOverrides[] {
   return items.map(item => {
-    const override = overrides.get(item.bq_id);
+    const override = overrides.get(item.id); // Match by item.id (bq_key)
     return {
       ...item,
-      id: item.bq_id, // Required for DataTable
       is_active: override?.is_active ?? true, // Default to active if no override
       pinned: override?.pinned ?? false,
       custom_name: override?.custom_name ?? null,
