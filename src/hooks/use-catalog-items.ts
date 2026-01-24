@@ -162,16 +162,14 @@ export function useToggleProductActive() {
         
         if (error) throw error;
       } else {
-        // Setting to inactive = create/update override
+        // Setting to inactive = create override with ONLY required fields
+        // No sku/base_price_rub_m2 filler - those have defaults in DB
         const { error } = await supabase
           .from('product_catalog')
           .upsert({
             bq_key: bqKey,
             organization_id: profile.organization_id,
             is_active: false,
-            // Required fields - minimal values since BQ is source of truth
-            sku: `override-${bqKey.substring(0, 8)}`,
-            base_price_rub_m2: 0,
           }, {
             onConflict: 'organization_id,bq_key',
           });
