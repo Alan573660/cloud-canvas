@@ -28,9 +28,13 @@ export interface CatalogItemWithOverrides extends CatalogItem {
 }
 
 /** Facet item with count */
-export interface FacetItem {
-  unit?: string;
-  cat_name?: string;
+export interface UnitFacet {
+  unit: string;
+  cnt: number;
+}
+
+export interface CategoryFacet {
+  cat_name: string;
   cnt: number;
 }
 
@@ -38,17 +42,17 @@ export interface FacetItem {
 export interface CatalogFacetsResponse {
   ok: boolean;
   organization_id: string;
-  units: FacetItem[];
-  categories: FacetItem[];
+  units: UnitFacet[];
+  categories: CategoryFacet[];
   price_min: number;
   price_max: number;
   total: number;
 }
 
-/** Parsed facets for UI */
+/** Parsed facets for UI - preserving cnt for display */
 export interface CatalogFacets {
-  units: string[];
-  categories: string[];
+  units: UnitFacet[];
+  categories: CategoryFacet[];
   priceMin: number;
   priceMax: number;
   total: number;
@@ -130,10 +134,10 @@ export async function fetchCatalogFacets(
 
   const data: CatalogFacetsResponse = await response.json();
   
-  // Transform API response to UI-friendly format
+  // Return facets with cnt preserved for UI display
   return {
-    units: data.units.map(u => u.unit!).filter(Boolean),
-    categories: data.categories.map(c => c.cat_name!).filter(Boolean),
+    units: data.units.filter(u => u.unit),
+    categories: data.categories.filter(c => c.cat_name),
     priceMin: data.price_min,
     priceMax: data.price_max,
     total: data.total,

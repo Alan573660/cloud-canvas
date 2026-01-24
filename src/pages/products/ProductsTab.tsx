@@ -237,13 +237,15 @@ export function ProductsTab() {
         <div className="flex flex-col gap-1">
           <Label className="text-xs text-muted-foreground">{t('products.category', 'Категория')}</Label>
           <Select value={catNameFilter} onValueChange={setCatNameFilter}>
-            <SelectTrigger className="w-[180px] h-9">
+            <SelectTrigger className="w-[220px] h-9">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t('common.all')}</SelectItem>
               {facets?.categories.map((c) => (
-                <SelectItem key={c} value={c}>{c}</SelectItem>
+                <SelectItem key={c.cat_name} value={c.cat_name}>
+                  {c.cat_name} ({c.cnt.toLocaleString('ru-RU')})
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -252,13 +254,15 @@ export function ProductsTab() {
         <div className="flex flex-col gap-1">
           <Label className="text-xs text-muted-foreground">{t('products.unit', 'Единица')}</Label>
           <Select value={unitFilter} onValueChange={setUnitFilter}>
-            <SelectTrigger className="w-[120px] h-9">
+            <SelectTrigger className="w-[140px] h-9">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t('common.all')}</SelectItem>
               {facets?.units.map((u) => (
-                <SelectItem key={u} value={u}>{u}</SelectItem>
+                <SelectItem key={u.unit} value={u.unit}>
+                  {u.unit} ({u.cnt.toLocaleString('ru-RU')})
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
