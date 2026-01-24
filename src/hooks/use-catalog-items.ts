@@ -1,5 +1,8 @@
 /**
  * React Query hook for BigQuery Catalog API with Supabase overrides
+ * 
+ * IMPORTANT: Supabase product_catalog is used ONLY for overrides.
+ * We do NOT create 71k rows - only store explicit is_active=false overrides.
  */
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
@@ -42,7 +45,7 @@ export function useCatalogItems(params: UseCatalogItemsParams): UseCatalogItemsR
   const page = params.page || 1;
   const pageSize = params.pageSize || 15;
 
-  // Fetch items from BigQuery
+  // Fetch items from BigQuery via Cloud Run API
   const itemsQuery = useQuery({
     queryKey: ['catalog-items', organizationId, params],
     queryFn: async () => {
@@ -64,8 +67,8 @@ export function useCatalogItems(params: UseCatalogItemsParams): UseCatalogItemsR
     staleTime: 30_000, // 30 seconds
   });
 
-  // Fetch overrides from Supabase for current page items
-  // Match by item.id from BQ == product_catalog.bq_key
+  // Fetch overrides from Supabase for current page items ONLY
+  // We only query items that have overrides (is_active=false)
   const bqKeys = itemsQuery.data?.items.map(i => i.id) || [];
   
   const overridesQuery = useQuery({
@@ -73,6 +76,7 @@ export function useCatalogItems(params: UseCatalogItemsParams): UseCatalogItemsR
     queryFn: async () => {
       if (!organizationId || bqKeys.length === 0) return new Map<string, ProductOverride>();
       
+      // Only fetch overrides for current page items
       const { data, error } = await supabase
         .from('product_catalog')
         .select('bq_key, is_active')
@@ -111,7 +115,6 @@ export function useCatalogItems(params: UseCatalogItemsParams): UseCatalogItemsR
 
 /**
  * Fetch facets (unique filter values) from BigQuery
- * Returns units and cat_names for filtering
  */
 export function useCatalogFacets(): { facets: CatalogFacets | null; isLoading: boolean } {
   const { profile } = useAuth();
@@ -135,7 +138,10 @@ export function useCatalogFacets(): { facets: CatalogFacets | null; isLoading: b
 
 /**
  * Toggle product is_active in Supabase overrides
- * bqKey matches item.id from BigQuery
+ * 
+ * IMPORTANT: We only store overrides, not all 71k products!
+ * - If setting is_active=false: upsert the override
+ * - If setting is_active=true: delete the override (default is active)
  */
 export function useToggleProductActive() {
   const { t } = useTranslation();
@@ -146,21 +152,32 @@ export function useToggleProductActive() {
     mutationFn: async ({ bqKey, isActive }: { bqKey: string; isActive: boolean }) => {
       if (!profile?.organization_id) throw new Error('No organization');
 
-      // Upsert override in Supabase
-      const { error } = await supabase
-        .from('product_catalog')
-        .upsert({
-          bq_key: bqKey,
-          organization_id: profile.organization_id,
-          is_active: isActive,
-          // Minimal required fields for upsert
-          sku: bqKey, // Use bq_key as sku placeholder
-          base_price_rub_m2: 0, // Will be read from BQ anyway
-        }, {
-          onConflict: 'organization_id,bq_key',
-        });
+      if (isActive) {
+        // Setting to active = remove override (default is active)
+        const { error } = await supabase
+          .from('product_catalog')
+          .delete()
+          .eq('organization_id', profile.organization_id)
+          .eq('bq_key', bqKey);
+        
+        if (error) throw error;
+      } else {
+        // Setting to inactive = create/update override
+        const { error } = await supabase
+          .from('product_catalog')
+          .upsert({
+            bq_key: bqKey,
+            organization_id: profile.organization_id,
+            is_active: false,
+            // Required fields - minimal values since BQ is source of truth
+            sku: `override-${bqKey.substring(0, 8)}`,
+            base_price_rub_m2: 0,
+          }, {
+            onConflict: 'organization_id,bq_key',
+          });
 
-      if (error) throw error;
+        if (error) throw error;
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['catalog-overrides'] });

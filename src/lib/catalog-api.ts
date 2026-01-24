@@ -14,26 +14,44 @@ const CATALOG_API_BASE = import.meta.env.VITE_CATALOG_API_URL || 'https://pricin
 export interface CatalogItem {
   id: string;              // BigQuery primary key (bq_key)
   title: string | null;
-  cat_name: string | null; // Category name (profile equivalent)
+  cat_name: string | null; // Category name
   cat_tree: string | null; // Full category path
   unit: string | null;
   cur: string | null;      // Currency
   price_rub_m2: number;    // Base price
+  updated_at?: string;
 }
 
 /** Item with Supabase overrides merged */
 export interface CatalogItemWithOverrides extends CatalogItem {
-  // Overrides from Supabase
   is_active: boolean;
-  pinned: boolean;
-  custom_name: string | null;
-  featured: boolean;
-  tags: string[] | null;
 }
 
+/** Facet item with count */
+export interface FacetItem {
+  unit?: string;
+  cat_name?: string;
+  cnt: number;
+}
+
+/** Facets response from API */
+export interface CatalogFacetsResponse {
+  ok: boolean;
+  organization_id: string;
+  units: FacetItem[];
+  categories: FacetItem[];
+  price_min: number;
+  price_max: number;
+  total: number;
+}
+
+/** Parsed facets for UI */
 export interface CatalogFacets {
   units: string[];
-  cat_names: string[];
+  categories: string[];
+  priceMin: number;
+  priceMax: number;
+  total: number;
 }
 
 export interface CatalogItemsRequest {
@@ -47,6 +65,7 @@ export interface CatalogItemsRequest {
 }
 
 export interface CatalogItemsResponse {
+  ok: boolean;
   items: CatalogItem[];
   total: number;
 }
@@ -109,7 +128,16 @@ export async function fetchCatalogFacets(
     throw new Error(`Catalog Facets API error: ${response.status} - ${error}`);
   }
 
-  return response.json();
+  const data: CatalogFacetsResponse = await response.json();
+  
+  // Transform API response to UI-friendly format
+  return {
+    units: data.units.map(u => u.unit!).filter(Boolean),
+    categories: data.categories.map(c => c.cat_name!).filter(Boolean),
+    priceMin: data.price_min,
+    priceMax: data.price_max,
+    total: data.total,
+  };
 }
 
 // ============= Supabase Overrides =============
@@ -117,29 +145,25 @@ export async function fetchCatalogFacets(
 export interface ProductOverride {
   bq_key: string;          // Matches item.id from BQ
   is_active: boolean;
-  pinned?: boolean;
-  custom_name?: string | null;
-  featured?: boolean;
-  tags?: string[] | null;
 }
 
 /**
  * Merge BigQuery items with Supabase overrides
- * Overrides are matched by product_catalog.bq_key == item.id
+ * 
+ * IMPORTANT: Default is_active = true for all items.
+ * Supabase only stores overrides (is_active=false).
+ * If no override exists, item is considered active.
  */
 export function mergeWithOverrides(
   items: CatalogItem[],
   overrides: Map<string, ProductOverride>
 ): CatalogItemWithOverrides[] {
   return items.map(item => {
-    const override = overrides.get(item.id); // Match by item.id (bq_key)
+    const override = overrides.get(item.id);
     return {
       ...item,
-      is_active: override?.is_active ?? true, // Default to active if no override
-      pinned: override?.pinned ?? false,
-      custom_name: override?.custom_name ?? null,
-      featured: override?.featured ?? false,
-      tags: override?.tags ?? null,
+      // Default to active if no override exists
+      is_active: override?.is_active ?? true,
     };
   });
 }
