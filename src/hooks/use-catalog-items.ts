@@ -17,13 +17,12 @@ import { toast } from '@/hooks/use-toast';
 import { useTranslation } from 'react-i18next';
 
 interface UseCatalogItemsParams {
-  search?: string;
+  q?: string;              // Search query
   page?: number;
   pageSize?: number;
-  profile?: string;
-  coating?: string;
-  thickness?: number;
-  isActive?: boolean;
+  unit?: string;
+  catName?: string;
+  sort?: string;
 }
 
 interface UseCatalogItemsResult {
@@ -40,6 +39,9 @@ export function useCatalogItems(params: UseCatalogItemsParams): UseCatalogItemsR
   const { profile } = useAuth();
   const organizationId = profile?.organization_id;
 
+  const page = params.page || 1;
+  const pageSize = params.pageSize || 15;
+
   // Fetch items from BigQuery
   const itemsQuery = useQuery({
     queryKey: ['catalog-items', organizationId, params],
@@ -48,13 +50,12 @@ export function useCatalogItems(params: UseCatalogItemsParams): UseCatalogItemsR
       
       const request: CatalogItemsRequest = {
         organization_id: organizationId,
-        page: params.page || 1,
-        page_size: params.pageSize || 15,
-        search: params.search || undefined,
-        profile: params.profile || undefined,
-        coating: params.coating || undefined,
-        thickness_mm: params.thickness,
-        is_active: params.isActive,
+        limit: pageSize,
+        offset: (page - 1) * pageSize,
+        q: params.q || undefined,
+        unit: params.unit || undefined,
+        cat_name: params.catName || undefined,
+        sort: params.sort || undefined,
       };
 
       return fetchCatalogItems(request);
@@ -64,18 +65,19 @@ export function useCatalogItems(params: UseCatalogItemsParams): UseCatalogItemsR
   });
 
   // Fetch overrides from Supabase for current page items
-  const bqIds = itemsQuery.data?.items.map(i => i.bq_id) || [];
+  // Match by item.id from BQ == product_catalog.bq_key
+  const bqKeys = itemsQuery.data?.items.map(i => i.id) || [];
   
   const overridesQuery = useQuery({
-    queryKey: ['catalog-overrides', organizationId, bqIds],
+    queryKey: ['catalog-overrides', organizationId, bqKeys],
     queryFn: async () => {
-      if (!organizationId || bqIds.length === 0) return new Map<string, ProductOverride>();
+      if (!organizationId || bqKeys.length === 0) return new Map<string, ProductOverride>();
       
       const { data, error } = await supabase
         .from('product_catalog')
         .select('bq_key, is_active')
         .eq('organization_id', organizationId)
-        .in('bq_key', bqIds);
+        .in('bq_key', bqKeys);
       
       if (error) throw error;
       
@@ -83,14 +85,14 @@ export function useCatalogItems(params: UseCatalogItemsParams): UseCatalogItemsR
       data?.forEach(row => {
         if (row.bq_key) {
           map.set(row.bq_key, {
-            bq_id: row.bq_key,
+            bq_key: row.bq_key,
             is_active: row.is_active,
           });
         }
       });
       return map;
     },
-    enabled: !!organizationId && bqIds.length > 0,
+    enabled: !!organizationId && bqKeys.length > 0,
     staleTime: 30_000,
   });
 
@@ -101,7 +103,7 @@ export function useCatalogItems(params: UseCatalogItemsParams): UseCatalogItemsR
 
   return {
     items: mergedItems,
-    totalCount: itemsQuery.data?.total_count || 0,
+    totalCount: itemsQuery.data?.total || 0,
     isLoading: itemsQuery.isLoading || overridesQuery.isLoading,
     error: itemsQuery.error || overridesQuery.error || null,
   };
@@ -109,6 +111,7 @@ export function useCatalogItems(params: UseCatalogItemsParams): UseCatalogItemsR
 
 /**
  * Fetch facets (unique filter values) from BigQuery
+ * Returns units and cat_names for filtering
  */
 export function useCatalogFacets(): { facets: CatalogFacets | null; isLoading: boolean } {
   const { profile } = useAuth();
@@ -132,6 +135,7 @@ export function useCatalogFacets(): { facets: CatalogFacets | null; isLoading: b
 
 /**
  * Toggle product is_active in Supabase overrides
+ * bqKey matches item.id from BigQuery
  */
 export function useToggleProductActive() {
   const { t } = useTranslation();
@@ -139,18 +143,18 @@ export function useToggleProductActive() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ bqId, isActive }: { bqId: string; isActive: boolean }) => {
+    mutationFn: async ({ bqKey, isActive }: { bqKey: string; isActive: boolean }) => {
       if (!profile?.organization_id) throw new Error('No organization');
 
       // Upsert override in Supabase
       const { error } = await supabase
         .from('product_catalog')
         .upsert({
-          bq_key: bqId,
+          bq_key: bqKey,
           organization_id: profile.organization_id,
           is_active: isActive,
           // Minimal required fields for upsert
-          sku: bqId, // Use bq_id as sku placeholder
+          sku: bqKey, // Use bq_key as sku placeholder
           base_price_rub_m2: 0, // Will be read from BQ anyway
         }, {
           onConflict: 'organization_id,bq_key',
