@@ -1,9 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Pencil, Palette, Calculator, Receipt, Check, X, Eye } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
-import { useAuth } from '@/contexts/AuthContext';
+import { Palette, Calculator, Receipt, Check, X, Eye } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DataTable, Column } from '@/components/ui/data-table';
 import { Badge } from '@/components/ui/badge';
@@ -17,13 +14,15 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
-import { toast } from '@/hooks/use-toast';
 import { RalColorsDialog } from './RalColorsDialog';
 import { PriceByColorDialog } from './PriceByColorDialog';
 import { PriceQuoteDialog } from './PriceQuoteDialog';
 import { ProductDetailSheet } from './ProductDetailSheet';
+import { useCatalogItems, useCatalogFacets, useToggleProductActive } from '@/hooks/use-catalog-items';
+import type { CatalogItemWithOverrides } from '@/lib/catalog-api';
 
-interface Product {
+// Legacy Product type for compatibility with existing dialogs
+interface LegacyProduct {
   id: string;
   sku: string | null;
   title: string | null;
@@ -41,10 +40,28 @@ interface Product {
   updated_at: string;
 }
 
+function toLegacyProduct(item: CatalogItemWithOverrides): LegacyProduct {
+  return {
+    id: item.bq_id,
+    sku: item.sku,
+    title: item.title,
+    profile: item.profile,
+    coating: item.coating,
+    thickness_mm: item.thickness_mm,
+    width_work_mm: item.width_work_mm,
+    width_full_mm: item.width_full_mm,
+    weight_kg_m2: item.weight_kg_m2,
+    base_price_rub_m2: item.base_price_rub_m2,
+    is_active: item.is_active,
+    notes: item.notes,
+    bq_key: item.bq_id,
+    created_at: item.created_at,
+    updated_at: item.updated_at,
+  };
+}
+
 export function ProductsTab() {
   const { t } = useTranslation();
-  const { profile } = useAuth();
-  const queryClient = useQueryClient();
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -61,106 +78,21 @@ export function ProductsTab() {
   const [priceDialogOpen, setPriceDialogOpen] = useState(false);
   const [quoteDialogOpen, setQuoteDialogOpen] = useState(false);
   const [detailSheetOpen, setDetailSheetOpen] = useState(false);
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<LegacyProduct | null>(null);
 
-  // Fetch unique profiles for filter
-  const { data: profiles } = useQuery({
-    queryKey: ['product-profiles', profile?.organization_id],
-    queryFn: async () => {
-      if (!profile?.organization_id) return [];
-      const { data } = await supabase
-        .from('product_catalog')
-        .select('profile')
-        .eq('organization_id', profile.organization_id)
-        .not('profile', 'is', null);
-      return [...new Set(data?.map((d) => d.profile).filter(Boolean))] as string[];
-    },
-    enabled: !!profile?.organization_id,
+  // BigQuery API hooks
+  const { facets, isLoading: facetsLoading } = useCatalogFacets();
+  const { items, totalCount, isLoading } = useCatalogItems({
+    search: search || undefined,
+    page,
+    pageSize,
+    profile: profileFilter !== 'all' ? profileFilter : undefined,
+    coating: coatingFilter !== 'all' ? coatingFilter : undefined,
+    thickness: thicknessFilter !== 'all' ? parseFloat(thicknessFilter) : undefined,
+    isActive: activeFilter !== 'all' ? activeFilter === 'true' : undefined,
   });
 
-  // Fetch unique thicknesses
-  const { data: thicknesses } = useQuery({
-    queryKey: ['product-thicknesses', profile?.organization_id],
-    queryFn: async () => {
-      if (!profile?.organization_id) return [];
-      const { data } = await supabase
-        .from('product_catalog')
-        .select('thickness_mm')
-        .eq('organization_id', profile.organization_id)
-        .not('thickness_mm', 'is', null);
-      const unique = [...new Set(data?.map((d) => d.thickness_mm).filter(Boolean))];
-      return unique.sort((a, b) => (a ?? 0) - (b ?? 0)) as number[];
-    },
-    enabled: !!profile?.organization_id,
-  });
-
-  // Fetch unique coatings
-  const { data: coatings } = useQuery({
-    queryKey: ['product-coatings', profile?.organization_id],
-    queryFn: async () => {
-      if (!profile?.organization_id) return [];
-      const { data } = await supabase
-        .from('product_catalog')
-        .select('coating')
-        .eq('organization_id', profile.organization_id)
-        .not('coating', 'is', null);
-      return [...new Set(data?.map((d) => d.coating).filter(Boolean))] as string[];
-    },
-    enabled: !!profile?.organization_id,
-  });
-
-  // Main products query
-  const { data, isLoading } = useQuery({
-    queryKey: ['products', profile?.organization_id, search, page, pageSize, profileFilter, thicknessFilter, coatingFilter, activeFilter],
-    queryFn: async () => {
-      if (!profile?.organization_id) return { data: [], count: 0 };
-
-      let query = supabase
-        .from('product_catalog')
-        .select('*', { count: 'exact' })
-        .eq('organization_id', profile.organization_id)
-        .order('profile', { ascending: true })
-        .order('thickness_mm', { ascending: true })
-        .order('base_price_rub_m2', { ascending: true });
-
-      if (search) {
-        query = query.or(`sku.ilike.%${search}%,title.ilike.%${search}%,profile.ilike.%${search}%,bq_key.ilike.%${search}%`);
-      }
-
-      if (profileFilter !== 'all') query = query.eq('profile', profileFilter);
-      if (thicknessFilter !== 'all') query = query.eq('thickness_mm', parseFloat(thicknessFilter));
-      if (coatingFilter !== 'all') query = query.eq('coating', coatingFilter);
-      if (activeFilter !== 'all') query = query.eq('is_active', activeFilter === 'true');
-
-      const from = (page - 1) * pageSize;
-      query = query.range(from, from + pageSize - 1);
-
-      const { data, count, error } = await query;
-      if (error) throw error;
-
-      return { data: data as Product[], count: count || 0 };
-    },
-    enabled: !!profile?.organization_id,
-  });
-
-  // Toggle active mutation
-  const toggleActiveMutation = useMutation({
-    mutationFn: async ({ id, is_active }: { id: string; is_active: boolean }) => {
-      const { error } = await supabase
-        .from('product_catalog')
-        .update({ is_active })
-        .eq('id', id)
-        .eq('organization_id', profile!.organization_id);
-      if (error) throw error;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['catalog-stats-products'] });
-    },
-    onError: () => {
-      toast({ title: t('common.error'), description: t('catalog.toggleError', 'Не удалось изменить статус'), variant: 'destructive' });
-    },
-  });
+  const toggleActiveMutation = useToggleProductActive();
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('ru-RU', {
@@ -170,27 +102,27 @@ export function ProductsTab() {
     }).format(value);
   };
 
-  const handleOpenQuoteDialog = useCallback((product: Product) => {
-    setSelectedProduct(product);
+  const handleOpenQuoteDialog = useCallback((item: CatalogItemWithOverrides) => {
+    setSelectedProduct(toLegacyProduct(item));
     setQuoteDialogOpen(true);
   }, []);
 
-  const handleOpenRalDialog = useCallback((product: Product) => {
-    setSelectedProduct(product);
+  const handleOpenRalDialog = useCallback((item: CatalogItemWithOverrides) => {
+    setSelectedProduct(toLegacyProduct(item));
     setRalDialogOpen(true);
   }, []);
 
-  const handleOpenPriceDialog = useCallback((product: Product) => {
-    setSelectedProduct(product);
+  const handleOpenPriceDialog = useCallback((item: CatalogItemWithOverrides) => {
+    setSelectedProduct(toLegacyProduct(item));
     setPriceDialogOpen(true);
   }, []);
 
-  const handleOpenDetailSheet = useCallback((product: Product) => {
-    setSelectedProduct(product);
+  const handleOpenDetailSheet = useCallback((item: CatalogItemWithOverrides) => {
+    setSelectedProduct(toLegacyProduct(item));
     setDetailSheetOpen(true);
   }, []);
 
-  const columns: Column<Product>[] = [
+  const columns: Column<CatalogItemWithOverrides>[] = [
     {
       key: 'product',
       header: t('catalog.product', 'Товар'),
@@ -240,7 +172,9 @@ export function ProductsTab() {
       cell: (row) => (
         <Switch
           checked={row.is_active}
-          onCheckedChange={(checked) => toggleActiveMutation.mutate({ id: row.id, is_active: checked })}
+          onCheckedChange={(checked) => 
+            toggleActiveMutation.mutate({ bqId: row.bq_id, isActive: checked })
+          }
           disabled={toggleActiveMutation.isPending}
         />
       ),
@@ -321,7 +255,7 @@ export function ProductsTab() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t('common.all')}</SelectItem>
-              {profiles?.map((p) => (
+              {facets?.profiles.map((p) => (
                 <SelectItem key={p} value={p}>{p}</SelectItem>
               ))}
             </SelectContent>
@@ -336,7 +270,7 @@ export function ProductsTab() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t('common.all')}</SelectItem>
-              {thicknesses?.map((th) => (
+              {facets?.thicknesses.map((th) => (
                 <SelectItem key={th} value={String(th)}>{th} мм</SelectItem>
               ))}
             </SelectContent>
@@ -351,7 +285,7 @@ export function ProductsTab() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t('common.all')}</SelectItem>
-              {coatings?.map((c) => (
+              {facets?.coatings.map((c) => (
                 <SelectItem key={c} value={c}>{c}</SelectItem>
               ))}
             </SelectContent>
@@ -394,14 +328,14 @@ export function ProductsTab() {
       {/* Table */}
       <DataTable
         columns={columns}
-        data={data?.data || []}
-        loading={isLoading}
+        data={items}
+        loading={isLoading || facetsLoading}
         searchPlaceholder={t('catalog.searchPlaceholder', 'Поиск по названию, SKU, bq_key...')}
         onSearch={setSearch}
         searchValue={search}
         page={page}
         pageSize={pageSize}
-        totalCount={data?.count || 0}
+        totalCount={totalCount}
         onPageChange={setPage}
         onPageSizeChange={(size) => {
           setPageSize(size);
