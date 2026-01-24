@@ -208,12 +208,14 @@ export function ProductDetailSheet({ open, onOpenChange, product }: ProductDetai
           <Separator />
 
           {/* Timestamps */}
-          <div className="flex items-center gap-4 text-xs text-muted-foreground">
-            <div className="flex items-center gap-1">
-              <Calendar className="h-3 w-3" />
-              <span>{t('common.createdAt')}: {format(new Date(product.created_at), 'dd.MM.yyyy HH:mm', { locale: dateLocale })}</span>
+          {product.created_at && (
+            <div className="flex items-center gap-4 text-xs text-muted-foreground">
+              <div className="flex items-center gap-1">
+                <Calendar className="h-3 w-3" />
+                <span>{t('common.createdAt')}: {format(new Date(product.created_at), 'dd.MM.yyyy HH:mm', { locale: dateLocale })}</span>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </SheetContent>
     </Sheet>
