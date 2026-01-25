@@ -205,7 +205,11 @@ Deno.serve(async (req) => {
     // ASYNC FIRE-AND-FORGET: Call Cloud Run Import Worker
     // Worker will update import_jobs.status directly when done (COMPLETED/FAILED)
     // This prevents Edge Function timeout on large files (70k+ rows)
-    fetch(`${IMPORT_WORKER_URL}/api/import/publish`, {
+    const workerUrl = `${IMPORT_WORKER_URL}/api/import/publish`;
+    console.log('[import-publish] Calling worker URL:', workerUrl);
+    console.log('[import-publish] Worker payload:', JSON.stringify(workerPayload).slice(0, 500));
+    
+    fetch(workerUrl, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
@@ -214,16 +218,41 @@ Deno.serve(async (req) => {
       body: JSON.stringify(workerPayload),
     }).then(async (workerResponse) => {
       const workerResult = await workerResponse.text();
-      console.log('[import-publish] Worker async response:', workerResponse.status, workerResult.slice(0, 500));
+      console.log('[import-publish] Worker response status:', workerResponse.status);
+      console.log('[import-publish] Worker response body (first 500 chars):', workerResult.slice(0, 500));
       
-      // Worker should update status itself, but log if there's an issue
+      // CRITICAL: If worker returns non-200, mark job as FAILED
       if (!workerResponse.ok) {
-        console.error('[import-publish] Worker async error:', workerResponse.status, workerResult.slice(0, 200));
+        console.error('[import-publish] Worker returned error:', workerResponse.status, workerResult.slice(0, 200));
+        
+        // Parse error details from worker response
+        let errorMessage = `Worker error: ${workerResponse.status}`;
+        let errorCode = 'WORKER_ERROR';
+        try {
+          const errJson = JSON.parse(workerResult);
+          errorMessage = errJson.detail || errJson.error || errorMessage;
+          errorCode = errJson.error_code || errorCode;
+        } catch {
+          errorMessage = workerResult.slice(0, 200) || errorMessage;
+        }
+        
+        // Update job to FAILED status
+        await supabaseAdmin
+          .from('import_jobs')
+          .update({
+            status: 'FAILED',
+            error_message: errorMessage,
+            error_code: errorCode,
+            finished_at: new Date().toISOString(),
+          })
+          .eq('id', body.import_job_id);
+        
+        console.log('[import-publish] Job marked as FAILED due to worker error');
       }
-    }).catch((err) => {
-      console.error('[import-publish] Worker async fetch error:', err);
+    }).catch(async (err) => {
+      console.error('[import-publish] Worker fetch error:', err);
       // Attempt to mark job as failed if worker call completely failed
-      supabaseAdmin
+      await supabaseAdmin
         .from('import_jobs')
         .update({
           status: 'FAILED',
@@ -231,8 +260,9 @@ Deno.serve(async (req) => {
           error_code: 'WORKER_UNREACHABLE',
           finished_at: new Date().toISOString(),
         })
-        .eq('id', body.import_job_id)
-        .then(() => {});
+        .eq('id', body.import_job_id);
+      
+      console.log('[import-publish] Job marked as FAILED due to network error');
     });
 
     console.log('[import-publish] Worker call dispatched (async), returning immediately');
