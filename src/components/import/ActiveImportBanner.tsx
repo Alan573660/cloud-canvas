@@ -151,12 +151,14 @@ export function ActiveImportBanner({ onNavigateToImport, className }: ActiveImpo
             </Button>
           )}
           
-          {(isCompleted || isFailed) && (
+          {(isInProgress || isCompleted || isFailed) && (
             <Button 
               variant="ghost" 
               size="icon"
               onClick={clearActiveJob}
               className="h-8 w-8"
+              aria-label={t('import.stopTracking', 'Сбросить отслеживание')}
+              title={t('import.stopTracking', 'Сбросить отслеживание')}
             >
               <X className="h-4 w-4" />
             </Button>
