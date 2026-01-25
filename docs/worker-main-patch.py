@@ -4,7 +4,17 @@
 # ========================================
 
 # ==========================================
-# FIX 1: REDUCE SB_DELETE_BATCH_SIZE (CRITICAL!)
+# FIX 1: TIMESTAMP ERROR (CRITICAL!)
+# Line 616 in main.py - fixes "Cannot localize tz-aware Timestamp"
+# ==========================================
+# CHANGE FROM:
+#   df2["updated_at"] = pd.Timestamp.utcnow().tz_localize("UTC")
+# TO:
+df2["updated_at"] = pd.Timestamp.utcnow()  # Already tz-aware, no tz_localize needed!
+
+
+# ==========================================
+# FIX 2: REDUCE SB_DELETE_BATCH_SIZE (CRITICAL!)
 # Line ~35 in main.py - fixes statement timeout 57014
 # ==========================================
 # CHANGE FROM:
@@ -14,7 +24,7 @@ SB_DELETE_BATCH_SIZE = int(os.environ.get("SB_DELETE_BATCH_SIZE", "200"))  # Kee
 
 
 # ==========================================
-# FIX 2: Add retry wrapper for Supabase DELETE operations
+# FIX 3: Add retry wrapper for Supabase DELETE operations
 # Add near line ~160 after _sb_delete_ids function
 # ==========================================
 def _sb_delete_ids_safe(table: str, ids: List[str], max_retries: int = 3) -> int:
@@ -38,7 +48,7 @@ def _sb_delete_ids_safe(table: str, ids: List[str], max_retries: int = 3) -> int
 
 
 # ==========================================  
-# FIX 3: Update _sb_delete_job_rows_batched to use safe delete
+# FIX 4: Update _sb_delete_job_rows_batched to use safe delete
 # Replace existing function
 # ==========================================
 def _sb_delete_job_rows_batched(table: str, org_id: str, job_id: str) -> None:
@@ -49,12 +59,12 @@ def _sb_delete_job_rows_batched(table: str, org_id: str, job_id: str) -> None:
         if not ids:
             break
         total += _sb_delete_ids_safe(table, ids)  # Use safe version with retry
-        time.sleep(0.1)  # Small delay between batches to avoid rate limits
+        time.sleep(0.15)  # Small delay between batches to avoid rate limits
     logger.info(f"[job={job_id}] {table}: deleted {total}")
 
 
 # ==========================================
-# FIX 4: Add global exception handler to FastAPI
+# FIX 5: Add global exception handler to FastAPI
 # Add after APP = FastAPI(...) around line ~50
 # ==========================================
 from starlette.responses import JSONResponse
@@ -74,44 +84,13 @@ async def unhandled_exception_handler(request, exc: Exception):
 
 
 # ==========================================
-# FIX 5: Empty file check in _read_file_to_df
-# Add at the END of _read_file_to_df function, before final return
-# ==========================================
-# After reading the dataframe (df), add this check:
-if df.empty or len(df.columns) < 2:
-    raise HTTPException(status_code=400, detail="File is empty or has insufficient columns")
-
-
-# ==========================================
-# FIX 6: Duplicate ID detection in _validate_rows  
-# Add after the line: valid = ~(bad_id | bad_price)
-# ==========================================
-# Detect duplicate IDs (keep first, mark rest as invalid)
-dup_mask = df2["id"].astype(str).str.strip().duplicated(keep='first')
-dup_count = int(dup_mask.sum())
-if dup_count > 0:
-    logger.warning(f"[job] Found {dup_count} duplicate IDs - keeping first occurrence")
-    # Add errors for duplicates (capped at 100)
-    for i in df2.index[dup_mask].tolist()[:100]:
-        rn = int(df2.at[i, "__row_number"])
-        errs.append({
-            "row_number": rn, 
-            "error_type": "DUPLICATE_ID", 
-            "message": f"Duplicate ID: {df2.at[i, 'id']}", 
-            "column_name": "id",
-            "raw_value": str(df2.at[i, "id"])
-        })
-    # Update valid mask to exclude duplicates
-    valid = valid & ~dup_mask
-
-
-# ==========================================
 # DEPLOYMENT CHECKLIST
 # ==========================================
-# 1. Set environment variable: SB_DELETE_BATCH_SIZE=200
-# 2. Apply fixes 2-3 to add retry logic for DELETE
-# 3. Rebuild and deploy the Cloud Run service  
-# 4. Monitor logs for "57014" errors - if still occurring, reduce to 100
+# 1. FIX LINE 616: pd.Timestamp.utcnow() без .tz_localize("UTC")
+# 2. Set environment variable: SB_DELETE_BATCH_SIZE=200
+# 3. Apply fixes 3-4 to add retry logic for DELETE
+# 4. Rebuild and deploy the Cloud Run service  
+# 5. Monitor logs for errors
 #
 # ==========================================
 # ALREADY IMPLEMENTED (no changes needed)
