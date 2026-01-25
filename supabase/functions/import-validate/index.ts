@@ -307,14 +307,17 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Success - update job status to VALIDATED (DB constraint allows only specific statuses)
-    await supabaseAdmin
+    // Success - update job status to VALIDATED
+    const { error: validateUpdateError } = await supabaseAdmin
       .from('import_jobs')
-      .update({ status: 'VALIDATED' }) // Ready for publish
-      .eq('id', body.import_job_id)
-      .eq('status', 'VALIDATING'); // Only if still validating
+      .update({ status: 'VALIDATED' })
+      .eq('id', body.import_job_id);
 
-    console.log('[import-validate] Success');
+    if (validateUpdateError) {
+      console.error('[import-validate] Failed to update job to VALIDATED:', validateUpdateError);
+    } else {
+      console.log('[import-validate] Job updated to VALIDATED successfully');
+    }
 
     const successResponse: ValidateResponse = {
       ok: true,
