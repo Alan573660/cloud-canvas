@@ -79,7 +79,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
   const { t } = useTranslation();
   const { profile } = useAuth();
   const queryClient = useQueryClient();
-  const { setActiveJobId } = useActiveImportJob();
+  const { setActiveJobId, clearActiveJob } = useActiveImportJob();
 
   const [file, setFile] = useState<File | null>(null);
   const [dryRun, setDryRun] = useState(false);
@@ -437,6 +437,31 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     setTimeout(resetForm, 300);
   };
 
+  // UX helpers: user can't really cancel backend job from UI (no RPC),
+  // but can stop *tracking* and continue working.
+  const handleContinueInBackground = () => {
+    toast({
+      title: t('import.continueInBackground', 'Импорт продолжается в фоне'),
+      description: t(
+        'import.continueInBackgroundDesc',
+        'Закройте окно — прогресс будет виден в баннере сверху и во вкладке «Импорт».',
+      ),
+    });
+    handleClose();
+  };
+
+  const handleStopTracking = () => {
+    clearActiveJob();
+    toast({
+      title: t('import.trackingReset', 'Отслеживание сброшено'),
+      description: t(
+        'import.trackingResetDesc',
+        'Фоновая задача может продолжаться на сервере, но UI перестанет ждать её завершения.',
+      ),
+    });
+    handleClose();
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
@@ -792,6 +817,12 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
             <p className="text-sm text-muted-foreground">
               {t('import.publishingDesc', 'Обновляем каталог...')}
             </p>
+            <p className="text-xs text-muted-foreground">
+              {t(
+                'import.publishingHint',
+                'Если занимает долго — можно закрыть окно и продолжить работу. Задача идёт в фоне.',
+              )}
+            </p>
           </div>
         )}
 
@@ -849,6 +880,17 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                   <Upload className="h-4 w-4 mr-2" />
                 )}
                 {t('catalog.startImport', 'Начать импорт')}
+              </Button>
+            </>
+          )}
+
+          {step === 'publishing' && (
+            <>
+              <Button variant="outline" onClick={handleContinueInBackground}>
+                {t('import.closeAndContinue', 'Закрыть и продолжить в фоне')}
+              </Button>
+              <Button variant="destructive" onClick={handleStopTracking}>
+                {t('import.stopTracking', 'Сбросить отслеживание')}
               </Button>
             </>
           )}
