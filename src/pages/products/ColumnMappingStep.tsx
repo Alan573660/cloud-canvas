@@ -14,18 +14,26 @@ import {
 
 // Required and optional target fields for product catalog import
 export const REQUIRED_FIELDS = ['id', 'price_rub_m2'] as const;
+
+// Standard optional fields that map directly to BQ/catalog
 export const OPTIONAL_FIELDS = [
-  'title',
+  'title',       // Name column
+  'unit',        // Measure column (м², шт, м, упак)
+  'notes',       // CategoryTree or CategoryName
+  'cur',         // Currency column
+] as const;
+
+// Extended fields for roofing (second phase, not guaranteed in all imports)
+export const EXTENDED_FIELDS = [
   'profile',
   'thickness_mm',
   'coating',
   'width_work_mm',
   'width_full_mm',
   'weight_kg_m2',
-  'notes',
 ] as const;
 
-export type TargetField = typeof REQUIRED_FIELDS[number] | typeof OPTIONAL_FIELDS[number];
+export type TargetField = typeof REQUIRED_FIELDS[number] | typeof OPTIONAL_FIELDS[number] | typeof EXTENDED_FIELDS[number];
 
 export interface ColumnMapping {
   [targetField: string]: string; // targetField -> sourceColumn
@@ -41,15 +49,17 @@ interface ColumnMappingStepProps {
 
 const FIELD_LABELS: Record<string, { ru: string; en: string; description: string }> = {
   id: { ru: 'ID / SKU', en: 'ID / SKU', description: 'Уникальный идентификатор товара' },
-  price_rub_m2: { ru: 'Цена (₽/м²)', en: 'Price (₽/m²)', description: 'Базовая цена за квадратный метр' },
-  title: { ru: 'Название', en: 'Title', description: 'Название товара' },
+  price_rub_m2: { ru: 'Цена', en: 'Price', description: 'Цена товара (Price)' },
+  title: { ru: 'Название', en: 'Title', description: 'Название товара (Name)' },
+  unit: { ru: 'Единица измерения', en: 'Unit', description: 'м², шт, м, упак (Measure)' },
+  notes: { ru: 'Категория/Заметки', en: 'Category/Notes', description: 'CategoryTree или CategoryName' },
+  cur: { ru: 'Валюта', en: 'Currency', description: 'RUB, USD и т.д.' },
   profile: { ru: 'Профиль', en: 'Profile', description: 'Тип профиля (С8, С21, и т.д.)' },
   thickness_mm: { ru: 'Толщина (мм)', en: 'Thickness (mm)', description: 'Толщина металла в мм' },
-  coating: { ru: 'Покрытие', en: 'Coating', description: 'Тип покрытия (полиэстер, пластизол, и т.д.)' },
+  coating: { ru: 'Покрытие', en: 'Coating', description: 'Тип покрытия' },
   width_work_mm: { ru: 'Рабочая ширина (мм)', en: 'Work Width (mm)', description: 'Рабочая ширина листа' },
   width_full_mm: { ru: 'Полная ширина (мм)', en: 'Full Width (mm)', description: 'Полная ширина листа' },
   weight_kg_m2: { ru: 'Вес (кг/м²)', en: 'Weight (kg/m²)', description: 'Вес на квадратный метр' },
-  notes: { ru: 'Заметки', en: 'Notes', description: 'Дополнительные заметки' },
 };
 
 const SKIP_VALUE = '__skip__';
@@ -185,7 +195,7 @@ export function ColumnMappingStep({
             </CardContent>
           </Card>
 
-          {/* Optional fields */}
+          {/* Optional fields - standard */}
           <Card>
             <CardHeader className="py-3 px-4">
               <CardTitle className="text-sm font-medium">

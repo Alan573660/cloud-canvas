@@ -38,7 +38,9 @@
     "updated": "updated",
     "total": "total",
     "viewDetails": "View details",
-    "inProgress": "Import in progress"
+    "inProgress": "Import in progress",
+    "strictM2Only": "Import only м² items",
+    "strictM2OnlyDesc": "Exclude items with units like pcs, m, etc."
   },
   "analytics": {
     "description": "Usage, revenue and operations statistics",
