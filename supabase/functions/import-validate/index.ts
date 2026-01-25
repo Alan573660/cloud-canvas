@@ -23,6 +23,8 @@ interface ValidateRequest {
   options?: {
     skip_header?: boolean;
     delimiter?: string;
+    strict_roofing_only_m2?: boolean; // Only import м² items
+    excluded_row_numbers?: number[]; // Row numbers to exclude
     transform?: {
       sanitize_id?: boolean;
       normalize_price?: boolean;

@@ -21,7 +21,10 @@ interface PublishRequest {
   file_format: 'csv' | 'xlsx' | 'jsonl' | 'parquet';
   archive_before_replace?: boolean;
   mapping?: ColumnMapping | null; // Column mapping from validate step
+  allow_partial?: boolean; // Import valid rows even if some have errors
   options?: {
+    strict_roofing_only_m2?: boolean; // Only import м² items
+    excluded_row_numbers?: number[]; // Row numbers to exclude
     transform?: {
       sanitize_id?: boolean;
       normalize_price?: boolean;
@@ -177,7 +180,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Build worker payload
+    // Build worker payload matching exact contract
     const workerPayload: Record<string, unknown> = {
       organization_id: body.organization_id,
       import_job_id: body.import_job_id,
@@ -186,7 +189,7 @@ Deno.serve(async (req) => {
       archive_before_replace: body.archive_before_replace ?? true,
       dry_run: false,
       // Allow partial publish - import valid rows even if some rows have errors
-      allow_partial: true,
+      allow_partial: body.allow_partial ?? true,
     };
 
     // Add mapping if provided
@@ -194,7 +197,7 @@ Deno.serve(async (req) => {
       workerPayload.mapping = body.mapping;
     }
 
-    // Add options (including transform) if provided
+    // Add options (including transform, strict_roofing_only_m2, excluded_row_numbers) if provided
     if (body.options) {
       workerPayload.options = body.options;
     }

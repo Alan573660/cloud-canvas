@@ -85,6 +85,10 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
   const [dryRun, setDryRun] = useState(false);
   const [archiveBeforeReplace, setArchiveBeforeReplace] = useState(true);
   
+  // Import options
+  const [strictRoofingOnlyM2, setStrictRoofingOnlyM2] = useState(true); // Only import м² items by default
+  const [excludedRowNumbers, setExcludedRowNumbers] = useState<number[]>([]);
+  
   // Auto-correction options
   const [transformOptions, setTransformOptions] = useState({
     sanitize_id: true,
@@ -104,6 +108,9 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
   const [suggestions, setSuggestions] = useState<Record<string, string[]>>({});
   const [validationStats, setValidationStats] = useState<ValidationStats | null>(null);
   const [columnMapping, setColumnMapping] = useState<ColumnMapping>({});
+  
+  // Check if Measure column is present and has non-м² values
+  const [hasMeasureColumn, setHasMeasureColumn] = useState(false);
 
   // Save job ID to localStorage when created
   useEffect(() => {
@@ -217,7 +224,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
 
       setStep('validating');
 
-      // Call Edge Function gateway with optional mapping and transform options
+      // Call Edge Function gateway with mapping and options
       const { data, error } = await supabase.functions.invoke<ValidateResponse>(ImportGatewayApi.validate, {
         body: {
           organization_id: profile.organization_id,
@@ -227,6 +234,8 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
           mapping: mappingToUse || null,
           options: {
             transform: transformOptions,
+            strict_roofing_only_m2: strictRoofingOnlyM2,
+            excluded_row_numbers: excludedRowNumbers,
           },
         },
       });
@@ -257,6 +266,12 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
           }
         });
         setColumnMapping(initialMapping);
+        
+        // Check if Measure column is detected
+        const measureCol = (data.detected_columns || []).find(c => 
+          c.toLowerCase() === 'measure' || c.toLowerCase() === 'единица'
+        );
+        setHasMeasureColumn(!!measureCol);
         
         setStep('mapping');
         return;
@@ -325,7 +340,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
 
       setStep('publishing');
 
-      // Call Edge Function gateway with mapping and transform options
+      // Call Edge Function gateway with mapping, options, and allow_partial
       // Note: Edge function returns 202 immediately, worker processes async
       const { data, error } = await supabase.functions.invoke(ImportGatewayApi.publish, {
         body: {
@@ -337,7 +352,10 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
           mapping: Object.keys(columnMapping).length > 0 ? columnMapping : null,
           options: {
             transform: transformOptions,
+            strict_roofing_only_m2: strictRoofingOnlyM2,
+            excluded_row_numbers: excludedRowNumbers,
           },
+          allow_partial: true, // Import valid rows even if some have errors
         },
       });
 
@@ -394,6 +412,8 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     setFile(null);
     setDryRun(false);
     setArchiveBeforeReplace(true);
+    setStrictRoofingOnlyM2(true);
+    setExcludedRowNumbers([]);
     setTransformOptions({
       sanitize_id: true,
       normalize_price: true,
@@ -408,6 +428,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     setSuggestions({});
     setColumnMapping({});
     setValidationStats(null);
+    setHasMeasureColumn(false);
   };
 
   const handleClose = () => {
@@ -555,6 +576,23 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                   onCheckedChange={setArchiveBeforeReplace}
                 />
               </div>
+            </div>
+
+            {/* Only м² option */}
+            <div className="flex items-center justify-between p-3 border rounded-lg bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800">
+              <div className="flex-1">
+                <Label htmlFor="strict-m2" className="cursor-pointer text-sm">
+                  {t('import.strictM2Only', 'Импортировать только товары с м²')}
+                </Label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {t('import.strictM2OnlyDesc', 'Исключить товары с единицами шт, пог.м и др.')}
+                </p>
+              </div>
+              <Switch
+                id="strict-m2"
+                checked={strictRoofingOnlyM2}
+                onCheckedChange={setStrictRoofingOnlyM2}
+              />
             </div>
 
             {/* Auto-corrections block */}
