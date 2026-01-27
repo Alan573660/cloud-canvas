@@ -5,3 +5,9 @@ verify_jwt = false
 
 [functions.import-publish]
 verify_jwt = false
+
+[functions.settings-merge]
+verify_jwt = false
+
+[functions.import-normalize]
+verify_jwt = false
