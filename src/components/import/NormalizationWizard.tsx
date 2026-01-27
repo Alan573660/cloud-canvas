@@ -33,20 +33,28 @@ interface WidthData {
 interface WidthQuestion {
   type: 'WIDTH_CONFIRM' | 'WIDTH_CHOOSE_VARIANT' | 'WIDTH_MANUAL';
   profile: string;
-  current?: WidthData;
-  variants?: WidthData[];
+  // Cloud Run returns: suggested (for CONFIRM), suggested_variants (for CHOOSE), ask (for MANUAL)
+  suggested?: WidthData;
+  suggested_variants?: WidthData[];
   examples?: string[];
 }
 
-interface CoatingColorQuestion {
+// Single COATING_COLOR_MAP question contains arrays of coatings and colors
+interface CoatingColorMapQuestion {
   type: 'COATING_COLOR_MAP';
-  coating: string;
-  detected_aliases: string[];
-  suggested_ral?: string;
-  examples?: string[];
+  coatings: Array<{
+    code: string;
+    aliases: string[];
+    examples?: string[];
+  }>;
+  colors: Array<{
+    detected: string;
+    suggested_ral?: string;
+    examples?: string[];
+  }>;
 }
 
-type NormalizeQuestion = WidthQuestion | CoatingColorQuestion;
+type NormalizeQuestion = WidthQuestion | CoatingColorMapQuestion;
 
 interface DryRunResponse {
   ok: boolean;
@@ -112,8 +120,10 @@ export function NormalizationWizard({
   // Expanded sections
   const [expandedProfiles, setExpandedProfiles] = useState<Set<string>>(new Set());
 
+  // Filter: WIDTH_* questions only for real width profiles (С21, Н60, etc.)
+  // RR32, E-20, Grey etc. are coatings/colors and go to COATING_COLOR_MAP
   const widthQuestions = questions.filter(q => q.type.startsWith('WIDTH_')) as WidthQuestion[];
-  const coatingQuestions = questions.filter(q => q.type === 'COATING_COLOR_MAP') as CoatingColorQuestion[];
+  const coatingColorMap = questions.find(q => q.type === 'COATING_COLOR_MAP') as CoatingColorMapQuestion | undefined;
 
   // Run dry_run
   const dryRunMutation = useMutation({
@@ -138,23 +148,25 @@ export function NormalizationWizard({
       setQuestions(data.questions || []);
       setStats(data.stats || null);
 
-      // Pre-fill confirmed widths from WIDTH_CONFIRM questions
+      // Pre-fill confirmed widths from WIDTH_CONFIRM questions using 'suggested' field
       const initialWidths: Record<string, WidthData> = {};
       (data.questions || []).forEach(q => {
-        if (q.type === 'WIDTH_CONFIRM' && (q as WidthQuestion).current) {
+        if (q.type === 'WIDTH_CONFIRM') {
           const wq = q as WidthQuestion;
-          initialWidths[wq.profile] = wq.current!;
+          if (wq.suggested) {
+            initialWidths[wq.profile] = wq.suggested;
+          }
         }
       });
       setWidthSelections(initialWidths);
 
       // Move to widths step if there are width questions
       const hasWidths = (data.questions || []).some(q => q.type.startsWith('WIDTH_'));
-      const hasCoatings = (data.questions || []).some(q => q.type === 'COATING_COLOR_MAP');
+      const hasCoatingColorMap = (data.questions || []).some(q => q.type === 'COATING_COLOR_MAP');
 
       if (hasWidths) {
         setWizardStep('widths');
-      } else if (hasCoatings) {
+      } else if (hasCoatingColorMap) {
         setWizardStep('coatings');
       } else {
         // No questions - skip to apply
@@ -247,8 +259,8 @@ export function NormalizationWizard({
       },
     });
     
-    // Move to coatings if there are coating questions
-    if (coatingQuestions.length > 0) {
+    // Move to coatings if there is coating/color map
+    if (coatingColorMap) {
       setWizardStep('coatings');
     } else {
       setWizardStep('applying');
@@ -394,30 +406,32 @@ export function NormalizationWizard({
                   </CollapsibleTrigger>
                   <CollapsibleContent>
                     <CardContent className="pt-0 pb-3">
-                      {q.type === 'WIDTH_CONFIRM' && q.current && (
+                      {/* WIDTH_CONFIRM: use q.suggested from Cloud Run */}
+                      {q.type === 'WIDTH_CONFIRM' && q.suggested && (
                         <div className="space-y-2">
                           <p className="text-sm text-muted-foreground">{t('import.confirmWidth', 'Подтвердите ширину:')}</p>
                           <div className="flex gap-4">
                             <div>
                               <Label className="text-xs">{t('import.workWidth', 'Рабочая')}</Label>
-                              <p className="font-medium">{q.current.work_mm} мм</p>
+                              <p className="font-medium">{q.suggested.work_mm} мм</p>
                             </div>
                             <div>
                               <Label className="text-xs">{t('import.fullWidth', 'Полная')}</Label>
-                              <p className="font-medium">{q.current.full_mm} мм</p>
+                              <p className="font-medium">{q.suggested.full_mm} мм</p>
                             </div>
                           </div>
                         </div>
                       )}
 
-                      {q.type === 'WIDTH_CHOOSE_VARIANT' && q.variants && (
+                      {/* WIDTH_CHOOSE_VARIANT: use q.suggested_variants from Cloud Run */}
+                      {q.type === 'WIDTH_CHOOSE_VARIANT' && q.suggested_variants && (
                         <div className="space-y-2">
                           <p className="text-sm text-muted-foreground">{t('import.chooseWidth', 'Выберите вариант:')}</p>
                           <RadioGroup
                             value={widthSelections[q.profile] ? JSON.stringify(widthSelections[q.profile]) : ''}
                             onValueChange={(val) => handleWidthVariantSelect(q.profile, JSON.parse(val))}
                           >
-                            {q.variants.map((v, vi) => (
+                            {q.suggested_variants.map((v, vi) => (
                               <div key={vi} className="flex items-center space-x-2">
                                 <RadioGroupItem value={JSON.stringify(v)} id={`${q.profile}-${vi}`} />
                                 <Label htmlFor={`${q.profile}-${vi}`} className="text-sm">
@@ -429,6 +443,7 @@ export function NormalizationWizard({
                         </div>
                       )}
 
+                      {/* WIDTH_MANUAL: empty inputs for user entry */}
                       {q.type === 'WIDTH_MANUAL' && (
                         <div className="space-y-2">
                           <p className="text-sm text-muted-foreground">{t('import.enterWidth', 'Введите ширину:')}</p>
@@ -437,6 +452,7 @@ export function NormalizationWizard({
                               <Label className="text-xs">{t('import.workWidth', 'Рабочая (мм)')}</Label>
                               <Input
                                 type="number"
+                                placeholder="1000"
                                 value={widthSelections[q.profile]?.work_mm || ''}
                                 onChange={(e) => handleWidthManualInput(q.profile, 'work_mm', Number(e.target.value))}
                                 className="w-24"
@@ -446,6 +462,7 @@ export function NormalizationWizard({
                               <Label className="text-xs">{t('import.fullWidth', 'Полная (мм)')}</Label>
                               <Input
                                 type="number"
+                                placeholder="1051"
                                 value={widthSelections[q.profile]?.full_mm || ''}
                                 onChange={(e) => handleWidthManualInput(q.profile, 'full_mm', Number(e.target.value))}
                                 className="w-24"
@@ -490,47 +507,73 @@ export function NormalizationWizard({
   }
 
   if (wizardStep === 'coatings') {
+    const coatingsCount = (coatingColorMap?.coatings?.length || 0) + (coatingColorMap?.colors?.length || 0);
+    
     return (
       <div className="space-y-4">
         <div className="flex items-center gap-2 mb-4">
           <Palette className="h-5 w-5 text-primary" />
           <h3 className="font-semibold">{t('import.coatingsStep', 'Покрытия и цвета')}</h3>
-          <Badge variant="outline">{coatingQuestions.length}</Badge>
+          <Badge variant="outline">{coatingsCount}</Badge>
         </div>
 
         <ScrollArea className="h-[300px] pr-4">
-          <div className="space-y-3">
-            {coatingQuestions.map((q, idx) => (
-              <Card key={idx}>
-                <CardHeader className="py-3">
-                  <CardTitle className="text-sm">{q.coating}</CardTitle>
-                  <CardDescription className="text-xs">
-                    {t('import.detectedAliases', 'Найденные варианты:')} {q.detected_aliases.join(', ')}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="pt-0 pb-3">
-                  {q.suggested_ral && (
-                    <div className="flex items-center gap-2 mb-2">
-                      <Badge variant="secondary">{q.suggested_ral}</Badge>
-                      <span className="text-xs text-muted-foreground">
-                        {t('import.suggestedRal', 'Предложенный RAL')}
-                      </span>
-                    </div>
-                  )}
+          <div className="space-y-4">
+            {/* Coatings section */}
+            {coatingColorMap?.coatings && coatingColorMap.coatings.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium text-muted-foreground">{t('import.coatingsSection', 'Покрытия')}</h4>
+                {coatingColorMap.coatings.map((coating, idx) => (
+                  <Card key={idx}>
+                    <CardHeader className="py-3">
+                      <CardTitle className="text-sm">{coating.code}</CardTitle>
+                      <CardDescription className="text-xs">
+                        {t('import.detectedAliases', 'Найденные варианты:')} {coating.aliases.join(', ')}
+                      </CardDescription>
+                    </CardHeader>
+                    {coating.examples && coating.examples.length > 0 && (
+                      <CardContent className="pt-0 pb-3">
+                        <p className="text-xs text-muted-foreground mb-1">{t('import.examples', 'Примеры:')}</p>
+                        <div className="text-xs font-mono bg-muted p-2 rounded max-h-16 overflow-auto">
+                          {coating.examples.slice(0, 3).map((ex, i) => (
+                            <div key={i}>{ex}</div>
+                          ))}
+                        </div>
+                      </CardContent>
+                    )}
+                  </Card>
+                ))}
+              </div>
+            )}
 
-                  {q.examples && q.examples.length > 0 && (
-                    <div className="mt-2">
-                      <p className="text-xs text-muted-foreground mb-1">{t('import.examples', 'Примеры:')}</p>
-                      <div className="text-xs font-mono bg-muted p-2 rounded max-h-16 overflow-auto">
-                        {q.examples.slice(0, 3).map((ex, i) => (
-                          <div key={i}>{ex}</div>
-                        ))}
+            {/* Colors/RAL section */}
+            {coatingColorMap?.colors && coatingColorMap.colors.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium text-muted-foreground">{t('import.colorsSection', 'Цвета / RAL')}</h4>
+                {coatingColorMap.colors.map((color, idx) => (
+                  <Card key={idx}>
+                    <CardHeader className="py-3">
+                      <div className="flex items-center justify-between">
+                        <CardTitle className="text-sm">{color.detected}</CardTitle>
+                        {color.suggested_ral && (
+                          <Badge variant="secondary">{color.suggested_ral}</Badge>
+                        )}
                       </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            ))}
+                    </CardHeader>
+                    {color.examples && color.examples.length > 0 && (
+                      <CardContent className="pt-0 pb-3">
+                        <p className="text-xs text-muted-foreground mb-1">{t('import.examples', 'Примеры:')}</p>
+                        <div className="text-xs font-mono bg-muted p-2 rounded max-h-16 overflow-auto">
+                          {color.examples.slice(0, 3).map((ex, i) => (
+                            <div key={i}>{ex}</div>
+                          ))}
+                        </div>
+                      </CardContent>
+                    )}
+                  </Card>
+                ))}
+              </div>
+            )}
           </div>
         </ScrollArea>
 

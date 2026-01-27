@@ -58,23 +58,22 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Validate user token
+    // Validate user token using getUser (more reliable in Deno than getClaims)
     const userClient = createClient(supabaseUrl, supabaseAnon, {
       global: { headers: { Authorization: authHeader } },
     });
 
-    const token = authHeader.replace('Bearer ', '');
-    const { data: claims, error: claimsError } = await userClient.auth.getClaims(token);
+    const { data: userData, error: userError } = await userClient.auth.getUser();
     
-    if (claimsError || !claims?.claims?.sub) {
-      console.error('[import-normalize] Auth error:', claimsError);
+    if (userError || !userData?.user?.id) {
+      console.error('[import-normalize] Auth error:', userError);
       return new Response(
         JSON.stringify({ ok: false, error: 'Unauthorized' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    const userId = claims.claims.sub;
+    const userId = userData.user.id;
 
     // Parse request
     const body: NormalizeRequest = await req.json();

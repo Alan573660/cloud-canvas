@@ -60,23 +60,22 @@ Deno.serve(async (req) => {
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabaseAnon = Deno.env.get('SUPABASE_ANON_KEY')!;
 
-    // Validate user token
+    // Validate user token using getUser (more reliable in Deno than getClaims)
     const userClient = createClient(supabaseUrl, supabaseAnon, {
       global: { headers: { Authorization: authHeader } },
     });
 
-    const token = authHeader.replace('Bearer ', '');
-    const { data: claims, error: claimsError } = await userClient.auth.getClaims(token);
+    const { data: userData, error: userError } = await userClient.auth.getUser();
     
-    if (claimsError || !claims?.claims?.sub) {
-      console.error('[settings-merge] Auth error:', claimsError);
+    if (userError || !userData?.user?.id) {
+      console.error('[settings-merge] Auth error:', userError);
       return new Response(
         JSON.stringify({ ok: false, error: 'Unauthorized' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    const userId = claims.claims.sub;
+    const userId = userData.user.id;
     console.log('[settings-merge] User:', userId);
 
     // Parse request
