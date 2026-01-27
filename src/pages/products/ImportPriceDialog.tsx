@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { 
   Upload, FileSpreadsheet, AlertTriangle, Loader2, Info, 
-  Check, ChevronRight, PlayCircle, CheckCircle2, XCircle, HelpCircle
+  Check, ChevronRight, PlayCircle, CheckCircle2, XCircle, HelpCircle, Sparkles
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -32,6 +32,7 @@ import {
 } from '@/lib/backend';
 import { ColumnMappingStep, REQUIRED_FIELDS, type ColumnMapping } from './ColumnMappingStep';
 import { useActiveImportJob } from '@/hooks/use-active-import';
+import { NormalizationWizard } from '@/components/import/NormalizationWizard';
 
 interface ImportPriceDialogProps {
   open: boolean;
@@ -44,8 +45,9 @@ type ImportStep =
   | 'uploading' 
   | 'pending' 
   | 'validating' 
-  | 'mapping'  // New step for column mapping
+  | 'mapping'  // Step for column mapping
   | 'validated' 
+  | 'normalizing'  // NEW: Normalization wizard step
   | 'publishing' 
   | 'done' 
   | 'error';
@@ -111,6 +113,30 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
   
   // Check if Measure column is present and has non-м² values
   const [hasMeasureColumn, setHasMeasureColumn] = useState(false);
+
+  // Query for staging sample (for normalization wizard)
+  const { data: stagingSample } = useQuery({
+    queryKey: ['staging-sample', createdJob?.id],
+    queryFn: async () => {
+      if (!createdJob?.id || !profile?.organization_id) return [];
+      
+      const { data, error } = await supabase
+        .from('import_staging_rows')
+        .select('row_number, data')
+        .eq('import_job_id', createdJob.id)
+        .eq('organization_id', profile.organization_id)
+        .eq('validation_status', 'VALID')
+        .order('row_number', { ascending: true })
+        .limit(50);
+
+      if (error) {
+        console.error('[ImportPriceDialog] Staging sample error:', error);
+        return [];
+      }
+      return data as Array<{ row_number: number; data: Record<string, unknown> }>;
+    },
+    enabled: !!createdJob?.id && !!profile?.organization_id && (step === 'validated' || step === 'normalizing'),
+  });
 
   // Save job ID to localStorage when created
   useEffect(() => {
@@ -491,7 +517,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className={step === 'mapping' ? 'max-w-2xl max-h-[85vh] overflow-y-auto' : 'max-w-lg'}>
+      <DialogContent className={(step === 'mapping' || step === 'normalizing') ? 'max-w-2xl max-h-[85vh] overflow-y-auto' : 'max-w-lg'}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Upload className="h-5 w-5" />
@@ -504,6 +530,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
             {step === 'validating' && t('import.validating', 'Проверка файла...')}
             {step === 'mapping' && t('import.mappingStep', 'Сопоставьте колонки файла с полями каталога')}
             {step === 'validated' && t('import.validated', 'Файл проверен. Можете опубликовать.')}
+            {step === 'normalizing' && t('import.normalizingStep', 'Нормализация данных каталога')}
             {step === 'publishing' && t('import.publishing', 'Публикация данных...')}
             {step === 'done' && t('import.done', 'Импорт успешно завершён')}
             {step === 'error' && t('import.errorOccurred', 'Произошла ошибка')}
@@ -758,7 +785,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                     {t('import.validationPassed', 'Проверка пройдена')}
                   </p>
                   <p className="text-xs text-green-700 dark:text-green-400 mt-1">
-                    {t('import.validationPassedDesc', 'Результаты доступны во вкладке Импорт. Нажмите "Опубликовать" для применения изменений.')}
+                    {t('import.validationPassedDesc', 'Результаты доступны во вкладке Импорт.')}
                   </p>
                 </div>
               </CardContent>
@@ -789,25 +816,49 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                 <CardContent className="p-3 flex items-start gap-2">
                   <Info className="h-4 w-4 text-blue-600 mt-0.5" />
                   <p className="text-xs text-blue-800 dark:text-blue-300">
-                    {t('import.dryRunComplete', 'Тестовый режим: данные не были изменены. Закройте окно или отключите тестовый режим для публикации.')}
+                    {t('import.dryRunComplete', 'Тестовый режим: данные не были изменены.')}
                   </p>
                 </CardContent>
               </Card>
             ) : (
-              <Button 
-                onClick={() => publishMutation.mutate()}
-                disabled={publishMutation.isPending}
-                className="w-full"
-              >
-                {publishMutation.isPending ? (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                ) : (
-                  <ChevronRight className="h-4 w-4 mr-2" />
-                )}
-                {t('import.publish', 'Опубликовать')}
-              </Button>
+              <div className="flex gap-2">
+                {/* Normalization button - optional step */}
+                <Button 
+                  variant="outline"
+                  onClick={() => setStep('normalizing')}
+                  className="flex-1"
+                >
+                  <Sparkles className="h-4 w-4 mr-2" />
+                  {t('import.normalize', 'Нормализовать')}
+                </Button>
+                
+                {/* Direct publish button */}
+                <Button 
+                  onClick={() => publishMutation.mutate()}
+                  disabled={publishMutation.isPending}
+                  className="flex-1"
+                >
+                  {publishMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4 mr-2" />
+                  )}
+                  {t('import.publish', 'Опубликовать')}
+                </Button>
+              </div>
             )}
           </div>
+        )}
+
+        {/* Step 4.5: Normalizing */}
+        {step === 'normalizing' && createdJob && profile?.organization_id && (
+          <NormalizationWizard
+            organizationId={profile.organization_id}
+            importJobId={createdJob.id}
+            stagingSample={stagingSample || []}
+            onComplete={() => setStep('publishing')}
+            onSkip={() => publishMutation.mutate()}
+          />
         )}
 
         {/* Step 5: Publishing */}
