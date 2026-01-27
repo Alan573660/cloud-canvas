@@ -53,6 +53,8 @@
     "questionsCount": "Найдено вопросов: {{count}}",
     "widthsStep": "Ширины профилей",
     "coatingsStep": "Покрытия и цвета",
+    "coatingsSection": "Покрытия",
+    "colorsSection": "Цвета / RAL",
     "confirmWidth": "Подтвердите ширину:",
     "chooseWidth": "Выберите вариант:",
     "enterWidth": "Введите ширину:",
