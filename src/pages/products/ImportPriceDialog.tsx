@@ -47,7 +47,8 @@ type ImportStep =
   | 'validating' 
   | 'mapping'  // Step for column mapping
   | 'validated' 
-  | 'normalizing'  // NEW: Normalization wizard step
+  | 'normalizing'  // Normalization wizard step
+  | 'pre-publish'  // Intermediate step: "Normalization applied → Publish"
   | 'publishing' 
   | 'done' 
   | 'error';
@@ -318,20 +319,14 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
         invalidRows: data.invalid_rows || 0,
       });
 
-      // Validation passed (ok=true) - auto-transition to normalizing step (no extra button)
+      // Validation passed (ok=true) - show validated state with button to continue
+      // NO setTimeout - strict event-driven transition
       setStep('validated');
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
       toast({
         title: t('import.validateSuccess', 'Проверка завершена'),
-        description: t('import.validateSuccessDesc', 'Файл успешно проверен. Переходим к нормализации.'),
+        description: t('import.validateSuccessDesc', 'Файл успешно проверен.'),
       });
-      
-      // Auto-transition to normalizing after a brief pause to show validated state
-      if (!dryRun) {
-        setTimeout(() => {
-          setStep('normalizing');
-        }, 1500);
-      }
     },
     onError: async (error) => {
       console.error('[ImportPriceDialog] Validate failed:', error);
@@ -545,9 +540,10 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
             {step === 'pending' && t('import.readyToValidate', 'Файл загружен. Запустите проверку.')}
             {step === 'validating' && t('import.validating', 'Проверка файла...')}
             {step === 'mapping' && t('import.mappingStep', 'Сопоставьте колонки файла с полями каталога')}
-            {step === 'validated' && t('import.validated', 'Файл проверен. Можете опубликовать.')}
+            {step === 'validated' && t('import.validated', 'Файл проверен. Перейдите к нормализации.')}
             {step === 'normalizing' && t('import.normalizingStep', 'Нормализация данных каталога')}
-            {step === 'publishing' && t('import.publishing', 'Публикация данных...')}
+            {step === 'pre-publish' && t('import.prePublishStep', 'Нормализация применена. Можете опубликовать.')}
+            {step === 'publishing' && t('import.publishing', 'Начинаем публикацию...')}
             {step === 'done' && t('import.done', 'Импорт успешно завершён')}
             {step === 'error' && t('import.errorOccurred', 'Произошла ошибка')}
           </DialogDescription>
@@ -801,7 +797,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                     {t('import.validationPassed', 'Проверка пройдена')}
                   </p>
                   <p className="text-xs text-green-700 dark:text-green-400 mt-1">
-                    {t('import.validationPassedDesc', 'Переходим к нормализации данных...')}
+                    {t('import.validationPassedDesc', 'Перейдите к нормализации данных')}
                   </p>
                 </div>
               </CardContent>
@@ -837,11 +833,16 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                 </CardContent>
               </Card>
             ) : (
-              <div className="py-4 text-center">
-                <Loader2 className="h-8 w-8 mx-auto animate-spin text-primary mb-3" />
-                <p className="text-sm text-muted-foreground">
-                  {t('import.preparingNormalization', 'Подготовка нормализации...')}
-                </p>
+              <div className="flex justify-center pt-4">
+                <Button 
+                  size="lg" 
+                  onClick={() => setStep('normalizing')}
+                  className="gap-2"
+                >
+                  <Sparkles className="h-4 w-4" />
+                  {t('import.continueToNormalization', 'Перейти к нормализации')}
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
               </div>
             )}
           </div>
@@ -855,29 +856,78 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
             stagingSample={stagingSample || []}
             onComplete={(result) => {
               setNormalizationResult(result);
-              toast({
-                title: t('normalize.applied', 'Нормализация применена'),
-                description: result.patched_rows 
-                  ? t('normalize.patchedRows', 'Обновлено строк: {{count}}', { count: result.patched_rows })
-                  : t('normalize.noChangesNeeded', 'Изменения не требуются'),
-              });
-              // Auto-start publish after normalization
-              publishMutation.mutate();
+              // Go to explicit pre-publish step instead of auto-publish
+              setStep('pre-publish');
             }}
             onSkip={() => {
               setNormalizationResult({ skipped: true });
-              publishMutation.mutate();
+              // Go to explicit pre-publish step instead of auto-publish
+              setStep('pre-publish');
             }}
           />
         )}
 
+        {/* Step 4.5b: Pre-Publish (after normalization) */}
+        {step === 'pre-publish' && (
+          <div className="py-6 space-y-6">
+            <div className="text-center space-y-4">
+              <CheckCircle2 className="h-12 w-12 mx-auto text-green-600" />
+              <div>
+                <p className="font-medium text-lg text-green-800 dark:text-green-300">
+                  {normalizationResult?.skipped 
+                    ? t('normalize.skipped', 'Нормализация пропущена')
+                    : t('normalize.applied', 'Нормализация применена')}
+                </p>
+                {normalizationResult?.patched_rows && (
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {t('normalize.patchedRows', 'Обновлено строк: {{count}}', { count: normalizationResult.patched_rows })}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <Card className="bg-primary/5 border-primary/20">
+              <CardContent className="p-4 text-center">
+                <p className="text-sm text-muted-foreground">
+                  {t('import.readyToPublish', 'Данные готовы к публикации в каталог.')}
+                </p>
+              </CardContent>
+            </Card>
+
+            <div className="flex justify-center gap-3">
+              <Button variant="outline" onClick={handleClose}>
+                {t('common.cancel')}
+              </Button>
+              <Button 
+                size="lg" 
+                onClick={() => publishMutation.mutate()}
+                disabled={publishMutation.isPending}
+                className="gap-2"
+              >
+                {publishMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <PlayCircle className="h-4 w-4" />
+                )}
+                {t('import.publishCatalog', 'Опубликовать каталог')}
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* Step 5: Publishing */}
         {step === 'publishing' && (
-          <div className="py-8 text-center space-y-3">
+          <div className="py-8 text-center space-y-4">
             <Loader2 className="h-10 w-10 mx-auto animate-spin text-primary" />
-            <p className="text-sm text-muted-foreground">
-              {t('import.publishingDesc', 'Обновляем каталог...')}
-            </p>
+            <div>
+              <p className="font-medium">
+                {t('import.publishingInProgress', 'Начинаем публикацию...')}
+              </p>
+              <p className="text-sm text-muted-foreground mt-1">
+                {t('import.publishingDesc', 'Обновляем каталог...')}
+              </p>
+            </div>
+            <Progress value={undefined} className="w-48 mx-auto h-2" />
             <p className="text-xs text-muted-foreground">
               {t(
                 'import.publishingHint',
