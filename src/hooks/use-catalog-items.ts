@@ -1,5 +1,5 @@
 /**
- * React Query hook for BigQuery Catalog API with Supabase overrides
+ * React Query hook for Catalog API with Supabase overrides
  * 
  * IMPORTANT: Supabase product_catalog is used ONLY for overrides.
  * We do NOT create 71k rows - only store explicit is_active=false overrides.
@@ -36,7 +36,7 @@ interface UseCatalogItemsResult {
 }
 
 /**
- * Fetch catalog items from BigQuery + merge with Supabase overrides
+ * Fetch catalog items + merge with Supabase overrides
  */
 export function useCatalogItems(params: UseCatalogItemsParams): UseCatalogItemsResult {
   const { profile } = useAuth();
@@ -45,7 +45,7 @@ export function useCatalogItems(params: UseCatalogItemsParams): UseCatalogItemsR
   const page = params.page || 1;
   const pageSize = params.pageSize || 15;
 
-  // Fetch items from BigQuery via Cloud Run API
+  // Fetch items from Cloud Run API
   const itemsQuery = useQuery({
     queryKey: ['catalog-items', organizationId, params],
     queryFn: async () => {
@@ -114,7 +114,7 @@ export function useCatalogItems(params: UseCatalogItemsParams): UseCatalogItemsR
 }
 
 /**
- * Fetch facets (unique filter values) from BigQuery
+ * Fetch facets (unique filter values) from Catalog API
  */
 export function useCatalogFacets(): { facets: CatalogFacets | null; isLoading: boolean } {
   const { profile } = useAuth();
