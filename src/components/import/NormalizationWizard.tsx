@@ -100,11 +100,28 @@ interface DryRunResponse {
   totalRowsFromJob?: number;
 }
 
+interface ApplyStartResponse {
+  ok: boolean;
+  apply_id?: string;
+  error?: string;
+  code?: string;
+}
+
+interface ApplyStatusResponse {
+  ok: boolean;
+  status: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
+  patched_rows?: number;
+  error?: string;
+}
+
 interface ApplyResponse {
   ok: boolean;
   patched_rows?: number;
   error?: string;
   code?: string;
+  // For async apply
+  apply_id?: string;
+  status?: 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED';
 }
 
 interface StagingRow {
@@ -569,7 +586,41 @@ export function NormalizationWizard({
     },
   });
 
-  // Apply normalization with 409 mismatch handling
+  // Poll apply status helper
+  const pollApplyStatus = async (applyId: string, maxAttempts = 60): Promise<ApplyStatusResponse> => {
+    for (let i = 0; i < maxAttempts; i++) {
+      const { data, error } = await supabase.functions.invoke<ApplyStatusResponse>('import-normalize', {
+        body: {
+          op: 'apply_status',
+          organization_id: organizationId,
+          import_job_id: importJobId,
+          apply_id: applyId,
+        },
+      });
+      
+      if (error) {
+        console.error('[NormalizationWizard] apply_status error:', error);
+        throw new Error(error.message);
+      }
+      
+      console.log('[NormalizationWizard] apply_status:', data?.status, 'attempt:', i + 1);
+      
+      if (data?.status === 'DONE') {
+        return data;
+      }
+      
+      if (data?.status === 'FAILED') {
+        throw new Error(data.error || 'Apply failed');
+      }
+      
+      // Wait 2 seconds before next poll
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    
+    throw new Error('Apply timeout - took too long');
+  };
+
+  // Apply normalization with async polling
   const applyMutation = useMutation({
     mutationFn: async () => {
       if (!runId || !profileHash) {
@@ -582,7 +633,8 @@ export function NormalizationWizard({
       console.log('  profileHash:', profileHash);
       console.log('  importJobId:', importJobId);
 
-      const { data, error } = await supabase.functions.invoke<ApplyResponse>('import-normalize', {
+      // Start async apply
+      const { data: startData, error: startError } = await supabase.functions.invoke<ApplyResponse>('import-normalize', {
         body: {
           op: 'apply',
           organization_id: organizationId,
@@ -592,16 +644,29 @@ export function NormalizationWizard({
         },
       });
 
-      if (error) throw new Error(error.message);
+      if (startError) throw new Error(startError.message);
       
       // Handle 409 mismatch - need to re-run dry_run
-      if (!data?.ok && data?.error?.includes('mismatch')) {
+      if (!startData?.ok && startData?.error?.includes('mismatch')) {
         console.warn('[NormalizationWizard] 409 run_id mismatch detected');
-        return { ok: false, code: 'MISMATCH', error: data.error };
+        return { ok: false, code: 'MISMATCH', error: startData.error };
       }
       
-      if (!data?.ok) throw new Error(data?.error || 'Apply failed');
-      return data;
+      // If apply returns immediately (sync mode or small dataset), use the result directly
+      if (startData?.ok && startData?.patched_rows !== undefined) {
+        console.log('[NormalizationWizard] Apply completed synchronously, patched_rows:', startData.patched_rows);
+        return startData;
+      }
+      
+      // If we got an apply_id, poll for completion (async mode)
+      if (startData?.apply_id) {
+        console.log('[NormalizationWizard] Apply started async, apply_id:', startData.apply_id);
+        const statusResult = await pollApplyStatus(startData.apply_id);
+        return { ok: true, patched_rows: statusResult.patched_rows };
+      }
+      
+      if (!startData?.ok) throw new Error(startData?.error || 'Apply failed');
+      return startData;
     },
     onSuccess: (data) => {
       // Handle mismatch - need fresh dry_run
@@ -1320,7 +1385,7 @@ export function NormalizationWizard({
             {t('normalize.readyToApply', 'Готово к применению')}
           </h3>
           <p className="text-muted-foreground max-w-md mx-auto">
-            {t('normalize.applyDesc', 'Настройки сохранены. Нажмите "Применить" чтобы обновить каталог в BigQuery.')}
+            {t('normalize.applyDesc', 'Настройки сохранены. Нажмите "Применить" чтобы обновить каталог.')}
           </p>
         </div>
 

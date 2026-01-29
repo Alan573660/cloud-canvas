@@ -743,6 +743,8 @@
     "detectedAliases": "Detected aliases:",
     "readyToApply": "Ready to apply",
     "applyDesc": "Settings saved. Click \"Apply\" to update the catalog.",
+    "applyInProgress": "Updating catalog...",
+    "applyPolling": "Applying changes ({{progress}}%)...",
     "scanned": "Scanned",
     "toUpdate": "To update",
     "confirmed": "Confirmed",
