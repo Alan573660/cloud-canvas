@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Upload, Calculator, Plus, FileSpreadsheet } from 'lucide-react';
+import { Upload, Calculator, Plus, Sparkles } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -9,6 +9,7 @@ import { CatalogActionRail } from './CatalogActionRail';
 import { ProductsTab } from './ProductsTab';
 import { DiscountRulesTab } from './DiscountRulesTab';
 import { ImportTab } from './ImportTab';
+import { NormalizationTab } from './NormalizationTab';
 import { PriceQuoteDialog } from './PriceQuoteDialog';
 import { DiscountRuleDialog } from './DiscountRuleDialog';
 import { ImportPriceDialog } from './ImportPriceDialog';
@@ -83,7 +84,10 @@ export default function ProductsPage() {
                   <span className="absolute -top-1 -right-1 w-2 h-2 bg-primary rounded-full animate-pulse" />
                 )}
               </TabsTrigger>
-              <TabsTrigger value="pricing">{t('catalog.pricingTab', 'Проверка цены')}</TabsTrigger>
+              <TabsTrigger value="normalization" className="flex items-center gap-1">
+                <Sparkles className="h-3 w-3" />
+                {t('catalog.normalizationTab', 'Нормализация')}
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="products">
@@ -100,15 +104,8 @@ export default function ProductsPage() {
               <ImportTab />
             </TabsContent>
 
-            <TabsContent value="pricing">
-              <div className="max-w-xl">
-                <PriceQuoteDialog 
-                  open={true} 
-                  onOpenChange={() => {}} 
-                  product={null} 
-                  embedded 
-                />
-              </div>
+            <TabsContent value="normalization">
+              <NormalizationTab />
             </TabsContent>
           </Tabs>
         </div>
