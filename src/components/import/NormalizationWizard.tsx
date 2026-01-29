@@ -90,12 +90,14 @@ interface DryRunResponse {
     auto_confirmed_widths?: number;
     sample_mode?: boolean; // True if dry_run was run on sample
     sample_limit?: number; // Number of rows in sample
-    total_rows?: number; // Total rows in import
+    total_rows?: number; // Total rows in import (may come from enricher or import_jobs)
   };
   questions?: NormalizeQuestion[];
   error?: string;
   code?: 'TIMEOUT';
   recommended_limit?: number; // Suggested limit for retry
+  // totalRows is fetched separately from import_jobs if not in stats
+  totalRowsFromJob?: number;
 }
 
 interface ApplyResponse {
@@ -143,19 +145,24 @@ function SampleModeBanner({
       </AlertTitle>
       <AlertDescription className="text-blue-700 dark:text-blue-400">
         <p>
-          {t('normalize.sampleModeDesc', 'Анализ выполнен на {{sample}} из {{total}} строк. Правила применятся ко всем строкам при публикации.', {
-            sample: sampleLimit,
-            total: totalRows || '?',
-          })}
+          {totalRows 
+            ? t('normalize.sampleModeDesc', 'Анализ выполнен на {{sample}} из {{total}} строк. Правила применятся ко всем строкам при публикации.', {
+                sample: sampleLimit,
+                total: totalRows.toLocaleString(),
+              })
+            : t('normalize.sampleModeDescNoTotal', 'Анализ выполнен на {{sample}} строках. Правила применятся ко всем строкам при публикации.', {
+                sample: sampleLimit,
+              })
+          }
         </p>
         {aiDisabled && (
           <div className="flex items-center gap-2 mt-2">
             <Badge variant="outline" className="text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300">
-              {t('normalize.aiDisabled', 'AI подсказки отключены')}
+              {t('normalize.aiDisabledTimeout', 'AI отключен из-за таймаута')}
             </Badge>
             {onEnableAI && (
               <Button variant="link" size="sm" className="text-xs p-0 h-auto" onClick={onEnableAI}>
-                {t('normalize.enableAI', 'Включить')}
+                {t('normalize.retryWithAI', 'Повторить с AI')}
               </Button>
             )}
           </div>
@@ -332,10 +339,32 @@ export function NormalizationWizard({
   const [questions, setQuestions] = useState<NormalizeQuestion[]>([]);
   const [stats, setStats] = useState<DryRunResponse['stats'] | null>(null);
   
+  // Total rows from import_jobs (as backup if not returned by enricher)
+  const [totalRowsFromJob, setTotalRowsFromJob] = useState<number | null>(null);
+  
   // Sample mode and AI flags
   const [sampleLimit, setSampleLimit] = useState<number>(500);
-  const [aiEnabled, setAiEnabled] = useState<boolean>(false); // AI disabled by default for speed
+  const [aiEnabled, setAiEnabled] = useState<boolean>(true); // AI ENABLED by default - main value
+  const [aiDisabledByTimeout, setAiDisabledByTimeout] = useState<boolean>(false); // True if AI was disabled due to timeout
   const [lastTimeoutLimit, setLastTimeoutLimit] = useState<number | null>(null);
+  
+  // Fetch total_rows from import_jobs once on mount
+  useEffect(() => {
+    const fetchTotalRows = async () => {
+      const { data } = await supabase
+        .from('import_jobs')
+        .select('total_rows')
+        .eq('id', importJobId)
+        .single();
+      if (data?.total_rows) {
+        setTotalRowsFromJob(data.total_rows);
+      }
+    };
+    fetchTotalRows();
+  }, [importJobId]);
+  
+  // Computed: actual total rows (prefer enricher response, fallback to import_jobs)
+  const actualTotalRows = stats?.total_rows || totalRowsFromJob || undefined;
 
   // User selections
   const [widthSelections, setWidthSelections] = useState<Record<string, WidthData>>({});
@@ -436,12 +465,17 @@ export function NormalizationWizard({
       return data;
     },
     onSuccess: (data) => {
-      // Handle timeout - show retry UI
+      // Handle timeout - show retry UI and DISABLE AI as fallback
       if (data.code === 'TIMEOUT') {
         setLastTimeoutLimit(sampleLimit);
+        setAiDisabledByTimeout(true); // Mark AI disabled due to timeout
+        setAiEnabled(false); // Disable AI for next retry
         setWizardStep('timeout');
         return;
       }
+      
+      // Clear timeout-disabled flag on success
+      setAiDisabledByTimeout(false);
 
       // CRITICAL: Store run_id and profile_hash from THIS dry_run
       const newRunId = data.run_id || null;
@@ -596,14 +630,18 @@ export function NormalizationWizard({
     },
   });
 
-  // Handle mismatch - re-run dry_run and then apply
+  // Handle mismatch - re-run dry_run and reset applyMutation state
   const handleMismatchRetry = useCallback(async () => {
     console.log('[NormalizationWizard] Handling mismatch - re-running dry_run');
+    
+    // Reset apply mutation state to clear the "data outdated" error state
+    applyMutation.reset();
+    
     setWizardStep('loading');
     
     // Re-run dry_run
     dryRunMutation.mutate({ limit: sampleLimit, ai_suggest: aiEnabled });
-  }, [dryRunMutation, sampleLimit, aiEnabled]);
+  }, [dryRunMutation, sampleLimit, aiEnabled, applyMutation]);
 
   const handleSaveWidths = async () => {
     try {
@@ -735,6 +773,14 @@ export function NormalizationWizard({
               {t('normalize.lastAttempt', 'Последняя попытка')}: {lastTimeoutLimit} {t('normalize.rows', 'строк')}
             </div>
             
+            {/* AI disabled notice */}
+            <Alert variant="default" className="bg-yellow-50 dark:bg-yellow-900/20 border-yellow-200">
+              <AlertTriangle className="h-4 w-4 text-yellow-600" />
+              <AlertDescription className="text-sm text-yellow-800 dark:text-yellow-300">
+                {t('normalize.aiDisabledTimeout', 'AI отключен из-за таймаута')}
+              </AlertDescription>
+            </Alert>
+            
             <div className="grid grid-cols-2 gap-3">
               <Button
                 variant="outline"
@@ -756,6 +802,16 @@ export function NormalizationWizard({
                 <span className="text-xs text-muted-foreground">{t('normalize.recommended', 'Рекомендуется')}</span>
               </Button>
             </div>
+
+            {/* Option to retry with AI enabled */}
+            <Button
+              variant="secondary"
+              onClick={() => handleRetryDryRun(250, true)}
+              className="w-full"
+            >
+              <Sparkles className="h-4 w-4 mr-2" />
+              {t('normalize.retryWithAI', 'Повторить с AI')} (250 {t('normalize.rows', 'строк')})
+            </Button>
 
             <Separator />
 
@@ -836,8 +892,8 @@ export function NormalizationWizard({
         {/* Sample mode banner */}
         <SampleModeBanner
           sampleLimit={sampleLimit}
-          totalRows={stats?.total_rows}
-          aiDisabled={!aiEnabled}
+          totalRows={actualTotalRows}
+          aiDisabled={aiDisabledByTimeout}
           onEnableAI={() => handleRetryDryRun(sampleLimit, true)}
         />
 
@@ -1052,8 +1108,8 @@ export function NormalizationWizard({
         {/* Sample mode banner */}
         <SampleModeBanner
           sampleLimit={sampleLimit}
-          totalRows={stats?.total_rows}
-          aiDisabled={!aiEnabled}
+          totalRows={actualTotalRows}
+          aiDisabled={aiDisabledByTimeout}
           onEnableAI={() => handleRetryDryRun(sampleLimit, true)}
         />
 
