@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation } from '@tanstack/react-query';
 import { 
   Loader2, Check, ChevronRight, ChevronDown, 
-  Sparkles, Settings2, Palette, Save, CheckCircle2, Circle
+  Sparkles, Settings2, Palette, Save, CheckCircle2, Circle,
+  ArrowRight, Eye, Zap, AlertTriangle, RefreshCw
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -18,12 +19,21 @@ import { Separator } from '@/components/ui/separator';
 import { Progress } from '@/components/ui/progress';
 import { toast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
-
-// =========================================
-// CONFIGURATION: UI Detail Level
-// =========================================
-type UIDetailLevel = 'minimal' | 'medium' | 'advanced';
-const UI_DETAIL_LEVEL: UIDetailLevel = 'medium';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 // =========================================
 // Types matching Cloud Run contract
@@ -39,6 +49,7 @@ interface WidthQuestion {
   suggested?: WidthData;
   suggested_variants?: WidthData[];
   examples?: string[];
+  affected_count?: number;
 }
 
 interface CoatingColorMapQuestion {
@@ -47,6 +58,7 @@ interface CoatingColorMapQuestion {
     token: string;
     aliases: string[];
     examples?: string[];
+    affected_count?: number;
   }>;
   colors: Array<{
     token: string;
@@ -54,6 +66,7 @@ interface CoatingColorMapQuestion {
     kind?: 'RAL' | 'DECOR';
     aliases?: string[];
     examples?: string[];
+    affected_count?: number;
   }>;
 }
 
@@ -68,6 +81,8 @@ interface DryRunResponse {
     candidates: number;
     patches_ready: number;
     questions: number;
+    auto_recognized_colors?: number;
+    auto_confirmed_widths?: number;
   };
   questions?: NormalizeQuestion[];
   error?: string;
@@ -93,7 +108,7 @@ interface NormalizationWizardProps {
 }
 
 // =========================================
-// Wizard Steps Component
+// Wizard Steps Indicator
 // =========================================
 interface WizardStep {
   key: string;
@@ -103,41 +118,133 @@ interface WizardStep {
 
 function StepIndicator({ steps, currentStep }: { steps: WizardStep[]; currentStep: string }) {
   const currentIndex = steps.findIndex(s => s.key === currentStep);
-  const progress = currentIndex >= 0 ? ((currentIndex) / (steps.length - 1)) * 100 : 0;
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between px-2">
-        {steps.map((step, idx) => {
-          const isComplete = idx < currentIndex;
-          const isCurrent = step.key === currentStep;
-          const isPending = idx > currentIndex;
+    <div className="flex items-center gap-1">
+      {steps.map((step, idx) => {
+        const isComplete = idx < currentIndex;
+        const isCurrent = step.key === currentStep;
 
-          return (
-            <div key={step.key} className="flex items-center gap-2">
-              <div className={cn(
-                "flex items-center justify-center w-8 h-8 rounded-full text-sm font-medium transition-colors",
-                isComplete && "bg-primary text-primary-foreground",
-                isCurrent && "bg-primary/20 text-primary border-2 border-primary",
-                isPending && "bg-muted text-muted-foreground"
-              )}>
-                {isComplete ? <Check className="h-4 w-4" /> : idx + 1}
-              </div>
-              <span className={cn(
-                "text-sm hidden sm:inline",
-                isCurrent && "font-medium text-foreground",
-                !isCurrent && "text-muted-foreground"
-              )}>
-                {step.label}
-              </span>
-              {idx < steps.length - 1 && (
-                <div className="hidden sm:block w-8 h-px bg-border mx-2" />
-              )}
+        return (
+          <div key={step.key} className="flex items-center">
+            <div className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all",
+              isComplete && "bg-primary/10 text-primary",
+              isCurrent && "bg-primary text-primary-foreground",
+              !isComplete && !isCurrent && "bg-muted text-muted-foreground"
+            )}>
+              {isComplete ? <Check className="h-3 w-3" /> : step.icon}
+              <span className="hidden sm:inline">{step.label}</span>
             </div>
-          );
-        })}
+            {idx < steps.length - 1 && (
+              <ChevronRight className="h-4 w-4 text-muted-foreground mx-1" />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// =========================================
+// Preview Table Component
+// =========================================
+interface PreviewChange {
+  original: string;
+  modified: string;
+  field: string;
+}
+
+interface PreviewTableProps {
+  changes: PreviewChange[];
+  title: string;
+  affectedCount?: number;
+}
+
+function PreviewTable({ changes, title, affectedCount }: PreviewTableProps) {
+  const { t } = useTranslation();
+  
+  if (changes.length === 0) return null;
+
+  return (
+    <Card className="border-dashed">
+      <CardHeader className="py-3 px-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Eye className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-sm font-medium">{title}</CardTitle>
+          </div>
+          {affectedCount && (
+            <Badge variant="secondary" className="text-xs">
+              {t('normalize.affectsItems', '{{count}} товаров', { count: affectedCount })}
+            </Badge>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="p-0">
+        <Table>
+          <TableHeader>
+            <TableRow className="bg-muted/30">
+              <TableHead className="h-8 text-xs">{t('normalize.original', 'Было')}</TableHead>
+              <TableHead className="h-8 text-xs w-8"></TableHead>
+              <TableHead className="h-8 text-xs">{t('normalize.modified', 'Станет')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {changes.slice(0, 5).map((change, idx) => (
+              <TableRow key={idx} className="text-xs">
+                <TableCell className="py-2 font-mono text-muted-foreground truncate max-w-[150px]">
+                  {change.original}
+                </TableCell>
+                <TableCell className="py-2 text-center">
+                  <ArrowRight className="h-3 w-3 text-primary" />
+                </TableCell>
+                <TableCell className="py-2">
+                  <span className="font-mono bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 px-1 rounded">
+                    {change.modified}
+                  </span>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+// =========================================
+// Quick Actions Bar
+// =========================================
+interface QuickActionsProps {
+  onConfirmAll: () => void;
+  onSkipAll: () => void;
+  confirmedCount: number;
+  totalCount: number;
+}
+
+function QuickActionsBar({ onConfirmAll, onSkipAll, confirmedCount, totalCount }: QuickActionsProps) {
+  const { t } = useTranslation();
+  const progress = totalCount > 0 ? (confirmedCount / totalCount) * 100 : 0;
+
+  return (
+    <div className="flex items-center justify-between bg-muted/50 rounded-lg px-4 py-2">
+      <div className="flex items-center gap-3">
+        <div className="text-sm">
+          <span className="font-medium">{confirmedCount}</span>
+          <span className="text-muted-foreground">/{totalCount}</span>
+        </div>
+        <Progress value={progress} className="w-20 h-2" />
       </div>
-      <Progress value={progress} className="h-1" />
+      <div className="flex gap-2">
+        <Button variant="ghost" size="sm" onClick={onSkipAll} className="text-xs">
+          {t('normalize.skipAll', 'Пропустить все')}
+        </Button>
+        <Button variant="secondary" size="sm" onClick={onConfirmAll} className="text-xs">
+          <Zap className="h-3 w-3 mr-1" />
+          {t('normalize.confirmAllSuggested', 'Принять все предложения')}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -168,25 +275,68 @@ export function NormalizationWizard({
   const [coatingConfirmations, setCoatingConfirmations] = useState<Set<string>>(new Set());
   const [ralMappings, setRalMappings] = useState<Record<string, string>>({});
 
-  // Expanded sections
-  const [expandedProfiles, setExpandedProfiles] = useState<Set<string>>(new Set());
+  // Active question for split-screen
+  const [activeWidthProfile, setActiveWidthProfile] = useState<string | null>(null);
+  const [activeColorToken, setActiveColorToken] = useState<string | null>(null);
 
   // Filter questions
   const widthQuestions = questions.filter(q => q.type.startsWith('WIDTH_')) as WidthQuestion[];
   const coatingColorMap = questions.find(q => q.type === 'COATING_COLOR_MAP') as CoatingColorMapQuestion | undefined;
 
+  // Set initial active question
+  useEffect(() => {
+    if (widthQuestions.length > 0 && !activeWidthProfile) {
+      setActiveWidthProfile(widthQuestions[0].profile);
+    }
+  }, [widthQuestions, activeWidthProfile]);
+
+  useEffect(() => {
+    if (coatingColorMap?.colors?.length && !activeColorToken) {
+      setActiveColorToken(coatingColorMap.colors[0].token);
+    }
+  }, [coatingColorMap, activeColorToken]);
+
   // Define wizard steps based on questions
   const getWizardSteps = (): WizardStep[] => {
     const steps: WizardStep[] = [];
     if (widthQuestions.length > 0) {
-      steps.push({ key: 'widths', label: t('import.widthsStep', 'Ширины'), icon: <Settings2 className="h-4 w-4" /> });
+      steps.push({ key: 'widths', label: t('normalize.widths', 'Ширины'), icon: <Settings2 className="h-3 w-3" /> });
     }
     if (coatingColorMap) {
-      steps.push({ key: 'coatings', label: t('import.coatingsStep', 'Покрытия'), icon: <Palette className="h-4 w-4" /> });
+      steps.push({ key: 'coatings', label: t('normalize.coatings', 'Цвета'), icon: <Palette className="h-3 w-3" /> });
     }
-    steps.push({ key: 'applying', label: t('import.applyStep', 'Применение'), icon: <Check className="h-4 w-4" /> });
+    steps.push({ key: 'applying', label: t('normalize.apply', 'Применение'), icon: <Check className="h-3 w-3" /> });
     return steps;
   };
+
+  // Generate preview changes for current selection
+  const generatePreviewChanges = useMemo((): PreviewChange[] => {
+    if (wizardStep === 'widths' && activeWidthProfile) {
+      const q = widthQuestions.find(w => w.profile === activeWidthProfile);
+      const selection = widthSelections[activeWidthProfile];
+      if (!q?.examples || !selection) return [];
+      
+      return q.examples.slice(0, 5).map(ex => ({
+        original: ex,
+        modified: `${ex} → ${selection.work_mm}/${selection.full_mm}мм`,
+        field: 'width',
+      }));
+    }
+    
+    if (wizardStep === 'coatings' && activeColorToken && coatingColorMap) {
+      const color = coatingColorMap.colors.find(c => c.token === activeColorToken);
+      const ral = ralMappings[activeColorToken];
+      if (!color?.examples) return [];
+      
+      return color.examples.slice(0, 5).map(ex => ({
+        original: ex,
+        modified: ral ? `${ex} → ${ral}` : ex,
+        field: 'color',
+      }));
+    }
+    
+    return [];
+  }, [wizardStep, activeWidthProfile, activeColorToken, widthSelections, ralMappings, widthQuestions, coatingColorMap]);
 
   // Auto-run dry_run on mount
   const dryRunMutation = useMutation({
@@ -237,7 +387,6 @@ export function NormalizationWizard({
       const hasCoatings = (data.questions || []).some(q => q.type === 'COATING_COLOR_MAP');
 
       if (!hasWidths && !hasCoatings) {
-        // No questions - show empty state with option to proceed
         setWizardStep('empty');
       } else if (hasWidths) {
         setWizardStep('widths');
@@ -251,12 +400,10 @@ export function NormalizationWizard({
         description: error.message,
         variant: 'destructive',
       });
-      // On error, allow skipping
       onSkip();
     },
   });
 
-  // Run dry_run automatically on mount
   useEffect(() => {
     dryRunMutation.mutate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -302,8 +449,8 @@ export function NormalizationWizard({
     onSuccess: (data) => {
       setWizardStep('done');
       toast({
-        title: t('import.normalizationApplied', 'Нормализация применена'),
-        description: t('import.patchedRows', 'Обновлено строк: {{count}}', { count: data.patched_rows || 0 }),
+        title: t('normalize.applied', 'Нормализация применена'),
+        description: t('normalize.patchedRows', 'Обновлено строк: {{count}}', { count: data.patched_rows || 0 }),
       });
     },
     onError: (error) => {
@@ -323,20 +470,18 @@ export function NormalizationWizard({
         },
       });
       
-      // Move to coatings if available, else to applying
       if (coatingColorMap) {
         setWizardStep('coatings');
       } else {
         setWizardStep('applying');
       }
-    } catch (error) {
+    } catch {
       // Error handled in mutation
     }
   };
 
   const handleSaveCoatings = async () => {
     try {
-      // Build coatings patch
       const coatingsPatch: Record<string, string[]> = {};
       coatingColorMap?.coatings?.forEach(c => {
         if (coatingConfirmations.has(c.token)) {
@@ -353,25 +498,13 @@ export function NormalizationWizard({
         },
       });
       setWizardStep('applying');
-    } catch (error) {
+    } catch {
       // Error handled in mutation
     }
   };
 
   const handleApply = () => {
     applyMutation.mutate();
-  };
-
-  const toggleProfileExpanded = (profile: string) => {
-    setExpandedProfiles(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(profile)) {
-        newSet.delete(profile);
-      } else {
-        newSet.add(profile);
-      }
-      return newSet;
-    });
   };
 
   const handleWidthVariantSelect = (profile: string, variant: WidthData) => {
@@ -389,33 +522,47 @@ export function NormalizationWizard({
     }));
   };
 
-  const toggleCoatingConfirmation = (token: string) => {
-    setCoatingConfirmations(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(token)) {
-        newSet.delete(token);
-      } else {
-        newSet.add(token);
+  const confirmAllWidths = () => {
+    const newSelections: Record<string, WidthData> = { ...widthSelections };
+    widthQuestions.forEach(q => {
+      if (q.type === 'WIDTH_CONFIRM' && q.suggested) {
+        newSelections[q.profile] = q.suggested;
+      } else if (q.type === 'WIDTH_CHOOSE_VARIANT' && q.suggested_variants?.[0]) {
+        newSelections[q.profile] = q.suggested_variants[0];
       }
-      return newSet;
     });
+    setWidthSelections(newSelections);
   };
+
+  const confirmAllColors = () => {
+    const newMappings: Record<string, string> = { ...ralMappings };
+    coatingColorMap?.colors?.forEach(c => {
+      if (c.suggested_ral) {
+        newMappings[c.token] = c.suggested_ral;
+      }
+    });
+    setRalMappings(newMappings);
+    
+    const newConfirmations = new Set(coatingConfirmations);
+    coatingColorMap?.coatings?.forEach(c => newConfirmations.add(c.token));
+    setCoatingConfirmations(newConfirmations);
+  };
+
+  const wizardSteps = getWizardSteps();
 
   // =========================================
   // Render: Loading
   // =========================================
   if (wizardStep === 'loading') {
     return (
-      <div className="space-y-4 py-8">
-        <div className="text-center">
-          <Loader2 className="h-10 w-10 mx-auto animate-spin text-primary mb-4" />
-          <h3 className="text-lg font-semibold mb-2">
-            {t('import.analyzingData', 'Анализ данных...')}
-          </h3>
-          <p className="text-muted-foreground text-sm">
-            {t('import.analyzingDataDesc', 'Проверяем ширины профилей и покрытия')}
-          </p>
-        </div>
+      <div className="flex flex-col items-center justify-center py-12">
+        <Loader2 className="h-10 w-10 animate-spin text-primary mb-4" />
+        <h3 className="text-lg font-semibold mb-2">
+          {t('normalize.analyzing', 'Анализ данных...')}
+        </h3>
+        <p className="text-muted-foreground text-sm">
+          {t('normalize.analyzingDesc', 'AI проверяет ширины профилей и покрытия')}
+        </p>
       </div>
     );
   }
@@ -425,199 +572,249 @@ export function NormalizationWizard({
   // =========================================
   if (wizardStep === 'empty') {
     return (
-      <div className="space-y-4 py-6">
+      <div className="space-y-6 py-6">
         <div className="text-center">
-          <CheckCircle2 className="h-12 w-12 mx-auto text-green-600 mb-4" />
-          <h3 className="text-lg font-semibold mb-2">
-            {t('import.noNormalizationNeeded', 'Нормализация не требуется')}
+          <CheckCircle2 className="h-14 w-14 mx-auto text-green-600 mb-4" />
+          <h3 className="text-xl font-semibold mb-2">
+            {t('normalize.noQuestionsTitle', 'Нормализация не требуется')}
           </h3>
-          <p className="text-muted-foreground text-sm max-w-md mx-auto">
-            {t('import.dataAlreadyNormalized', 'Все данные уже в порядке. Можно продолжить к публикации.')}
+          <p className="text-muted-foreground max-w-md mx-auto">
+            {t('normalize.noQuestionsDesc', 'AI автоматически распознал все данные. Можно продолжить к публикации.')}
           </p>
         </div>
 
         {stats && (
-          <Card className="mx-auto max-w-sm">
-            <CardContent className="py-4 text-center">
-              <p className="text-2xl font-bold">{stats.rows_scanned}</p>
-              <p className="text-xs text-muted-foreground">{t('import.rowsScanned', 'строк проверено')}</p>
+          <Card className="max-w-md mx-auto">
+            <CardContent className="py-4">
+              <div className="grid grid-cols-3 gap-4 text-center">
+                <div>
+                  <p className="text-2xl font-bold text-primary">{stats.rows_scanned}</p>
+                  <p className="text-xs text-muted-foreground">{t('normalize.scanned', 'Проверено')}</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-green-600">{stats.auto_recognized_colors || 0}</p>
+                  <p className="text-xs text-muted-foreground">{t('normalize.autoColors', 'Цветов')}</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-green-600">{stats.auto_confirmed_widths || 0}</p>
+                  <p className="text-xs text-muted-foreground">{t('normalize.autoWidths', 'Ширин')}</p>
+                </div>
+              </div>
             </CardContent>
           </Card>
         )}
 
-        <div className="flex gap-2 justify-center">
-          <Button onClick={onComplete}>
+        <div className="flex justify-center">
+          <Button size="lg" onClick={onComplete}>
             <ChevronRight className="h-4 w-4 mr-2" />
-            {t('import.continueToPublish', 'Продолжить к публикации')}
+            {t('normalize.continuePublish', 'Продолжить к публикации')}
           </Button>
         </div>
       </div>
     );
   }
 
-  const wizardSteps = getWizardSteps();
-
   // =========================================
-  // Render: Widths Step
+  // Render: Widths Step (Split Screen)
   // =========================================
   if (wizardStep === 'widths') {
+    const activeQuestion = widthQuestions.find(q => q.profile === activeWidthProfile);
+    const confirmedCount = Object.keys(widthSelections).length;
+
     return (
       <div className="space-y-4">
-        {UI_DETAIL_LEVEL !== 'minimal' && (
+        <div className="flex items-center justify-between">
           <StepIndicator steps={wizardSteps} currentStep="widths" />
-        )}
-
-        <div className="flex items-center gap-2">
-          <Settings2 className="h-5 w-5 text-primary" />
-          <h3 className="font-semibold">{t('import.widthsStep', 'Ширины профилей')}</h3>
-          <Badge variant="outline">{widthQuestions.length}</Badge>
+          <Badge variant="outline">
+            {widthQuestions.length} {t('normalize.profiles', 'профилей')}
+          </Badge>
         </div>
 
-        {stats && UI_DETAIL_LEVEL !== 'minimal' && (
-          <p className="text-sm text-muted-foreground">
-            {t('import.scannedRows', 'Проверено строк: {{count}}', { count: stats.rows_scanned })}
-          </p>
-        )}
+        <QuickActionsBar
+          onConfirmAll={confirmAllWidths}
+          onSkipAll={onSkip}
+          confirmedCount={confirmedCount}
+          totalCount={widthQuestions.length}
+        />
 
-        <ScrollArea className="h-[280px] pr-4">
-          <div className="space-y-3">
-            {widthQuestions.map((q, idx) => (
-              <Collapsible 
-                key={idx} 
-                open={expandedProfiles.has(q.profile)}
-                onOpenChange={() => toggleProfileExpanded(q.profile)}
-              >
-                <Card className={cn(
-                  widthSelections[q.profile] && "border-primary/50"
-                )}>
-                  <CollapsibleTrigger asChild>
-                    <CardHeader className="py-3 cursor-pointer hover:bg-muted/50 transition-colors">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          {expandedProfiles.has(q.profile) ? (
-                            <ChevronDown className="h-4 w-4" />
+        {/* Split Screen Layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Left: Question List */}
+          <Card>
+            <CardHeader className="py-3">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Settings2 className="h-4 w-4" />
+                {t('normalize.widthProfiles', 'Профили и ширины')}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <ScrollArea className="h-[300px]">
+                <div className="divide-y">
+                  {widthQuestions.map((q) => {
+                    const isActive = activeWidthProfile === q.profile;
+                    const isConfirmed = !!widthSelections[q.profile];
+                    
+                    return (
+                      <div
+                        key={q.profile}
+                        className={cn(
+                          "flex items-center justify-between px-4 py-3 cursor-pointer transition-colors",
+                          isActive && "bg-primary/5 border-l-2 border-primary",
+                          !isActive && "hover:bg-muted/50"
+                        )}
+                        onClick={() => setActiveWidthProfile(q.profile)}
+                      >
+                        <div className="flex items-center gap-3">
+                          {isConfirmed ? (
+                            <CheckCircle2 className="h-5 w-5 text-primary" />
                           ) : (
-                            <ChevronRight className="h-4 w-4" />
+                            <Circle className="h-5 w-5 text-muted-foreground" />
                           )}
-                          <CardTitle className="text-sm font-medium">{q.profile}</CardTitle>
-                          <Badge 
-                            variant={q.type === 'WIDTH_CONFIRM' ? 'default' : 'secondary'} 
-                            className="text-xs"
-                          >
-                            {q.type === 'WIDTH_CONFIRM' ? t('import.autoDetected', 'Авто') : 
-                             q.type === 'WIDTH_CHOOSE_VARIANT' ? t('import.chooseVariant', 'Выбор') :
-                             t('import.manual', 'Вручную')}
-                          </Badge>
-                        </div>
-                        {widthSelections[q.profile] && (
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-muted-foreground">
-                              {widthSelections[q.profile].work_mm}/{widthSelections[q.profile].full_mm} мм
-                            </span>
-                            <CheckCircle2 className="h-4 w-4 text-primary" />
+                          <div>
+                            <p className="font-medium">{q.profile}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {q.type === 'WIDTH_CONFIRM' ? t('normalize.autoDetected', 'Авто') : 
+                               q.type === 'WIDTH_CHOOSE_VARIANT' ? t('normalize.chooseVariant', 'Выбор') :
+                               t('normalize.manual', 'Вручную')}
+                              {q.affected_count && ` • ${q.affected_count} товаров`}
+                            </p>
                           </div>
+                        </div>
+                        {isConfirmed && widthSelections[q.profile] && (
+                          <Badge variant="secondary" className="text-xs">
+                            {widthSelections[q.profile].work_mm}/{widthSelections[q.profile].full_mm}
+                          </Badge>
                         )}
                       </div>
-                    </CardHeader>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <CardContent className="pt-0 pb-3 space-y-3">
-                      {/* WIDTH_CONFIRM */}
-                      {q.type === 'WIDTH_CONFIRM' && q.suggested && (
-                        <div className="space-y-2">
-                          <p className="text-sm text-muted-foreground">{t('import.confirmWidth', 'Подтвердите ширину:')}</p>
-                          <div className="flex gap-6 bg-muted/50 rounded-lg p-3">
-                            <div>
-                              <Label className="text-xs text-muted-foreground">{t('import.workWidth', 'Рабочая')}</Label>
-                              <p className="font-semibold text-lg">{q.suggested.work_mm} мм</p>
-                            </div>
-                            <div>
-                              <Label className="text-xs text-muted-foreground">{t('import.fullWidth', 'Полная')}</Label>
-                              <p className="font-semibold text-lg">{q.suggested.full_mm} мм</p>
-                            </div>
-                          </div>
-                        </div>
-                      )}
+                    );
+                  })}
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
 
-                      {/* WIDTH_CHOOSE_VARIANT */}
-                      {q.type === 'WIDTH_CHOOSE_VARIANT' && q.suggested_variants && (
-                        <div className="space-y-2">
-                          <p className="text-sm text-muted-foreground">{t('import.chooseWidth', 'Выберите вариант:')}</p>
-                          <RadioGroup
-                            value={widthSelections[q.profile] ? JSON.stringify(widthSelections[q.profile]) : ''}
-                            onValueChange={(val) => handleWidthVariantSelect(q.profile, JSON.parse(val))}
-                          >
-                            {q.suggested_variants.map((v, vi) => (
-                              <div key={vi} className="flex items-center space-x-3 p-2 rounded hover:bg-muted/50">
-                                <RadioGroupItem value={JSON.stringify(v)} id={`${q.profile}-${vi}`} />
-                                <Label htmlFor={`${q.profile}-${vi}`} className="text-sm flex-1 cursor-pointer">
-                                  <span className="font-medium">{v.work_mm}</span>
-                                  <span className="text-muted-foreground"> / </span>
-                                  <span className="font-medium">{v.full_mm}</span>
-                                  <span className="text-muted-foreground"> мм</span>
-                                </Label>
-                              </div>
-                            ))}
-                          </RadioGroup>
-                        </div>
-                      )}
+          {/* Right: Active Question Details + Preview */}
+          <div className="space-y-4">
+            {activeQuestion && (
+              <Card>
+                <CardHeader className="py-3">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-lg">{activeQuestion.profile}</CardTitle>
+                    <Badge>
+                      {activeQuestion.type === 'WIDTH_CONFIRM' ? t('normalize.autoDetected', 'AI предложение') : 
+                       activeQuestion.type === 'WIDTH_CHOOSE_VARIANT' ? t('normalize.multipleOptions', 'Несколько вариантов') :
+                       t('normalize.manualEntry', 'Ввод вручную')}
+                    </Badge>
+                  </div>
+                  <CardDescription>
+                    {t('normalize.foundPattern')} {activeQuestion.affected_count || '—'} {t('normalize.items')}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {/* WIDTH_CONFIRM */}
+                  {activeQuestion.type === 'WIDTH_CONFIRM' && activeQuestion.suggested && (
+                    <div className="flex gap-4 bg-primary/5 rounded-lg p-4">
+                      <div className="flex-1">
+                        <Label className="text-xs text-muted-foreground">{t('normalize.workWidth', 'Рабочая')}</Label>
+                        <p className="text-2xl font-bold">{activeQuestion.suggested.work_mm}</p>
+                        <p className="text-xs text-muted-foreground">мм</p>
+                      </div>
+                      <div className="flex-1">
+                        <Label className="text-xs text-muted-foreground">{t('normalize.fullWidth', 'Полная')}</Label>
+                        <p className="text-2xl font-bold">{activeQuestion.suggested.full_mm}</p>
+                        <p className="text-xs text-muted-foreground">мм</p>
+                      </div>
+                      <Button 
+                        variant={widthSelections[activeQuestion.profile] ? "secondary" : "default"}
+                        className="self-center"
+                        onClick={() => handleWidthVariantSelect(activeQuestion.profile, activeQuestion.suggested!)}
+                      >
+                        {widthSelections[activeQuestion.profile] ? <Check className="h-4 w-4" /> : t('common.confirm', 'Подтвердить')}
+                      </Button>
+                    </div>
+                  )}
 
-                      {/* WIDTH_MANUAL */}
-                      {q.type === 'WIDTH_MANUAL' && (
-                        <div className="space-y-2">
-                          <p className="text-sm text-muted-foreground">{t('import.enterWidth', 'Введите ширину:')}</p>
-                          <div className="flex gap-4">
-                            <div className="flex-1">
-                              <Label className="text-xs">{t('import.workWidth', 'Рабочая (мм)')}</Label>
-                              <Input
-                                type="number"
-                                placeholder="1000"
-                                value={widthSelections[q.profile]?.work_mm || ''}
-                                onChange={(e) => handleWidthManualInput(q.profile, 'work_mm', Number(e.target.value))}
-                              />
-                            </div>
-                            <div className="flex-1">
-                              <Label className="text-xs">{t('import.fullWidth', 'Полная (мм)')}</Label>
-                              <Input
-                                type="number"
-                                placeholder="1051"
-                                value={widthSelections[q.profile]?.full_mm || ''}
-                                onChange={(e) => handleWidthManualInput(q.profile, 'full_mm', Number(e.target.value))}
-                              />
-                            </div>
-                          </div>
+                  {/* WIDTH_CHOOSE_VARIANT */}
+                  {activeQuestion.type === 'WIDTH_CHOOSE_VARIANT' && activeQuestion.suggested_variants && (
+                    <RadioGroup
+                      value={widthSelections[activeQuestion.profile] ? JSON.stringify(widthSelections[activeQuestion.profile]) : ''}
+                      onValueChange={(val) => handleWidthVariantSelect(activeQuestion.profile, JSON.parse(val))}
+                      className="space-y-2"
+                    >
+                      {activeQuestion.suggested_variants.map((v, vi) => (
+                        <div key={vi} className="flex items-center space-x-3 p-3 rounded-lg border hover:bg-muted/50">
+                          <RadioGroupItem value={JSON.stringify(v)} id={`${activeQuestion.profile}-${vi}`} />
+                          <Label htmlFor={`${activeQuestion.profile}-${vi}`} className="flex-1 cursor-pointer">
+                            <span className="font-semibold text-lg">{v.work_mm}</span>
+                            <span className="text-muted-foreground mx-2">/</span>
+                            <span className="font-semibold text-lg">{v.full_mm}</span>
+                            <span className="text-muted-foreground ml-1">мм</span>
+                          </Label>
                         </div>
-                      )}
+                      ))}
+                    </RadioGroup>
+                  )}
 
-                      {/* Examples (medium/advanced only) */}
-                      {UI_DETAIL_LEVEL !== 'minimal' && q.examples && q.examples.length > 0 && (
-                        <div className="pt-2 border-t">
-                          <p className="text-xs text-muted-foreground mb-1">{t('import.examples', 'Примеры из файла:')}</p>
-                          <div className="text-xs font-mono bg-muted p-2 rounded max-h-16 overflow-auto space-y-1">
-                            {q.examples.slice(0, 3).map((ex, i) => (
-                              <div key={i} className="truncate">{ex}</div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </CardContent>
-                  </CollapsibleContent>
-                </Card>
-              </Collapsible>
-            ))}
+                  {/* WIDTH_MANUAL */}
+                  {activeQuestion.type === 'WIDTH_MANUAL' && (
+                    <div className="flex gap-4">
+                      <div className="flex-1">
+                        <Label>{t('normalize.workWidth', 'Рабочая (мм)')}</Label>
+                        <Input
+                          type="number"
+                          placeholder="1000"
+                          value={widthSelections[activeQuestion.profile]?.work_mm || ''}
+                          onChange={(e) => handleWidthManualInput(activeQuestion.profile, 'work_mm', Number(e.target.value))}
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <Label>{t('normalize.fullWidth', 'Полная (мм)')}</Label>
+                        <Input
+                          type="number"
+                          placeholder="1051"
+                          value={widthSelections[activeQuestion.profile]?.full_mm || ''}
+                          onChange={(e) => handleWidthManualInput(activeQuestion.profile, 'full_mm', Number(e.target.value))}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Examples */}
+                  {activeQuestion.examples && activeQuestion.examples.length > 0 && (
+                    <div className="pt-2">
+                      <p className="text-xs font-medium text-muted-foreground mb-2">
+                        {t('normalize.examplesFromFile', 'Примеры из файла:')}
+                      </p>
+                      <div className="font-mono text-xs bg-muted p-2 rounded space-y-1 max-h-20 overflow-auto">
+                        {activeQuestion.examples.slice(0, 5).map((ex, i) => (
+                          <div key={i} className="truncate">{ex}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Preview Table */}
+            <PreviewTable 
+              changes={generatePreviewChanges}
+              title={t('normalize.previewChanges', 'Предпросмотр изменений')}
+              affectedCount={activeQuestion?.affected_count}
+            />
           </div>
-        </ScrollArea>
+        </div>
 
         <Separator />
 
-        <div className="flex gap-2 justify-between">
+        <div className="flex justify-between">
           <Button variant="ghost" onClick={onSkip}>
             {t('common.skip', 'Пропустить')}
           </Button>
           <Button onClick={handleSaveWidths} disabled={saveSettingsMutation.isPending}>
             {saveSettingsMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
             <Save className="h-4 w-4 mr-2" />
-            {t('import.saveAndContinue', 'Сохранить и продолжить')}
+            {t('normalize.saveAndContinue', 'Сохранить и продолжить')}
           </Button>
         </div>
       </div>
@@ -625,124 +822,188 @@ export function NormalizationWizard({
   }
 
   // =========================================
-  // Render: Coatings Step
+  // Render: Coatings Step (Split Screen)
   // =========================================
   if (wizardStep === 'coatings') {
+    const activeColor = coatingColorMap?.colors?.find(c => c.token === activeColorToken);
     const totalItems = (coatingColorMap?.coatings?.length || 0) + (coatingColorMap?.colors?.length || 0);
-    
+    const confirmedCount = coatingConfirmations.size + Object.keys(ralMappings).length;
+
     return (
       <div className="space-y-4">
-        {UI_DETAIL_LEVEL !== 'minimal' && (
+        <div className="flex items-center justify-between">
           <StepIndicator steps={wizardSteps} currentStep="coatings" />
-        )}
-
-        <div className="flex items-center gap-2">
-          <Palette className="h-5 w-5 text-primary" />
-          <h3 className="font-semibold">{t('import.coatingsStep', 'Покрытия и цвета')}</h3>
-          <Badge variant="outline">{totalItems}</Badge>
+          <Badge variant="outline">
+            {totalItems} {t('normalize.items', 'элементов')}
+          </Badge>
         </div>
 
-        <ScrollArea className="h-[280px] pr-4">
-          <div className="space-y-4">
-            {/* Coatings section */}
-            {coatingColorMap?.coatings && coatingColorMap.coatings.length > 0 && (
-              <div className="space-y-2">
-                <h4 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  {t('import.coatingsSection', 'Покрытия')}
-                  <Badge variant="secondary" className="text-xs">{coatingColorMap.coatings.length}</Badge>
-                </h4>
-                {coatingColorMap.coatings.map((coating, idx) => (
-                  <Card 
-                    key={idx} 
-                    className={cn(
-                      "cursor-pointer transition-colors",
-                      coatingConfirmations.has(coating.token) && "border-primary/50 bg-primary/5"
-                    )}
-                    onClick={() => toggleCoatingConfirmation(coating.token)}
-                  >
-                    <CardHeader className="py-3">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <CardTitle className="text-sm">{coating.token}</CardTitle>
-                          <CardDescription className="text-xs mt-1">
-                            {coating.aliases.slice(0, 5).join(', ')}
-                            {coating.aliases.length > 5 && ` +${coating.aliases.length - 5}`}
-                          </CardDescription>
+        <QuickActionsBar
+          onConfirmAll={confirmAllColors}
+          onSkipAll={onSkip}
+          confirmedCount={confirmedCount}
+          totalCount={totalItems}
+        />
+
+        {/* Split Screen Layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Left: Colors List */}
+          <Card>
+            <CardHeader className="py-3">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Palette className="h-4 w-4" />
+                {t('normalize.colorsAndCoatings', 'Цвета и покрытия')}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-0">
+              <ScrollArea className="h-[300px]">
+                <div className="divide-y">
+                  {/* Colors */}
+                  {coatingColorMap?.colors?.map((color) => {
+                    const isActive = activeColorToken === color.token;
+                    const isConfirmed = !!ralMappings[color.token];
+                    
+                    return (
+                      <div
+                        key={color.token}
+                        className={cn(
+                          "flex items-center justify-between px-4 py-3 cursor-pointer transition-colors",
+                          isActive && "bg-primary/5 border-l-2 border-primary",
+                          !isActive && "hover:bg-muted/50"
+                        )}
+                        onClick={() => setActiveColorToken(color.token)}
+                      >
+                        <div className="flex items-center gap-3">
+                          {isConfirmed ? (
+                            <CheckCircle2 className="h-5 w-5 text-primary" />
+                          ) : (
+                            <Circle className="h-5 w-5 text-muted-foreground" />
+                          )}
+                          <div>
+                            <p className="font-medium">{color.token}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {color.kind === 'DECOR' ? 'Декор' : 'RAL'}
+                              {color.affected_count && ` • ${color.affected_count} товаров`}
+                            </p>
+                          </div>
                         </div>
-                        {coatingConfirmations.has(coating.token) ? (
-                          <CheckCircle2 className="h-5 w-5 text-primary" />
-                        ) : (
-                          <Circle className="h-5 w-5 text-muted-foreground" />
+                        {isConfirmed && (
+                          <Badge variant="secondary" className="text-xs">
+                            {ralMappings[color.token]}
+                          </Badge>
                         )}
                       </div>
-                    </CardHeader>
-                    {UI_DETAIL_LEVEL !== 'minimal' && coating.examples && coating.examples.length > 0 && (
-                      <CardContent className="pt-0 pb-3">
-                        <div className="text-xs font-mono bg-muted p-2 rounded max-h-12 overflow-auto">
-                          {coating.examples.slice(0, 2).map((ex, i) => (
-                            <div key={i} className="truncate">{ex}</div>
-                          ))}
+                    );
+                  })}
+                </div>
+              </ScrollArea>
+            </CardContent>
+          </Card>
+
+          {/* Right: Active Color Details + Preview */}
+          <div className="space-y-4">
+            {activeColor && (
+              <Card>
+                <CardHeader className="py-3">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      {activeColor.token}
+                      {activeColor.kind === 'DECOR' && (
+                        <Badge variant="outline">Декор</Badge>
+                      )}
+                    </CardTitle>
+                  </div>
+                  <CardDescription>
+                    {t('normalize.foundColorPattern')} {activeColor.affected_count || '—'} {t('normalize.items')}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {activeColor.suggested_ral && (
+                    <div className="flex items-center gap-4">
+                      <div className="flex-1">
+                        <Label className="text-xs text-muted-foreground">
+                          {t('normalize.suggestedRal', 'AI предлагает')}
+                        </Label>
+                        <div className="flex items-center gap-2 mt-1">
+                          <Badge variant="default" className="text-lg px-3 py-1">
+                            {activeColor.suggested_ral}
+                          </Badge>
+                          <Button
+                            size="sm"
+                            variant={ralMappings[activeColor.token] === activeColor.suggested_ral ? "secondary" : "outline"}
+                            onClick={() => setRalMappings(prev => ({ ...prev, [activeColor.token]: activeColor.suggested_ral! }))}
+                          >
+                            {ralMappings[activeColor.token] === activeColor.suggested_ral ? (
+                              <Check className="h-4 w-4" />
+                            ) : (
+                              t('common.confirm', 'Подтвердить')
+                            )}
+                          </Button>
                         </div>
-                      </CardContent>
-                    )}
-                  </Card>
-                ))}
-              </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <Label>{t('normalize.orEnterRal', 'Или введите RAL вручную')}</Label>
+                    <Input
+                      placeholder="RAL 6005"
+                      value={ralMappings[activeColor.token] || ''}
+                      onChange={(e) => setRalMappings(prev => ({ ...prev, [activeColor.token]: e.target.value }))}
+                      className="mt-1"
+                    />
+                  </div>
+
+                  {activeColor.aliases && activeColor.aliases.length > 0 && (
+                    <div>
+                      <p className="text-xs font-medium text-muted-foreground mb-2">
+                        {t('normalize.detectedAliases', 'Найденные варианты написания:')}
+                      </p>
+                      <div className="flex flex-wrap gap-1">
+                        {activeColor.aliases.map((alias, i) => (
+                          <Badge key={i} variant="outline" className="text-xs">
+                            {alias}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {activeColor.examples && activeColor.examples.length > 0 && (
+                    <div>
+                      <p className="text-xs font-medium text-muted-foreground mb-2">
+                        {t('normalize.examplesFromFile', 'Примеры из файла:')}
+                      </p>
+                      <div className="font-mono text-xs bg-muted p-2 rounded space-y-1 max-h-20 overflow-auto">
+                        {activeColor.examples.slice(0, 5).map((ex, i) => (
+                          <div key={i} className="truncate">{ex}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             )}
 
-            {/* Colors/RAL section */}
-            {coatingColorMap?.colors && coatingColorMap.colors.length > 0 && (
-              <div className="space-y-2">
-                <h4 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  {t('import.colorsSection', 'Цвета / RAL')}
-                  <Badge variant="secondary" className="text-xs">{coatingColorMap.colors.length}</Badge>
-                </h4>
-                {coatingColorMap.colors.map((color, idx) => (
-                  <Card key={idx}>
-                    <CardHeader className="py-3">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <CardTitle className="text-sm flex items-center gap-2">
-                            {color.token}
-                            {color.kind === 'DECOR' && (
-                              <Badge variant="outline" className="text-xs">Декор</Badge>
-                            )}
-                          </CardTitle>
-                          {color.aliases && color.aliases.length > 0 && (
-                            <CardDescription className="text-xs mt-1">
-                              {color.aliases.slice(0, 3).join(', ')}
-                            </CardDescription>
-                          )}
-                        </div>
-                        {color.suggested_ral && (
-                          <div className="flex items-center gap-2">
-                            <Input
-                              value={ralMappings[color.token] || ''}
-                              onChange={(e) => setRalMappings(prev => ({ ...prev, [color.token]: e.target.value }))}
-                              placeholder={color.suggested_ral}
-                              className="w-28 h-8 text-sm"
-                            />
-                          </div>
-                        )}
-                      </div>
-                    </CardHeader>
-                  </Card>
-                ))}
-              </div>
-            )}
+            {/* Preview Table */}
+            <PreviewTable 
+              changes={generatePreviewChanges}
+              title={t('normalize.previewChanges', 'Предпросмотр изменений')}
+              affectedCount={activeColor?.affected_count}
+            />
           </div>
-        </ScrollArea>
+        </div>
 
         <Separator />
 
-        <div className="flex gap-2 justify-between">
+        <div className="flex justify-between">
           <Button variant="ghost" onClick={onSkip}>
             {t('common.skip', 'Пропустить')}
           </Button>
           <Button onClick={handleSaveCoatings} disabled={saveSettingsMutation.isPending}>
             {saveSettingsMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
             <Save className="h-4 w-4 mr-2" />
-            {t('import.saveAndContinue', 'Сохранить и продолжить')}
+            {t('normalize.saveAndContinue', 'Сохранить и продолжить')}
           </Button>
         </div>
       </div>
@@ -754,50 +1015,51 @@ export function NormalizationWizard({
   // =========================================
   if (wizardStep === 'applying') {
     return (
-      <div className="space-y-4">
-        {UI_DETAIL_LEVEL !== 'minimal' && (
-          <StepIndicator steps={wizardSteps} currentStep="applying" />
-        )}
+      <div className="space-y-6">
+        <StepIndicator steps={wizardSteps} currentStep="applying" />
 
-        <div className="text-center py-4">
-          <Sparkles className="h-10 w-10 mx-auto text-primary mb-3" />
-          <h3 className="text-lg font-semibold mb-2">
-            {t('import.readyToApply', 'Готово к применению')}
+        <div className="text-center py-6">
+          <Sparkles className="h-12 w-12 mx-auto text-primary mb-4" />
+          <h3 className="text-xl font-semibold mb-2">
+            {t('normalize.readyToApply', 'Готово к применению')}
           </h3>
-          <p className="text-muted-foreground text-sm max-w-md mx-auto">
-            {t('import.applyDesc', 'Настройки сохранены. Нажмите "Применить" чтобы обновить каталог.')}
+          <p className="text-muted-foreground max-w-md mx-auto">
+            {t('normalize.applyDesc', 'Настройки сохранены. Нажмите "Применить" чтобы обновить каталог в BigQuery.')}
           </p>
         </div>
 
         {stats && (
-          <Card>
-            <CardContent className="py-4">
-              <div className="grid grid-cols-3 gap-4 text-center">
+          <Card className="max-w-lg mx-auto">
+            <CardContent className="py-6">
+              <div className="grid grid-cols-3 gap-6 text-center">
                 <div>
-                  <p className="text-2xl font-bold">{stats.rows_scanned}</p>
-                  <p className="text-xs text-muted-foreground">{t('import.scanned', 'Проверено')}</p>
+                  <p className="text-3xl font-bold text-primary">{stats.rows_scanned}</p>
+                  <p className="text-xs text-muted-foreground mt-1">{t('normalize.scanned', 'Проверено')}</p>
                 </div>
                 <div>
-                  <p className="text-2xl font-bold">{stats.patches_ready || 0}</p>
-                  <p className="text-xs text-muted-foreground">{t('import.patchesReady', 'К обновлению')}</p>
+                  <p className="text-3xl font-bold text-green-600">{stats.patches_ready || 0}</p>
+                  <p className="text-xs text-muted-foreground mt-1">{t('normalize.toUpdate', 'К обновлению')}</p>
                 </div>
                 <div>
-                  <p className="text-2xl font-bold">{Object.keys(widthSelections).length}</p>
-                  <p className="text-xs text-muted-foreground">{t('import.profilesConfirmed', 'Профилей')}</p>
+                  <p className="text-3xl font-bold">{Object.keys(widthSelections).length + Object.keys(ralMappings).length}</p>
+                  <p className="text-xs text-muted-foreground mt-1">{t('normalize.confirmed', 'Подтверждено')}</p>
                 </div>
               </div>
             </CardContent>
           </Card>
         )}
 
-        <div className="flex gap-2 justify-center">
+        <div className="flex gap-3 justify-center">
           <Button variant="outline" onClick={onSkip}>
-            {t('import.skipApply', 'Пропустить')}
+            {t('normalize.skipApply', 'Пропустить')}
           </Button>
-          <Button onClick={handleApply} disabled={applyMutation.isPending}>
-            {applyMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-            <Check className="h-4 w-4 mr-2" />
-            {t('import.applyNormalization', 'Применить')}
+          <Button size="lg" onClick={handleApply} disabled={applyMutation.isPending}>
+            {applyMutation.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Check className="h-4 w-4 mr-2" />
+            )}
+            {t('normalize.applyToCatalog', 'Применить в каталог')}
           </Button>
         </div>
       </div>
@@ -809,21 +1071,21 @@ export function NormalizationWizard({
   // =========================================
   if (wizardStep === 'done') {
     return (
-      <div className="space-y-4 py-6">
+      <div className="space-y-6 py-6">
         <div className="text-center">
-          <CheckCircle2 className="h-12 w-12 mx-auto text-green-600 mb-4" />
-          <h3 className="text-lg font-semibold mb-2">
-            {t('import.normalizationComplete', 'Нормализация завершена')}
+          <CheckCircle2 className="h-16 w-16 mx-auto text-green-600 mb-4" />
+          <h3 className="text-xl font-semibold mb-2">
+            {t('normalize.complete', 'Нормализация завершена')}
           </h3>
-          <p className="text-muted-foreground text-sm">
-            {t('import.continueToPublish', 'Теперь можно опубликовать каталог.')}
+          <p className="text-muted-foreground">
+            {t('normalize.continueToPublish', 'Теперь можно опубликовать каталог.')}
           </p>
         </div>
 
         <div className="flex justify-center">
-          <Button onClick={onComplete}>
+          <Button size="lg" onClick={onComplete}>
             <ChevronRight className="h-4 w-4 mr-2" />
-            {t('import.continueToPublish', 'Продолжить к публикации')}
+            {t('normalize.publishCatalog', 'Перейти к публикации')}
           </Button>
         </div>
       </div>
