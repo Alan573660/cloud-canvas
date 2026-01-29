@@ -310,13 +310,20 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
         invalidRows: data.invalid_rows || 0,
       });
 
-      // Validation passed (ok=true) - allow publish even if there are some invalid rows
+      // Validation passed (ok=true) - auto-transition to normalizing step (no extra button)
       setStep('validated');
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
       toast({
         title: t('import.validateSuccess', 'Проверка завершена'),
-        description: t('import.validateSuccessDesc', 'Файл успешно проверен. Посмотрите результаты во вкладке Импорт.'),
+        description: t('import.validateSuccessDesc', 'Файл успешно проверен. Переходим к нормализации.'),
       });
+      
+      // Auto-transition to normalizing after a brief pause to show validated state
+      if (!dryRun) {
+        setTimeout(() => {
+          setStep('normalizing');
+        }, 1500);
+      }
     },
     onError: async (error) => {
       console.error('[ImportPriceDialog] Validate failed:', error);
@@ -774,7 +781,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
           />
         )}
 
-        {/* Step 4: Validated */}
+        {/* Step 4: Validated - auto-transition to normalizing */}
         {step === 'validated' && (
           <div className="space-y-4">
             <Card className="bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-800">
@@ -785,7 +792,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                     {t('import.validationPassed', 'Проверка пройдена')}
                   </p>
                   <p className="text-xs text-green-700 dark:text-green-400 mt-1">
-                    {t('import.validationPassedDesc', 'Результаты доступны во вкладке Импорт.')}
+                    {t('import.validationPassedDesc', 'Переходим к нормализации данных...')}
                   </p>
                 </div>
               </CardContent>
@@ -821,30 +828,11 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                 </CardContent>
               </Card>
             ) : (
-              <div className="flex gap-2">
-                {/* Normalization button - optional step */}
-                <Button 
-                  variant="outline"
-                  onClick={() => setStep('normalizing')}
-                  className="flex-1"
-                >
-                  <Sparkles className="h-4 w-4 mr-2" />
-                  {t('import.normalize', 'Нормализовать')}
-                </Button>
-                
-                {/* Direct publish button */}
-                <Button 
-                  onClick={() => publishMutation.mutate()}
-                  disabled={publishMutation.isPending}
-                  className="flex-1"
-                >
-                  {publishMutation.isPending ? (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 mr-2" />
-                  )}
-                  {t('import.publish', 'Опубликовать')}
-                </Button>
+              <div className="py-4 text-center">
+                <Loader2 className="h-8 w-8 mx-auto animate-spin text-primary mb-3" />
+                <p className="text-sm text-muted-foreground">
+                  {t('import.preparingNormalization', 'Подготовка нормализации...')}
+                </p>
               </div>
             )}
           </div>

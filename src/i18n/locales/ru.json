@@ -78,7 +78,14 @@
     "patchedRows": "Обновлено строк: {{count}}",
     "normalizationComplete": "Нормализация завершена",
     "continueToPublish": "Продолжить к публикации",
-    "scannedRows": "Проверено строк: {{count}}"
+    "scannedRows": "Проверено строк: {{count}}",
+    "analyzingData": "Анализ данных...",
+    "analyzingDataDesc": "Проверяем ширины профилей и покрытия",
+    "noNormalizationNeeded": "Нормализация не требуется",
+    "dataAlreadyNormalized": "Все данные уже в порядке. Можно продолжить к публикации.",
+    "rowsScanned": "строк проверено",
+    "applyStep": "Применение",
+    "preparingNormalization": "Подготовка нормализации..."
   },
   "common": {
     "loading": "Загрузка...",
