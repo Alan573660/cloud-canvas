@@ -355,6 +355,10 @@ export function NormalizationWizard({
 
       if (error) throw new Error(error.message);
       if (!data?.ok) throw new Error(data?.error || 'Dry run failed');
+      
+      // LOG FULL RESPONSE FOR DEBUG - verifying contract (stats, questions, COATING_COLOR_MAP, WIDTH_*)
+      console.log('[NormalizationWizard] dry_run FULL RESPONSE:', JSON.stringify(data, null, 2));
+      
       return data;
     },
     onSuccess: (data) => {
