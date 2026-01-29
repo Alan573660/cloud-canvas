@@ -184,20 +184,22 @@ Deno.serve(async (req) => {
         body: JSON.stringify(enricherPayload),
         signal: controller.signal,
       });
-    } catch (fetchError) {
-      clearTimeout(timeoutId);
-      // Handle timeout gracefully
-      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+    } catch (fetchError: unknown) {
+      // IMPORTANT: In Deno, AbortError can be a DOMException (not instanceof Error)
+      const name = (fetchError as { name?: string } | null)?.name;
+      if (name === 'AbortError') {
         console.error('[import-normalize] Request timed out after 55s');
         return new Response(
-          JSON.stringify({ 
-            ok: false, 
-            error: 'Enricher request timed out. Try reducing the import file size or try again later.',
-            code: 'TIMEOUT'
+          JSON.stringify({
+            ok: false,
+            code: 'TIMEOUT',
+            error: 'Enricher request timed out (55s). Please retry, or reduce scope.limit.',
           }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
+
+      console.error('[import-normalize] Fetch error:', fetchError);
       throw fetchError;
     } finally {
       clearTimeout(timeoutId);
@@ -225,7 +227,16 @@ Deno.serve(async (req) => {
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
-  } catch (err) {
+  } catch (err: unknown) {
+    const name = (err as { name?: string } | null)?.name;
+    if (name === 'AbortError') {
+      console.error('[import-normalize] AbortError bubbled to top-level (returning 200):', err);
+      return new Response(
+        JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Enricher request timed out (55s).' }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     console.error('[import-normalize] Error:', err);
     return new Response(
       JSON.stringify({ ok: false, error: String(err) }),
