@@ -136,9 +136,9 @@ Deno.serve(async (req) => {
         import_job_id,
         scope: { 
           only_where_null: requestedScope.only_where_null ?? true, 
-          limit: Math.min(requestedScope.limit ?? 1000, 2000) // Cap at 2000 rows
+          limit: Math.min(requestedScope.limit ?? 500, 1000) // Cap at 1000 rows (reduced for faster response)
         },
-        ai_suggest: (body as DryRunRequest).ai_suggest ?? true,
+        ai_suggest: (body as DryRunRequest).ai_suggest ?? false, // Disable AI for faster processing
       };
     } else if (op === 'apply') {
       const applyBody = body as ApplyRequest;
@@ -184,6 +184,21 @@ Deno.serve(async (req) => {
         body: JSON.stringify(enricherPayload),
         signal: controller.signal,
       });
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      // Handle timeout gracefully
+      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+        console.error('[import-normalize] Request timed out after 55s');
+        return new Response(
+          JSON.stringify({ 
+            ok: false, 
+            error: 'Enricher request timed out. Try reducing the import file size or try again later.',
+            code: 'TIMEOUT'
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      throw fetchError;
     } finally {
       clearTimeout(timeoutId);
     }

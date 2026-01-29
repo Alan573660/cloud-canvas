@@ -348,8 +348,8 @@ export function NormalizationWizard({
           op: 'dry_run',
           organization_id: organizationId,
           import_job_id: importJobId,
-          scope: { only_where_null: true, limit: 1000 }, // Reduced to prevent Edge Runtime limits
-          ai_suggest: true,
+          scope: { only_where_null: true, limit: 500 }, // Reduced for faster processing
+          ai_suggest: false, // Disabled for faster response
         },
       });
 
