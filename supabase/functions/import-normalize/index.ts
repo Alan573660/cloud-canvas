@@ -129,10 +129,15 @@ Deno.serve(async (req) => {
 
     if (op === 'dry_run') {
       enricherEndpoint = `${enricherUrl}/api/enrich/dry_run`;
+      // Reduce default limit to prevent memory exhaustion in Edge Runtime
+      const requestedScope = (body as DryRunRequest).scope || {};
       enricherPayload = {
         organization_id,
         import_job_id,
-        scope: (body as DryRunRequest).scope || { only_where_null: true, limit: 5000 },
+        scope: { 
+          only_where_null: requestedScope.only_where_null ?? true, 
+          limit: Math.min(requestedScope.limit ?? 1000, 2000) // Cap at 2000 rows
+        },
         ai_suggest: (body as DryRunRequest).ai_suggest ?? true,
       };
     } else if (op === 'apply') {
@@ -159,7 +164,7 @@ Deno.serve(async (req) => {
 
     console.log(`[import-normalize] Calling ${enricherEndpoint}`);
 
-    // Call Cloud Run enricher
+    // Build headers for Cloud Run enricher
     const enricherHeaders: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -167,11 +172,21 @@ Deno.serve(async (req) => {
       enricherHeaders['X-Internal-Secret'] = enricherSecret;
     }
 
-    const enricherResponse = await fetch(enricherEndpoint, {
-      method: 'POST',
-      headers: enricherHeaders,
-      body: JSON.stringify(enricherPayload),
-    });
+    // Add timeout with AbortController to prevent Edge Runtime resource exhaustion
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 55000); // 55s timeout (Edge has 60s limit)
+
+    let enricherResponse: Response;
+    try {
+      enricherResponse = await fetch(enricherEndpoint, {
+        method: 'POST',
+        headers: enricherHeaders,
+        body: JSON.stringify(enricherPayload),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     const enricherData = await enricherResponse.json();
 
