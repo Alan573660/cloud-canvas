@@ -67,7 +67,7 @@ export function NormalizationTab() {
         .from('import_jobs')
         .select('id, created_at, file_name, status, total_rows, summary')
         .eq('organization_id', organizationId)
-        .eq('entity_type', 'product_catalog')
+        .eq('entity_type', 'PRODUCT_CATALOG')
         .in('status', ['COMPLETED', 'VALIDATED', 'APPLYING'])
         .order('created_at', { ascending: false })
         .limit(20);

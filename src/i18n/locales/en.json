@@ -40,7 +40,12 @@
     "viewDetails": "View details",
     "inProgress": "Import in progress",
     "strictM2Only": "Import only м² items",
-    "strictM2OnlyDesc": "Exclude items with units like pcs, m, etc."
+    "strictM2OnlyDesc": "Exclude items with units like pcs, m, etc.",
+    "viewNormalizationHistory": "View normalization history →",
+    "patchedRowsSummary": "Updated {{count}} rows in catalog",
+    "noChangesNeeded": "All data was already normalized",
+    "normalizingStep": "Catalog data normalization",
+    "preparingNormalization": "Preparing normalization..."
   },
   "analytics": {
     "description": "Usage, revenue and operations statistics",
@@ -127,7 +132,8 @@
     "allStatuses": "All statuses",
     "all": "All",
     "reset": "Reset",
-    "noPermission": "Insufficient permissions to view"
+    "noPermission": "Insufficient permissions to view",
+    "rows": "rows"
   },
   "auth": {
     "login": "Login",

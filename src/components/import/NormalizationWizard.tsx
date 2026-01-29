@@ -103,8 +103,9 @@ interface NormalizationWizardProps {
   organizationId: string;
   importJobId: string;
   stagingSample: StagingRow[];
-  onComplete: () => void;
+  onComplete: (result: { patched_rows?: number }) => void;
   onSkip: () => void;
+  autoStart?: boolean;
 }
 
 // =========================================
@@ -258,6 +259,7 @@ export function NormalizationWizard({
   stagingSample,
   onComplete,
   onSkip,
+  autoStart = true,
 }: NormalizationWizardProps) {
   const { t } = useTranslation();
 
@@ -605,7 +607,7 @@ export function NormalizationWizard({
         )}
 
         <div className="flex justify-center">
-          <Button size="lg" onClick={onComplete}>
+          <Button size="lg" onClick={() => onComplete({})}>
             <ChevronRight className="h-4 w-4 mr-2" />
             {t('normalize.continuePublish', 'Продолжить к публикации')}
           </Button>
@@ -1083,7 +1085,7 @@ export function NormalizationWizard({
         </div>
 
         <div className="flex justify-center">
-          <Button size="lg" onClick={onComplete}>
+          <Button size="lg" onClick={() => onComplete({ patched_rows: applyMutation.data?.patched_rows })}>
             <ChevronRight className="h-4 w-4 mr-2" />
             {t('normalize.publishCatalog', 'Перейти к публикации')}
           </Button>
