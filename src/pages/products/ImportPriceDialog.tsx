@@ -337,7 +337,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
   });
 
   // Poll for job completion (async publish)
-  // For large files (70k+ rows), BigQuery load can take 10-15 minutes
+  // For large files (70k+ rows), catalog update can take 10-15 minutes
   const pollJobStatus = async (jobId: string, maxAttempts = 300): Promise<'COMPLETED' | 'FAILED'> => {
     for (let i = 0; i < maxAttempts; i++) {
       await new Promise(resolve => setTimeout(resolve, 3000)); // Poll every 3 seconds

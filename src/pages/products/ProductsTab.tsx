@@ -40,7 +40,7 @@ interface LegacyProduct {
   updated_at: string;
 }
 
-// Map new BigQuery item to legacy format for existing dialogs
+// Map Catalog item to legacy format for existing dialogs
 function toLegacyProduct(item: CatalogItemWithOverrides): LegacyProduct {
   return {
     id: item.id,
@@ -80,7 +80,7 @@ export function ProductsTab() {
   const [detailSheetOpen, setDetailSheetOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<LegacyProduct | null>(null);
 
-  // BigQuery API hooks
+  // Catalog API hooks
   const { facets, isLoading: facetsLoading } = useCatalogFacets();
   const { items, totalCount, isLoading } = useCatalogItems({
     q: search || undefined,

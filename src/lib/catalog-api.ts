@@ -1,7 +1,7 @@
 /**
- * BigQuery Catalog API Client
+ * Catalog API Client
  * 
- * Reads product data from BigQuery via Cloud Run (pricing-api-saas).
+ * Reads product data from Cloud Run pricing-api-saas.
  * Supabase product_catalog is used ONLY for overrides (is_active, custom fields).
  */
 
@@ -10,9 +10,9 @@ const CATALOG_API_BASE = import.meta.env.VITE_CATALOG_API_URL || 'https://pricin
 
 // ============= Types =============
 
-/** Raw item from BigQuery API */
+/** Raw item from Catalog API */
 export interface CatalogItem {
-  id: string;              // BigQuery primary key (bq_key)
+  id: string;              // Primary key (bq_key)
   title: string | null;
   cat_name: string | null; // Category name
   cat_tree: string | null; // Full category path
@@ -81,7 +81,7 @@ export interface CatalogFacetsRequest {
 // ============= API Functions =============
 
 /**
- * Fetch catalog items from BigQuery via Cloud Run API
+ * Fetch catalog items from Cloud Run API
  */
 export async function fetchCatalogItems(
   params: CatalogItemsRequest
@@ -112,7 +112,7 @@ export async function fetchCatalogItems(
 }
 
 /**
- * Fetch unique filter values (facets) from BigQuery
+ * Fetch unique filter values (facets) from Catalog API
  */
 export async function fetchCatalogFacets(
   params: CatalogFacetsRequest
@@ -152,7 +152,7 @@ export interface ProductOverride {
 }
 
 /**
- * Merge BigQuery items with Supabase overrides
+ * Merge Catalog items with Supabase overrides
  * 
  * IMPORTANT: Default is_active = true for all items.
  * Supabase only stores overrides (is_active=false).

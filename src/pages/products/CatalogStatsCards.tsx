@@ -14,13 +14,13 @@ export function CatalogStatsCards() {
   const { profile } = useAuth();
   const dateLocale = i18n.language === 'ru' ? ru : enUS;
 
-  // Products stats from BigQuery API (total) + Supabase (overrides count)
+  // Products stats from Catalog API (total) + Supabase (overrides count)
   const { data: productStats, isLoading: loadingProducts } = useQuery({
     queryKey: ['catalog-stats-products', profile?.organization_id],
     queryFn: async () => {
       if (!profile?.organization_id) return { total: 0, inactive: 0 };
       
-      // Get total from BigQuery via Catalog API facets
+      // Get total from Catalog API facets
       const facets = await fetchCatalogFacets({ organization_id: profile.organization_id });
       const total = facets.total;
       
