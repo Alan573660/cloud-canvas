@@ -77,6 +77,11 @@ interface ValidationStats {
   invalidRows: number;
 }
 
+interface NormalizationResult {
+  patched_rows?: number;
+  skipped?: boolean;
+}
+
 export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPriceDialogProps) {
   const { t } = useTranslation();
   const { profile } = useAuth();
@@ -110,6 +115,9 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
   const [suggestions, setSuggestions] = useState<Record<string, string[]>>({});
   const [validationStats, setValidationStats] = useState<ValidationStats | null>(null);
   const [columnMapping, setColumnMapping] = useState<ColumnMapping>({});
+  
+  // Normalization result
+  const [normalizationResult, setNormalizationResult] = useState<NormalizationResult | null>(null);
   
   // Check if Measure column is present and has non-м² values
   const [hasMeasureColumn, setHasMeasureColumn] = useState(false);
@@ -462,6 +470,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     setColumnMapping({});
     setValidationStats(null);
     setHasMeasureColumn(false);
+    setNormalizationResult(null);
   };
 
   const handleClose = () => {
@@ -844,8 +853,21 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
             organizationId={profile.organization_id}
             importJobId={createdJob.id}
             stagingSample={stagingSample || []}
-            onComplete={() => setStep('publishing')}
-            onSkip={() => publishMutation.mutate()}
+            onComplete={(result) => {
+              setNormalizationResult(result);
+              toast({
+                title: t('normalize.applied', 'Нормализация применена'),
+                description: result.patched_rows 
+                  ? t('normalize.patchedRows', 'Обновлено строк: {{count}}', { count: result.patched_rows })
+                  : t('normalize.noChangesNeeded', 'Изменения не требуются'),
+              });
+              // Auto-start publish after normalization
+              publishMutation.mutate();
+            }}
+            onSkip={() => {
+              setNormalizationResult({ skipped: true });
+              publishMutation.mutate();
+            }}
           />
         )}
 
@@ -867,15 +889,55 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
 
         {/* Step 6: Done */}
         {step === 'done' && (
-          <div className="py-6 text-center space-y-4">
-            <CheckCircle2 className="h-12 w-12 mx-auto text-green-600" />
-            <div>
-              <p className="font-medium text-green-800 dark:text-green-300">
-                {t('import.importComplete', 'Импорт завершён!')}
-              </p>
-              <p className="text-sm text-muted-foreground mt-1">
-                {t('import.importCompleteDesc', 'Каталог успешно обновлён. Проверьте результаты во вкладке Импорт.')}
-              </p>
+          <div className="py-6 space-y-6">
+            <div className="text-center space-y-4">
+              <CheckCircle2 className="h-12 w-12 mx-auto text-green-600" />
+              <div>
+                <p className="font-medium text-lg text-green-800 dark:text-green-300">
+                  {t('import.importComplete', 'Импорт завершён!')}
+                </p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  {t('import.importCompleteDesc', 'Каталог успешно обновлён. Проверьте результаты во вкладке Импорт.')}
+                </p>
+              </div>
+            </div>
+
+            {/* Normalization summary */}
+            {normalizationResult && !normalizationResult.skipped && (
+              <Card className="bg-primary/5 border-primary/20">
+                <CardContent className="p-4">
+                  <div className="flex items-center gap-3">
+                    <Sparkles className="h-5 w-5 text-primary flex-shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-sm font-medium">
+                        {t('normalize.applied', 'Нормализация применена')}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {normalizationResult.patched_rows 
+                          ? t('normalize.patchedRowsSummary', 'Обновлено {{count}} строк в каталоге', { count: normalizationResult.patched_rows })
+                          : t('normalize.noChangesNeeded', 'Все данные уже были нормализованы')}
+                      </p>
+                    </div>
+                    <Badge variant="secondary">
+                      {normalizationResult.patched_rows || 0} {t('common.rows', 'строк')}
+                    </Badge>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* View history link */}
+            <div className="text-center">
+              <Button 
+                variant="link" 
+                size="sm"
+                onClick={() => {
+                  handleClose();
+                  // Navigate to Normalization tab - parent can handle this via onSuccess
+                }}
+              >
+                {t('import.viewNormalizationHistory', 'Открыть историю нормализаций →')}
+              </Button>
             </div>
           </div>
         )}

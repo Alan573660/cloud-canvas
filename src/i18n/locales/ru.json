@@ -85,7 +85,10 @@
     "dataAlreadyNormalized": "Все данные уже в порядке. Можно продолжить к публикации.",
     "rowsScanned": "строк проверено",
     "applyStep": "Применение",
-    "preparingNormalization": "Подготовка нормализации..."
+    "preparingNormalization": "Подготовка нормализации...",
+    "viewNormalizationHistory": "Открыть историю нормализаций →",
+    "patchedRowsSummary": "Обновлено {{count}} строк в каталоге",
+    "noChangesNeeded": "Все данные уже были нормализованы"
   },
   "common": {
     "loading": "Загрузка...",
@@ -203,7 +206,8 @@
     "allStatuses": "Все статусы",
     "all": "Все",
     "reset": "Сбросить",
-    "noPermission": "Недостаточно прав для просмотра"
+    "noPermission": "Недостаточно прав для просмотра",
+    "rows": "строк"
   },
   "auth": {
     "login": "Войти",
