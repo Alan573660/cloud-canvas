@@ -1,10 +1,10 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation } from '@tanstack/react-query';
 import { 
   Loader2, Check, ChevronRight, ChevronDown, 
   Sparkles, Settings2, Palette, Save, CheckCircle2, Circle,
-  ArrowRight, Eye, Zap, AlertTriangle, RefreshCw
+  ArrowRight, Eye, Zap, AlertTriangle, RefreshCw, Info
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -34,6 +34,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from '@/components/ui/alert';
 
 // =========================================
 // Types matching Cloud Run contract
@@ -83,15 +88,21 @@ interface DryRunResponse {
     questions: number;
     auto_recognized_colors?: number;
     auto_confirmed_widths?: number;
+    sample_mode?: boolean; // True if dry_run was run on sample
+    sample_limit?: number; // Number of rows in sample
+    total_rows?: number; // Total rows in import
   };
   questions?: NormalizeQuestion[];
   error?: string;
+  code?: 'TIMEOUT';
+  recommended_limit?: number; // Suggested limit for retry
 }
 
 interface ApplyResponse {
   ok: boolean;
   patched_rows?: number;
   error?: string;
+  code?: string;
 }
 
 interface StagingRow {
@@ -106,6 +117,52 @@ interface NormalizationWizardProps {
   onComplete: (result: { patched_rows?: number }) => void;
   onSkip: () => void;
   autoStart?: boolean;
+}
+
+// =========================================
+// Sample Mode Banner
+// =========================================
+function SampleModeBanner({ 
+  sampleLimit, 
+  totalRows, 
+  aiDisabled,
+  onEnableAI,
+}: { 
+  sampleLimit: number;
+  totalRows?: number; 
+  aiDisabled: boolean;
+  onEnableAI?: () => void;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <Alert variant="default" className="bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800">
+      <Info className="h-4 w-4 text-blue-600" />
+      <AlertTitle className="text-blue-800 dark:text-blue-300">
+        {t('normalize.sampleMode', 'Режим выборки')}
+      </AlertTitle>
+      <AlertDescription className="text-blue-700 dark:text-blue-400">
+        <p>
+          {t('normalize.sampleModeDesc', 'Анализ выполнен на {{sample}} из {{total}} строк. Правила применятся ко всем строкам при публикации.', {
+            sample: sampleLimit,
+            total: totalRows || '?',
+          })}
+        </p>
+        {aiDisabled && (
+          <div className="flex items-center gap-2 mt-2">
+            <Badge variant="outline" className="text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300">
+              {t('normalize.aiDisabled', 'AI подсказки отключены')}
+            </Badge>
+            {onEnableAI && (
+              <Button variant="link" size="sm" className="text-xs p-0 h-auto" onClick={onEnableAI}>
+                {t('normalize.enableAI', 'Включить')}
+              </Button>
+            )}
+          </div>
+        )}
+      </AlertDescription>
+    </Alert>
+  );
 }
 
 // =========================================
@@ -263,14 +320,22 @@ export function NormalizationWizard({
 }: NormalizationWizardProps) {
   const { t } = useTranslation();
 
+  // Prevent double dry_run invocation
+  const dryRunTriggeredRef = useRef(false);
+
   // Wizard state
-  const [wizardStep, setWizardStep] = useState<'loading' | 'widths' | 'coatings' | 'applying' | 'done' | 'empty'>('loading');
+  const [wizardStep, setWizardStep] = useState<'loading' | 'timeout' | 'widths' | 'coatings' | 'applying' | 'done' | 'empty'>('loading');
   
   // dry_run response
   const [runId, setRunId] = useState<string | null>(null);
   const [profileHash, setProfileHash] = useState<string | null>(null);
   const [questions, setQuestions] = useState<NormalizeQuestion[]>([]);
   const [stats, setStats] = useState<DryRunResponse['stats'] | null>(null);
+  
+  // Sample mode and AI flags
+  const [sampleLimit, setSampleLimit] = useState<number>(500);
+  const [aiEnabled, setAiEnabled] = useState<boolean>(false); // AI disabled by default for speed
+  const [lastTimeoutLimit, setLastTimeoutLimit] = useState<number | null>(null);
 
   // User selections
   const [widthSelections, setWidthSelections] = useState<Record<string, WidthData>>({});
@@ -340,30 +405,52 @@ export function NormalizationWizard({
     return [];
   }, [wizardStep, activeWidthProfile, activeColorToken, widthSelections, ralMappings, widthQuestions, coatingColorMap]);
 
-  // Auto-run dry_run on mount
+  // dry_run mutation
   const dryRunMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (params: { limit: number; ai_suggest: boolean }) => {
+      console.log('[NormalizationWizard] Starting dry_run with params:', params);
+      
       const { data, error } = await supabase.functions.invoke<DryRunResponse>('import-normalize', {
         body: {
           op: 'dry_run',
           organization_id: organizationId,
           import_job_id: importJobId,
-          scope: { only_where_null: true, limit: 500 }, // Reduced for faster processing
-          ai_suggest: false, // Disabled for faster response
+          scope: { only_where_null: true, limit: params.limit },
+          ai_suggest: params.ai_suggest,
         },
       });
 
       if (error) throw new Error(error.message);
+      
+      // Handle TIMEOUT gracefully
+      if (data?.code === 'TIMEOUT') {
+        console.warn('[NormalizationWizard] dry_run TIMEOUT, recommended_limit:', data.recommended_limit);
+        return { ...data, ok: false };
+      }
+      
       if (!data?.ok) throw new Error(data?.error || 'Dry run failed');
       
-      // LOG FULL RESPONSE FOR DEBUG - verifying contract (stats, questions, COATING_COLOR_MAP, WIDTH_*)
+      // LOG FULL RESPONSE FOR DEBUG
       console.log('[NormalizationWizard] dry_run FULL RESPONSE:', JSON.stringify(data, null, 2));
       
       return data;
     },
     onSuccess: (data) => {
-      setRunId(data.run_id || null);
-      setProfileHash(data.profile_hash || null);
+      // Handle timeout - show retry UI
+      if (data.code === 'TIMEOUT') {
+        setLastTimeoutLimit(sampleLimit);
+        setWizardStep('timeout');
+        return;
+      }
+
+      // CRITICAL: Store run_id and profile_hash from THIS dry_run
+      const newRunId = data.run_id || null;
+      const newProfileHash = data.profile_hash || null;
+      
+      console.log('[NormalizationWizard] Storing run_id:', newRunId, 'profile_hash:', newProfileHash);
+      
+      setRunId(newRunId);
+      setProfileHash(newProfileHash);
       setQuestions(data.questions || []);
       setStats(data.stats || null);
 
@@ -401,6 +488,7 @@ export function NormalizationWizard({
       }
     },
     onError: (error) => {
+      console.error('[NormalizationWizard] dry_run error:', error);
       toast({
         title: t('common.error'),
         description: error.message,
@@ -410,10 +498,26 @@ export function NormalizationWizard({
     },
   });
 
+  // Run dry_run ONCE on mount (with ref guard)
   useEffect(() => {
-    dryRunMutation.mutate();
+    if (dryRunTriggeredRef.current) {
+      console.log('[NormalizationWizard] dry_run already triggered, skipping');
+      return;
+    }
+    dryRunTriggeredRef.current = true;
+    console.log('[NormalizationWizard] Triggering initial dry_run');
+    dryRunMutation.mutate({ limit: sampleLimit, ai_suggest: aiEnabled });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Retry dry_run with different params
+  const handleRetryDryRun = useCallback((newLimit: number, enableAI: boolean) => {
+    console.log('[NormalizationWizard] Retrying dry_run with limit:', newLimit, 'ai:', enableAI);
+    setSampleLimit(newLimit);
+    setAiEnabled(enableAI);
+    setWizardStep('loading');
+    dryRunMutation.mutate({ limit: newLimit, ai_suggest: enableAI });
+  }, [dryRunMutation]);
 
   // Save settings via settings-merge
   const saveSettingsMutation = useMutation({
@@ -431,12 +535,18 @@ export function NormalizationWizard({
     },
   });
 
-  // Apply normalization
+  // Apply normalization with 409 mismatch handling
   const applyMutation = useMutation({
     mutationFn: async () => {
       if (!runId || !profileHash) {
         throw new Error('Missing run_id or profile_hash');
       }
+
+      // DIAGNOSTIC LOG - verify we're using the correct run_id
+      console.log('[NormalizationWizard] APPLY - Using state values:');
+      console.log('  runId:', runId);
+      console.log('  profileHash:', profileHash);
+      console.log('  importJobId:', importJobId);
 
       const { data, error } = await supabase.functions.invoke<ApplyResponse>('import-normalize', {
         body: {
@@ -449,10 +559,27 @@ export function NormalizationWizard({
       });
 
       if (error) throw new Error(error.message);
+      
+      // Handle 409 mismatch - need to re-run dry_run
+      if (!data?.ok && data?.error?.includes('mismatch')) {
+        console.warn('[NormalizationWizard] 409 run_id mismatch detected');
+        return { ok: false, code: 'MISMATCH', error: data.error };
+      }
+      
       if (!data?.ok) throw new Error(data?.error || 'Apply failed');
       return data;
     },
     onSuccess: (data) => {
+      // Handle mismatch - need fresh dry_run
+      if (data.code === 'MISMATCH') {
+        toast({
+          title: t('normalize.mismatchTitle', 'Данные устарели'),
+          description: t('normalize.mismatchDesc', 'Нужно перезапустить анализ. Нажмите "Повторить анализ".'),
+          variant: 'destructive',
+        });
+        return;
+      }
+      
       setWizardStep('done');
       toast({
         title: t('normalize.applied', 'Нормализация применена'),
@@ -460,6 +587,7 @@ export function NormalizationWizard({
       });
     },
     onError: (error) => {
+      console.error('[NormalizationWizard] apply error:', error);
       toast({
         title: t('common.error'),
         description: error.message,
@@ -467,6 +595,15 @@ export function NormalizationWizard({
       });
     },
   });
+
+  // Handle mismatch - re-run dry_run and then apply
+  const handleMismatchRetry = useCallback(async () => {
+    console.log('[NormalizationWizard] Handling mismatch - re-running dry_run');
+    setWizardStep('loading');
+    
+    // Re-run dry_run
+    dryRunMutation.mutate({ limit: sampleLimit, ai_suggest: aiEnabled });
+  }, [dryRunMutation, sampleLimit, aiEnabled]);
 
   const handleSaveWidths = async () => {
     try {
@@ -567,8 +704,68 @@ export function NormalizationWizard({
           {t('normalize.analyzing', 'Анализ данных...')}
         </h3>
         <p className="text-muted-foreground text-sm">
-          {t('normalize.analyzingDesc', 'AI проверяет ширины профилей и покрытия')}
+          {aiEnabled 
+            ? t('normalize.analyzingDescAI', 'AI проверяет ширины профилей и покрытия')
+            : t('normalize.analyzingDescFast', 'Быстрый анализ ({{limit}} строк)', { limit: sampleLimit })
+          }
         </p>
+      </div>
+    );
+  }
+
+  // =========================================
+  // Render: Timeout - Retry UI
+  // =========================================
+  if (wizardStep === 'timeout') {
+    return (
+      <div className="space-y-6 py-6">
+        <div className="text-center">
+          <AlertTriangle className="h-12 w-12 mx-auto text-yellow-500 mb-4" />
+          <h3 className="text-xl font-semibold mb-2">
+            {t('normalize.timeoutTitle', 'Превышено время ожидания')}
+          </h3>
+          <p className="text-muted-foreground max-w-md mx-auto">
+            {t('normalize.timeoutDesc', 'Анализ занял слишком много времени. Попробуйте уменьшить размер выборки.')}
+          </p>
+        </div>
+
+        <Card className="max-w-md mx-auto">
+          <CardContent className="py-6 space-y-4">
+            <div className="text-center text-sm text-muted-foreground">
+              {t('normalize.lastAttempt', 'Последняя попытка')}: {lastTimeoutLimit} {t('normalize.rows', 'строк')}
+            </div>
+            
+            <div className="grid grid-cols-2 gap-3">
+              <Button
+                variant="outline"
+                onClick={() => handleRetryDryRun(250, false)}
+                className="flex flex-col items-center py-4 h-auto"
+              >
+                <RefreshCw className="h-5 w-5 mb-1" />
+                <span className="font-medium">250 {t('normalize.rows', 'строк')}</span>
+                <span className="text-xs text-muted-foreground">{t('normalize.fastest', 'Быстрее всего')}</span>
+              </Button>
+              
+              <Button
+                variant="outline"
+                onClick={() => handleRetryDryRun(500, false)}
+                className="flex flex-col items-center py-4 h-auto"
+              >
+                <RefreshCw className="h-5 w-5 mb-1" />
+                <span className="font-medium">500 {t('normalize.rows', 'строк')}</span>
+                <span className="text-xs text-muted-foreground">{t('normalize.recommended', 'Рекомендуется')}</span>
+              </Button>
+            </div>
+
+            <Separator />
+
+            <div className="flex justify-center">
+              <Button variant="ghost" onClick={onSkip}>
+                {t('normalize.skipNormalization', 'Пропустить нормализацию')}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -635,6 +832,14 @@ export function NormalizationWizard({
             {widthQuestions.length} {t('normalize.profiles', 'профилей')}
           </Badge>
         </div>
+
+        {/* Sample mode banner */}
+        <SampleModeBanner
+          sampleLimit={sampleLimit}
+          totalRows={stats?.total_rows}
+          aiDisabled={!aiEnabled}
+          onEnableAI={() => handleRetryDryRun(sampleLimit, true)}
+        />
 
         <QuickActionsBar
           onConfirmAll={confirmAllWidths}
@@ -844,6 +1049,14 @@ export function NormalizationWizard({
           </Badge>
         </div>
 
+        {/* Sample mode banner */}
+        <SampleModeBanner
+          sampleLimit={sampleLimit}
+          totalRows={stats?.total_rows}
+          aiDisabled={!aiEnabled}
+          onEnableAI={() => handleRetryDryRun(sampleLimit, true)}
+        />
+
         <QuickActionsBar
           onConfirmAll={confirmAllColors}
           onSkipAll={onSkip}
@@ -1020,9 +1233,30 @@ export function NormalizationWizard({
   // Render: Applying Step
   // =========================================
   if (wizardStep === 'applying') {
+    const hasMismatch = applyMutation.data?.code === 'MISMATCH';
+
     return (
       <div className="space-y-6">
         <StepIndicator steps={wizardSteps} currentStep="applying" />
+
+        {hasMismatch && (
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>{t('normalize.mismatchTitle', 'Данные устарели')}</AlertTitle>
+            <AlertDescription>
+              {t('normalize.mismatchDesc', 'Между анализом и применением были изменения. Нужно перезапустить анализ.')}
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="mt-2"
+                onClick={handleMismatchRetry}
+              >
+                <RefreshCw className="h-4 w-4 mr-2" />
+                {t('normalize.rerunAnalysis', 'Перезапустить анализ')}
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
 
         <div className="text-center py-6">
           <Sparkles className="h-12 w-12 mx-auto text-primary mb-4" />
@@ -1059,7 +1293,11 @@ export function NormalizationWizard({
           <Button variant="outline" onClick={onSkip}>
             {t('normalize.skipApply', 'Пропустить')}
           </Button>
-          <Button size="lg" onClick={handleApply} disabled={applyMutation.isPending}>
+          <Button 
+            size="lg" 
+            onClick={handleApply} 
+            disabled={applyMutation.isPending || hasMismatch}
+          >
             {applyMutation.isPending ? (
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
             ) : (

@@ -778,7 +778,22 @@
     "rerun": "Re-run",
     "start": "Start",
     "wizardTitle": "AI Catalog Normalization",
-    "wizardDesc": "Review and confirm AI suggestions for data standardization"
+    "wizardDesc": "Review and confirm AI suggestions for data standardization",
+    "sampleMode": "Sample Mode",
+    "sampleModeDesc": "Analysis ran on {{sample}} of {{total}} rows. Rules will apply to all rows on publish.",
+    "aiDisabled": "AI suggestions disabled",
+    "enableAI": "Enable",
+    "analyzingDescAI": "AI is checking profile widths and coatings",
+    "analyzingDescFast": "Fast analysis ({{limit}} rows)",
+    "timeoutTitle": "Timeout Exceeded",
+    "timeoutDesc": "Analysis took too long. Try reducing the sample size.",
+    "lastAttempt": "Last attempt",
+    "fastest": "Fastest",
+    "recommended": "Recommended",
+    "skipNormalization": "Skip normalization",
+    "mismatchTitle": "Data out of sync",
+    "mismatchDesc": "Changes occurred between analysis and apply. Please re-run analysis.",
+    "rerunAnalysis": "Re-run analysis"
   },
   "errors": {
     "required": "Required field",
