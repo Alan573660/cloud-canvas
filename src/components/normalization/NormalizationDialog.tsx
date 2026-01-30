@@ -24,7 +24,9 @@ import { Progress } from '@/components/ui/progress';
 import { toast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { type CatalogItem } from '@/lib/catalog-api';
-import { Sparkles, Check, Loader2 } from 'lucide-react';
+import { Sparkles, Check, Loader2, Zap } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 
 import { GroupsSidebar, type PatternGroup } from './GroupsSidebar';
 import { CatalogTable } from './CatalogTable';
@@ -99,6 +101,8 @@ export function NormalizationDialog({
   const [runId, setRunId] = useState<string | null>(null);
   const [profileHash, setProfileHash] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
+  const [aiEnabled, setAiEnabled] = useState(false); // AI OFF по умолчанию
+  const [dryRunLimit, setDryRunLimit] = useState(2000); // 2000 по умолчанию
   
   // Catalog items for table (filtered by active group)
   const [searchQuery, setSearchQuery] = useState('');
@@ -107,18 +111,30 @@ export function NormalizationDialog({
 
   // dry_run mutation to get questions/groups
   const dryRunMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (params: { limit: number; aiSuggest: boolean }) => {
       const { data, error } = await supabase.functions.invoke<DryRunResponse>('import-normalize', {
         body: {
           op: 'dry_run',
           organization_id: organizationId,
           import_job_id: importJobId || 'current', // 'current' = normalize existing catalog
-          scope: { only_where_null: true, limit: 500 },
-          ai_suggest: true,
+          scope: { only_where_null: true, limit: params.limit },
+          ai_suggest: params.aiSuggest, // AI OFF по умолчанию
         },
       });
 
       if (error) throw new Error(error.message);
+      
+      // Timeout fallback: retry with smaller limit
+      if (data?.code === 'TIMEOUT' && params.limit > 500) {
+        setDryRunLimit(500);
+        toast({
+          title: t('normalize.timeoutRetry', 'Таймаут'),
+          description: t('normalize.retryingSmaller', 'Повторяем с меньшим лимитом (500)...'),
+        });
+        // Re-throw to trigger retry
+        throw new Error('TIMEOUT_RETRY');
+      }
+      
       if (!data?.ok) throw new Error(data?.error || 'Dry run failed');
       return data;
     },
@@ -126,7 +142,7 @@ export function NormalizationDialog({
       setRunId(data.run_id || null);
       setProfileHash(data.profile_hash || null);
       
-      // Parse questions into groups
+      // Parse questions into groups (WIDTH строго по regex)
       const parsedGroups = parseQuestionsToGroups(data.questions || []);
       setGroups(parsedGroups);
       
@@ -136,12 +152,18 @@ export function NormalizationDialog({
       }
     },
     onError: (error) => {
+      // Retry with smaller limit on timeout
+      if (error.message === 'TIMEOUT_RETRY') {
+        dryRunMutation.mutate({ limit: 500, aiSuggest: aiEnabled });
+        return;
+      }
       toast({
         title: t('common.error'),
         description: error.message,
         variant: 'destructive',
       });
     },
+    retry: false, // Manual retry for timeout
   });
 
   // Fetch preview rows via Edge Function (proxy to catalog-enricher)
@@ -175,19 +197,40 @@ export function NormalizationDialog({
   // Run dry_run when dialog opens
   useEffect(() => {
     if (open && !dryRunMutation.isPending && groups.length === 0) {
-      dryRunMutation.mutate();
+      dryRunMutation.mutate({ limit: dryRunLimit, aiSuggest: aiEnabled });
     }
   }, [open]);
+  
+  // Toggle AI and re-run
+  const handleToggleAI = () => {
+    const newAiEnabled = !aiEnabled;
+    setAiEnabled(newAiEnabled);
+    // Re-run analysis with new AI setting
+    setGroups([]);
+    setActiveGroup(null);
+    dryRunMutation.mutate({ limit: dryRunLimit, aiSuggest: newAiEnabled });
+  };
 
+  // WIDTH regex: только профили листовых кровельных
+  const WIDTH_PROFILE_REGEX = /^(С|C|Н|H|НС|HC|МП|MP)-?\d{1,3}$/;
+  
   // Parse questions array into PatternGroup format
   const parseQuestionsToGroups = (questions: DryRunResponse['questions']): PatternGroup[] => {
     const result: PatternGroup[] = [];
     
     questions?.forEach(q => {
       if (q.type.startsWith('WIDTH_')) {
+        // СТРОГО: WIDTH только для профилей, соответствующих regex
+        const profile = q.profile || '';
+        if (!WIDTH_PROFILE_REGEX.test(profile)) {
+          // Не WIDTH — пропускаем или можно добавить в OTHER
+          console.log('[Normalization] Skipping non-WIDTH profile:', profile);
+          return;
+        }
+        
         result.push({
           group_type: 'WIDTH',
-          group_key: q.profile || '',
+          group_key: profile,
           affected_count: q.affected_count || 0,
           examples: q.examples || [],
           suggested: q.suggested ? `${q.suggested.work_mm}/${q.suggested.full_mm}мм` : undefined,
@@ -350,7 +393,7 @@ export function NormalizationDialog({
       }
 
       toast({
-        title: t('normalize.complete', 'Нормализация завершена'),
+        title: t('normalize.complete', 'Готово'),
         description: t('normalize.catalogUpdated', 'Каталог обновлён'),
       });
 
@@ -387,8 +430,23 @@ export function NormalizationDialog({
               </div>
             </div>
             
-            {/* Progress */}
+            {/* AI Toggle + Progress */}
             <div className="flex items-center gap-4">
+              {/* AI Toggle */}
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/50 rounded-lg">
+                <Switch 
+                  id="ai-toggle"
+                  checked={aiEnabled}
+                  onCheckedChange={handleToggleAI}
+                  disabled={dryRunMutation.isPending}
+                />
+                <Label htmlFor="ai-toggle" className="text-xs cursor-pointer flex items-center gap-1">
+                  <Zap className="h-3 w-3" />
+                  {t('normalize.enableAI', 'Включить AI')}
+                  <span className="text-muted-foreground">({t('normalize.slow', 'медленно')})</span>
+                </Label>
+              </div>
+              
               <div className="text-sm text-muted-foreground">
                 {confirmedCount}/{groups.length} {t('normalize.confirmed', 'подтверждено')}
               </div>
@@ -399,7 +457,7 @@ export function NormalizationDialog({
                 disabled={confirmedCount === 0}
               >
                 <Check className="h-4 w-4 mr-2" />
-                {t('normalize.applyAll', 'Применить в каталог')}
+                {t('normalize.applyAll', 'Обновить каталог')}
               </Button>
             </div>
           </div>
