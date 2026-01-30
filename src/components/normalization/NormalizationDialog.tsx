@@ -3,10 +3,10 @@
  * 
  * Структура:
  * - Слева: Группы/паттерны (WIDTH, COLOR, COATING, DECOR)
- * - Справа: Таблица товаров (из Catalog API) + фильтрация по группе
+ * - Справа: Таблица товаров (из preview_rows через Edge) + фильтрация по группе
  * - Снизу справа: AI-чат панель (Gemini через Edge proxy)
  * 
- * Данные: Catalog API (/api/catalog/items) + dry_run questions
+ * Данные: import-normalize op=preview_rows (proxy to catalog-enricher)
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -20,18 +20,11 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
 import { Progress } from '@/components/ui/progress';
 import { toast } from '@/hooks/use-toast';
-import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
-import { fetchCatalogItems, type CatalogItem } from '@/lib/catalog-api';
-import {
-  Sparkles, Loader2, Check, Settings2, Palette, Paintbrush, TreeDeciduous,
-  ChevronRight, Search, Filter, MessageSquare, Mic, Send, AlertTriangle, X
-} from 'lucide-react';
+import { type CatalogItem } from '@/lib/catalog-api';
+import { Sparkles, Check, Loader2 } from 'lucide-react';
 
 import { GroupsSidebar, type PatternGroup } from './GroupsSidebar';
 import { CatalogTable } from './CatalogTable';
@@ -74,6 +67,20 @@ interface DryRunResponse {
   code?: string;
 }
 
+interface PreviewRowsResponse {
+  ok: boolean;
+  rows?: Array<CatalogItem & {
+    profile?: string;
+    thickness_mm?: number;
+    width_work_mm?: number;
+    width_full_mm?: number;
+    coating?: string;
+    notes?: string;
+  }>;
+  total_count?: number;
+  error?: string;
+}
+
 // =========================================
 // Main Component
 // =========================================
@@ -96,7 +103,7 @@ export function NormalizationDialog({
   // Catalog items for table (filtered by active group)
   const [searchQuery, setSearchQuery] = useState('');
   const [page, setPage] = useState(1);
-  const pageSize = 50;
+  const [pageSize, setPageSize] = useState(50);
 
   // dry_run mutation to get questions/groups
   const dryRunMutation = useMutation({
@@ -137,24 +144,30 @@ export function NormalizationDialog({
     },
   });
 
-  // Fetch catalog items based on active group filter
-  const { data: catalogData, isLoading: catalogLoading } = useQuery({
-    queryKey: ['normalization-catalog', organizationId, activeGroup?.group_key, searchQuery, page],
+  // Fetch preview rows via Edge Function (proxy to catalog-enricher)
+  const { data: previewData, isLoading: previewLoading, refetch: refetchPreview } = useQuery({
+    queryKey: ['normalization-preview', organizationId, activeGroup?.group_type, activeGroup?.group_key, searchQuery, page, pageSize],
     queryFn: async () => {
-      // Build search query based on active group
-      let q = searchQuery;
-      if (activeGroup?.group_key && !searchQuery) {
-        q = activeGroup.group_key;
-      }
-      
-      const result = await fetchCatalogItems({
-        organization_id: organizationId,
-        limit: pageSize,
-        offset: (page - 1) * pageSize,
-        q: q || undefined,
+      const { data, error } = await supabase.functions.invoke<PreviewRowsResponse>('import-normalize', {
+        body: {
+          op: 'preview_rows',
+          organization_id: organizationId,
+          import_job_id: importJobId,
+          group_type: activeGroup?.group_type,
+          filter_key: activeGroup?.group_key,
+          q: searchQuery || undefined,
+          limit: pageSize,
+          offset: (page - 1) * pageSize,
+        },
       });
+
+      if (error) throw new Error(error.message);
+      if (!data?.ok) throw new Error(data?.error || 'Preview failed');
       
-      return result;
+      return {
+        items: data.rows || [],
+        total: data.total_count || 0,
+      };
     },
     enabled: open && !!organizationId,
   });
@@ -409,14 +422,15 @@ export function NormalizationDialog({
             {/* Table Area */}
             <div className="flex-1 min-h-0">
               <CatalogTable
-                items={catalogData?.items || []}
-                loading={catalogLoading}
+                items={previewData?.items || []}
+                loading={previewLoading}
                 activeGroup={activeGroup}
                 onApplyToGroup={handleApplyToGroup}
-                totalCount={catalogData?.total || 0}
+                totalCount={previewData?.total || 0}
                 page={page}
                 pageSize={pageSize}
                 onPageChange={setPage}
+                onPageSizeChange={setPageSize}
                 searchQuery={searchQuery}
                 onSearchChange={setSearchQuery}
               />
