@@ -44,7 +44,14 @@ import {
 // Types
 // =========================================
 interface CatalogTableProps {
-  items: CatalogItem[];
+  items: Array<CatalogItem & {
+    profile?: string;
+    thickness_mm?: number;
+    width_work_mm?: number;
+    width_full_mm?: number;
+    coating?: string;
+    notes?: string;
+  }>;
   loading: boolean;
   activeGroup: PatternGroup | null;
   onApplyToGroup: (group: PatternGroup, value: unknown) => void;
@@ -52,6 +59,7 @@ interface CatalogTableProps {
   page: number;
   pageSize: number;
   onPageChange: (page: number) => void;
+  onPageSizeChange: (size: number) => void;
   searchQuery: string;
   onSearchChange: (query: string) => void;
 }
@@ -215,6 +223,7 @@ export function CatalogTable({
   page,
   pageSize,
   onPageChange,
+  onPageSizeChange,
   searchQuery,
   onSearchChange,
 }: CatalogTableProps) {
@@ -257,7 +266,7 @@ export function CatalogTable({
           />
         </div>
 
-        <Select defaultValue="50">
+        <Select value={String(pageSize)} onValueChange={(v) => onPageSizeChange(Number(v))}>
           <SelectTrigger className="w-20 h-9">
             <SelectValue />
           </SelectTrigger>

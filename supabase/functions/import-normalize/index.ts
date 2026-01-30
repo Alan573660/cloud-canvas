@@ -31,7 +31,33 @@ interface ApplyStatusRequest {
   apply_id: string;
 }
 
-type NormalizeRequest = DryRunRequest | ApplyRequest | ApplyStatusRequest;
+// NEW: Preview rows request (fetches catalog data by group filter)
+interface PreviewRowsRequest {
+  op: 'preview_rows';
+  organization_id: string;
+  import_job_id?: string;
+  group_type?: 'WIDTH' | 'COLOR' | 'COATING' | 'DECOR' | 'THICKNESS';
+  filter_key?: string;
+  q?: string;
+  limit?: number;
+  offset?: number;
+}
+
+// NEW: AI Chat request (structured patches only)
+interface ChatRequest {
+  op: 'chat';
+  organization_id: string;
+  import_job_id?: string;
+  message: string;
+  context?: {
+    group_type: string;
+    group_key: string;
+    affected_count: number;
+    examples: string[];
+  };
+}
+
+type NormalizeRequest = DryRunRequest | ApplyRequest | ApplyStatusRequest | PreviewRowsRequest | ChatRequest;
 
 Deno.serve(async (req) => {
   // Handle CORS preflight
@@ -84,11 +110,14 @@ Deno.serve(async (req) => {
 
     // Parse request
     const body: NormalizeRequest = await req.json();
-    const { op, organization_id, import_job_id } = body;
+    const { op, organization_id } = body;
 
-    if (!op || !organization_id || !import_job_id) {
+    // import_job_id is optional for preview_rows and chat operations
+    const import_job_id = (body as { import_job_id?: string }).import_job_id;
+
+    if (!op || !organization_id) {
       return new Response(
-        JSON.stringify({ ok: false, error: 'Missing required fields: op, organization_id, import_job_id' }),
+        JSON.stringify({ ok: false, error: 'Missing required fields: op, organization_id' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -112,23 +141,27 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Verify import job exists and belongs to org
-    const { data: job, error: jobError } = await adminClient
-      .from('import_jobs')
-      .select('id, status')
-      .eq('id', import_job_id)
-      .eq('organization_id', organization_id)
-      .single();
+    // For operations that require import_job_id, verify it exists
+    const opsRequiringJob = ['dry_run', 'apply', 'apply_status'];
+    if (opsRequiringJob.includes(op) && import_job_id && import_job_id !== 'current') {
+      const { data: job, error: jobError } = await adminClient
+        .from('import_jobs')
+        .select('id, status')
+        .eq('id', import_job_id)
+        .eq('organization_id', organization_id)
+        .single();
 
-    if (jobError || !job) {
-      console.error('[import-normalize] Job not found:', jobError);
-      return new Response(
-        JSON.stringify({ ok: false, error: 'Import job not found' }),
-        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      if (jobError || !job) {
+        console.error('[import-normalize] Job not found:', jobError);
+        return new Response(
+          JSON.stringify({ ok: false, error: 'Import job not found' }),
+          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      console.log(`[import-normalize] Op: ${op}, Job: ${import_job_id}, Status: ${job.status}`);
+    } else {
+      console.log(`[import-normalize] Op: ${op}, Org: ${organization_id}`);
     }
-
-    console.log(`[import-normalize] Op: ${op}, Job: ${import_job_id}, Status: ${job.status}`);
 
     // Build headers for Cloud Run enricher
     const enricherHeaders: Record<string, string> = {
@@ -368,6 +401,131 @@ Deno.serve(async (req) => {
       console.log('[import-normalize] Sync apply OK, patched_rows:', syncData.patched_rows);
       return new Response(
         JSON.stringify(syncData),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // =========================================
+    // Handle preview_rows (fetch catalog data by group filter)
+    // =========================================
+    if (op === 'preview_rows') {
+      const previewBody = body as PreviewRowsRequest;
+      const previewEndpoint = `${enricherUrl}/api/enrich/preview_rows`;
+      
+      const previewPayload = {
+        organization_id,
+        import_job_id: previewBody.import_job_id || 'current',
+        group_type: previewBody.group_type,
+        filter_key: previewBody.filter_key,
+        q: previewBody.q,
+        limit: Math.min(previewBody.limit ?? 50, 500),
+        offset: previewBody.offset ?? 0,
+      };
+
+      console.log(`[import-normalize] preview_rows: filter_key=${previewPayload.filter_key}, limit=${previewPayload.limit}`);
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+      let previewResponse: Response;
+      try {
+        previewResponse = await fetch(previewEndpoint, {
+          method: 'POST',
+          headers: enricherHeaders,
+          body: JSON.stringify(previewPayload),
+          signal: controller.signal,
+        });
+      } catch (fetchError: unknown) {
+        const name = (fetchError as { name?: string } | null)?.name;
+        if (name === 'AbortError') {
+          console.error('[import-normalize] preview_rows timed out');
+          return new Response(
+            JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Preview request timed out.' }),
+            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        throw fetchError;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      const previewData = await previewResponse.json();
+
+      if (!previewResponse.ok) {
+        console.error('[import-normalize] preview_rows error:', previewResponse.status, previewData);
+        return new Response(
+          JSON.stringify({ ok: false, error: previewData.error || 'Preview failed' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ ok: true, ...previewData }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // =========================================
+    // Handle chat (AI commands for structured patches)
+    // =========================================
+    if (op === 'chat') {
+      const chatBody = body as ChatRequest;
+      if (!chatBody.message) {
+        return new Response(
+          JSON.stringify({ ok: false, error: 'Missing message' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const chatEndpoint = `${enricherUrl}/api/enrich/chat`;
+      
+      const chatPayload = {
+        organization_id,
+        import_job_id: chatBody.import_job_id || 'current',
+        message: chatBody.message,
+        context: chatBody.context || null,
+      };
+
+      console.log(`[import-normalize] chat: message="${chatBody.message.substring(0, 50)}...", context=${JSON.stringify(chatBody.context)}`);
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 45000);
+
+      let chatResponse: Response;
+      try {
+        chatResponse = await fetch(chatEndpoint, {
+          method: 'POST',
+          headers: enricherHeaders,
+          body: JSON.stringify(chatPayload),
+          signal: controller.signal,
+        });
+      } catch (fetchError: unknown) {
+        const name = (fetchError as { name?: string } | null)?.name;
+        if (name === 'AbortError') {
+          console.error('[import-normalize] chat timed out');
+          return new Response(
+            JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'AI request timed out.' }),
+            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        throw fetchError;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      const chatData = await chatResponse.json();
+
+      if (!chatResponse.ok) {
+        console.error('[import-normalize] chat error:', chatResponse.status, chatData);
+        return new Response(
+          JSON.stringify({ ok: false, error: chatData.error || 'Chat failed' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Response should contain structured patch data
+      return new Response(
+        JSON.stringify({ ok: true, ...chatData }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
