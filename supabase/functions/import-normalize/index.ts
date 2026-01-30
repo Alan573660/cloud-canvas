@@ -219,17 +219,17 @@ Deno.serve(async (req) => {
       const dryRunBody = body as DryRunRequest;
       const enricherEndpoint = `${enricherUrl}/api/enrich/dry_run`;
       
-      // Apply limit cap but preserve user's ai_suggest preference (default TRUE for value)
+      // Limit: 2000 по умолчанию, макс 3000 для защиты от таймаутов
       const requestedScope = dryRunBody.scope || {};
       const enricherPayload = {
         organization_id,
         import_job_id,
         scope: { 
           only_where_null: requestedScope.only_where_null ?? true, 
-          limit: Math.min(requestedScope.limit ?? 500, 1000)
+          limit: Math.min(requestedScope.limit ?? 2000, 3000)
         },
-        // AI suggestions ON by default - main feature value
-        ai_suggest: dryRunBody.ai_suggest ?? true,
+        // AI suggestions OFF by default — пользователь включает кнопкой
+        ai_suggest: dryRunBody.ai_suggest ?? false,
       };
 
       console.log(`[import-normalize] Calling ${enricherEndpoint}, ai_suggest:`, enricherPayload.ai_suggest);
