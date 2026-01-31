@@ -9,7 +9,7 @@
  * Данные: import-normalize op=preview_rows (proxy to catalog-enricher)
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import {
@@ -167,7 +167,13 @@ export function NormalizationDialog({
   });
 
   // Fetch preview rows via Edge Function (proxy to catalog-enricher)
-  const { data: previewData, isLoading: previewLoading, refetch: refetchPreview } = useQuery({
+  const previewErrorToastShownRef = useRef(false);
+
+  const {
+    data: previewData,
+    isLoading: previewLoading,
+    error: previewError,
+  } = useQuery({
     queryKey: ['normalization-preview', organizationId, activeGroup?.group_type, activeGroup?.group_key, searchQuery, page, pageSize],
     queryFn: async () => {
       const { data, error } = await supabase.functions.invoke<PreviewRowsResponse>('import-normalize', {
@@ -193,6 +199,20 @@ export function NormalizationDialog({
     },
     enabled: open && !!organizationId,
   });
+
+  // Show a one-time toast when preview_rows fails (common case: Cloud Run endpoint not deployed -> 404)
+  useEffect(() => {
+    if (!previewError || previewErrorToastShownRef.current) return;
+    previewErrorToastShownRef.current = true;
+    toast({
+      title: t('common.error'),
+      description:
+        previewError instanceof Error
+          ? previewError.message
+          : t('normalize.previewFailed', 'Не удалось загрузить предпросмотр каталога'),
+      variant: 'destructive',
+    });
+  }, [previewError, t]);
 
   // Run dry_run when dialog opens
   useEffect(() => {
