@@ -183,17 +183,13 @@ Deno.serve(async (req) => {
         );
       }
 
-      const statusEndpoint = `${enricherUrl}/api/enrich/apply/status`;
+      // Backend uses GET with query params: GET /api/enrich/apply_status?import_job_id=...&apply_id=...
+      const statusEndpoint = `${enricherUrl}/api/enrich/apply_status?import_job_id=${encodeURIComponent(import_job_id || 'current')}&apply_id=${encodeURIComponent(statusBody.apply_id)}`;
       console.log(`[import-normalize] Polling apply status: ${statusBody.apply_id}`);
 
       const statusResponse = await fetch(statusEndpoint, {
-        method: 'POST',
+        method: 'GET',
         headers: enricherHeaders,
-        body: JSON.stringify({
-          organization_id,
-          import_job_id,
-          apply_id: statusBody.apply_id,
-        }),
       });
 
       const statusData = await statusResponse.json();
