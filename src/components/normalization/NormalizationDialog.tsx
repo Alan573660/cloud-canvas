@@ -2,11 +2,12 @@
  * NormalizationDialog - Модальное окно нормализации каталога
  * 
  * Структура:
+ * - Вверху: Вкладки категорий (Профнастил, Металлочерепица, Сэндвич, Доборы, Прочее)
  * - Слева: Группы/паттерны (WIDTH, COLOR, COATING, DECOR)
- * - Справа: Таблица товаров (из preview_rows через Edge) + фильтрация по группе
- * - Снизу справа: AI-чат панель (Gemini через Edge proxy)
+ * - Справа: Таблица товаров + фильтрация по категории и группе
+ * - Снизу справа: AI-чат панель
  * 
- * Данные: import-normalize op=preview_rows (proxy to catalog-enricher)
+ * Данные: import-normalize op=dry_run → patches_sample
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
@@ -23,14 +24,14 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { toast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
-import { type CatalogItem } from '@/lib/catalog-api';
-import { Sparkles, Check, Loader2, Zap } from 'lucide-react';
+import { Sparkles, Check, Loader2, Zap, Download, RefreshCw } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 
 import { GroupsSidebar, type PatternGroup } from './GroupsSidebar';
 import { CatalogTable } from './CatalogTable';
 import { AIChatPanel } from './AIChatPanel';
+import { CategoryTabs, type ProductCategory, categorizeItem } from './CategoryTabs';
 
 // =========================================
 // Types
@@ -55,6 +56,7 @@ interface PatchSample {
   width_work_mm?: number;
   width_full_mm?: number;
   weight_kg_m2?: number;
+  unit?: string;
 }
 
 interface DryRunResponse {
@@ -103,13 +105,19 @@ export function NormalizationDialog({
   const [profileHash, setProfileHash] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [aiEnabled, setAiEnabled] = useState(false); // AI OFF по умолчанию
-  const [dryRunLimit, setDryRunLimit] = useState(2000); // 2000 по умолчанию
+  const [dryRunLimit, setDryRunLimit] = useState(5000); // 5000 по умолчанию для полного каталога
   
-  // Catalog items from dry_run patches_sample (no separate preview_rows call)
+  // Category filter
+  const [activeCategory, setActiveCategory] = useState<ProductCategory>('ALL');
+  
+  // Catalog items from dry_run patches_sample
   const [previewItems, setPreviewItems] = useState<PatchSample[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
+  const [pageSize, setPageSize] = useState(100); // 100 по умолчанию для удобства
+  
+  // Loading state for "load more"
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
   // dry_run mutation to get questions/groups
   const dryRunMutation = useMutation({
@@ -120,20 +128,19 @@ export function NormalizationDialog({
           organization_id: organizationId,
           import_job_id: importJobId || 'current', // 'current' = normalize existing catalog
           scope: { only_where_null: true, limit: params.limit },
-          ai_suggest: params.aiSuggest, // AI OFF по умолчанию
+          ai_suggest: params.aiSuggest,
         },
       });
 
       if (error) throw new Error(error.message);
       
       // Timeout fallback: retry with smaller limit
-      if (data?.code === 'TIMEOUT' && params.limit > 500) {
-        setDryRunLimit(500);
+      if (data?.code === 'TIMEOUT' && params.limit > 2000) {
+        setDryRunLimit(2000);
         toast({
           title: t('normalize.timeoutRetry', 'Таймаут'),
-          description: t('normalize.retryingSmaller', 'Повторяем с меньшим лимитом (500)...'),
+          description: t('normalize.retryingSmaller', 'Повторяем с меньшим лимитом (2000)...'),
         });
-        // Re-throw to trigger retry
         throw new Error('TIMEOUT_RETRY');
       }
       
@@ -144,22 +151,32 @@ export function NormalizationDialog({
       setRunId(data.run_id || null);
       setProfileHash(data.profile_hash || null);
       
-      // Store patches_sample for table display (no separate preview_rows call)
-      setPreviewItems(data.patches_sample || []);
+      // Store patches_sample for table display
+      setPreviewItems(prev => {
+        // If loading more, append; otherwise replace
+        if (isLoadingMore) {
+          const existingIds = new Set(prev.map(p => p.id));
+          const newItems = (data.patches_sample || []).filter(p => !existingIds.has(p.id));
+          return [...prev, ...newItems];
+        }
+        return data.patches_sample || [];
+      });
+      setIsLoadingMore(false);
       
-      // Parse questions into groups (WIDTH строго по regex)
+      // Parse questions into groups
       const parsedGroups = parseQuestionsToGroups(data.questions || []);
       setGroups(parsedGroups);
       
       // Select first group by default
-      if (parsedGroups.length > 0) {
+      if (parsedGroups.length > 0 && !activeGroup) {
         setActiveGroup(parsedGroups[0]);
       }
     },
     onError: (error) => {
+      setIsLoadingMore(false);
       // Retry with smaller limit on timeout
       if (error.message === 'TIMEOUT_RETRY') {
-        dryRunMutation.mutate({ limit: 500, aiSuggest: aiEnabled });
+        dryRunMutation.mutate({ limit: 2000, aiSuggest: aiEnabled });
         return;
       }
       toast({
@@ -168,12 +185,17 @@ export function NormalizationDialog({
         variant: 'destructive',
       });
     },
-    retry: false, // Manual retry for timeout
+    retry: false,
   });
 
-  // Filter and paginate preview items locally (from dry_run patches_sample)
+  // Filter by category, then by active group and search
   const filteredItems = useMemo(() => {
     let items = previewItems;
+    
+    // Filter by category first
+    if (activeCategory !== 'ALL') {
+      items = items.filter(item => categorizeItem(item) === activeCategory);
+    }
     
     // Filter by active group
     if (activeGroup) {
@@ -205,14 +227,14 @@ export function NormalizationDialog({
     }
     
     return items;
-  }, [previewItems, activeGroup, searchQuery]);
+  }, [previewItems, activeCategory, activeGroup, searchQuery]);
   
   const paginatedItems = useMemo(() => {
     const start = (page - 1) * pageSize;
     return filteredItems.slice(start, start + pageSize);
   }, [filteredItems, page, pageSize]);
   
-  const previewLoading = dryRunMutation.isPending;
+  const previewLoading = dryRunMutation.isPending && !isLoadingMore;
 
   // Run dry_run when dialog opens
   useEffect(() => {
@@ -485,6 +507,16 @@ export function NormalizationDialog({
           </div>
         </DialogHeader>
 
+        {/* Category Tabs */}
+        <CategoryTabs
+          items={previewItems}
+          activeCategory={activeCategory}
+          onCategoryChange={(cat) => {
+            setActiveCategory(cat);
+            setPage(1);
+          }}
+        />
+
         {/* Main Content - Split Layout */}
         <div className="flex-1 flex min-h-0">
           {/* Left Sidebar - Groups */}
@@ -499,6 +531,51 @@ export function NormalizationDialog({
 
           {/* Right Content - Table + Chat */}
           <div className="flex-1 flex flex-col min-w-0">
+            {/* Load more info bar */}
+            {previewItems.length > 0 && (
+              <div className="flex items-center justify-between px-4 py-2 bg-muted/30 border-b text-sm">
+                <span className="text-muted-foreground">
+                  {t('normalize.loaded', 'Загружено')}: <strong>{previewItems.length.toLocaleString()}</strong> {t('normalize.items', 'товаров')}
+                </span>
+                <div className="flex items-center gap-2">
+                  {previewItems.length < 10000 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setIsLoadingMore(true);
+                        const newLimit = Math.min(previewItems.length + 5000, 20000);
+                        setDryRunLimit(newLimit);
+                        dryRunMutation.mutate({ limit: newLimit, aiSuggest: aiEnabled });
+                      }}
+                      disabled={dryRunMutation.isPending}
+                    >
+                      {isLoadingMore ? (
+                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                      ) : (
+                        <Download className="h-3 w-3 mr-1" />
+                      )}
+                      {t('normalize.loadMore', 'Загрузить ещё')} +5000
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setPreviewItems([]);
+                      setGroups([]);
+                      setActiveGroup(null);
+                      dryRunMutation.mutate({ limit: dryRunLimit, aiSuggest: aiEnabled });
+                    }}
+                    disabled={dryRunMutation.isPending}
+                  >
+                    <RefreshCw className="h-3 w-3 mr-1" />
+                    {t('normalize.refresh', 'Обновить')}
+                  </Button>
+                </div>
+              </div>
+            )}
+            
             {/* Table Area */}
             <div className="flex-1 min-h-0">
               <CatalogTable
