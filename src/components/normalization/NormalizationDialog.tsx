@@ -211,36 +211,39 @@ export function NormalizationDialog({
     dryRunMutation.mutate({ limit: dryRunLimit, aiSuggest: newAiEnabled });
   };
 
-  // WIDTH regex: только профили листовых кровельных
-  const WIDTH_PROFILE_REGEX = /^(С|C|Н|H|НС|HC|МП|MP)-?\d{1,3}$/;
-  
-  // Parse questions array into PatternGroup format
+  /**
+   * Parse questions from Cloud Run dry_run response into PatternGroup format.
+   * 
+   * IMPORTANT: UI does NOT classify or filter data.
+   * Source of truth = Cloud Run catalog-enricher.
+   * - sheet_kind / color_system / color_code — computed by backend
+   * - Accessories (выход/буклет/оклад/планка/саморез) → sheet_kind=OTHER (backend)
+   * - #### → RAL#### by whitelist, RR → RR## (backend)
+   * 
+   * UI just displays what backend returns as-is.
+   */
   const parseQuestionsToGroups = (questions: DryRunResponse['questions']): PatternGroup[] => {
     const result: PatternGroup[] = [];
     
     questions?.forEach(q => {
+      // Backend determines group_type via sheet_kind/color_system
+      // UI simply maps the question type to display groups
+      
       if (q.type.startsWith('WIDTH_')) {
-        // СТРОГО: WIDTH только для профилей, соответствующих regex
-        const profile = q.profile || '';
-        if (!WIDTH_PROFILE_REGEX.test(profile)) {
-          // Не WIDTH — пропускаем или можно добавить в OTHER
-          console.log('[Normalization] Skipping non-WIDTH profile:', profile);
-          return;
-        }
-        
+        // Backend already filtered: only valid roofing profiles have WIDTH_ type
         result.push({
           group_type: 'WIDTH',
-          group_key: profile,
+          group_key: q.profile || q.token || '',
           affected_count: q.affected_count || 0,
           examples: q.examples || [],
           suggested: q.suggested ? `${q.suggested.work_mm}/${q.suggested.full_mm}мм` : undefined,
-          current_confirmed: false, // TODO: check bot_settings
+          current_confirmed: false,
           question: q,
         });
       }
       
       if (q.type === 'COATING_COLOR_MAP') {
-        // Add coating groups
+        // Coatings
         q.coatings?.forEach(c => {
           result.push({
             group_type: 'COATING',
@@ -253,17 +256,16 @@ export function NormalizationDialog({
           });
         });
         
-        // Add color groups
+        // Colors: backend sets kind=DECOR for decor patterns
         q.colors?.forEach(c => {
-          const isDecor = c.kind === 'DECOR';
           result.push({
-            group_type: isDecor ? 'DECOR' : 'COLOR',
+            group_type: c.kind === 'DECOR' ? 'DECOR' : 'COLOR',
             group_key: c.token,
             affected_count: c.affected_count || 0,
             examples: c.examples || [],
-            suggested: c.suggested_ral,
+            suggested: c.suggested_ral, // Backend computed: RAL#### or RR##
             current_confirmed: false,
-            question: { type: isDecor ? 'DECOR' : 'COLOR', ...c },
+            question: { type: c.kind === 'DECOR' ? 'DECOR' : 'COLOR', ...c },
           });
         });
       }
