@@ -454,7 +454,7 @@ Deno.serve(async (req) => {
       if (!previewResponse.ok) {
         console.error('[import-normalize] preview_rows error:', previewResponse.status, previewData);
         return new Response(
-          JSON.stringify({ ok: false, error: previewData.error || 'Preview failed' }),
+          JSON.stringify({ ok: false, error: previewData.error || previewData.detail || 'Preview failed' }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
@@ -518,7 +518,7 @@ Deno.serve(async (req) => {
       if (!chatResponse.ok) {
         console.error('[import-normalize] chat error:', chatResponse.status, chatData);
         return new Response(
-          JSON.stringify({ ok: false, error: chatData.error || 'Chat failed' }),
+          JSON.stringify({ ok: false, error: chatData.error || chatData.detail || 'Chat failed' }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
