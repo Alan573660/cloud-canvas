@@ -33,7 +33,6 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
-import { type CatalogItem } from '@/lib/catalog-api';
 import { type PatternGroup } from './GroupsSidebar';
 import {
   Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
@@ -43,15 +42,24 @@ import {
 // =========================================
 // Types
 // =========================================
+export interface NormalizationItem {
+  id: string;
+  title?: string;
+  profile?: string;
+  sheet_kind?: string;
+  color_system?: string;
+  color_code?: string;
+  thickness_mm?: number | string;
+  coating?: string;
+  width_work_mm?: number;
+  width_full_mm?: number;
+  weight_kg_m2?: number;
+  notes?: string;
+  unit?: string;
+}
+
 interface CatalogTableProps {
-  items: Array<CatalogItem & {
-    profile?: string;
-    thickness_mm?: number;
-    width_work_mm?: number;
-    width_full_mm?: number;
-    coating?: string;
-    notes?: string;
-  }>;
+  items: NormalizationItem[];
   loading: boolean;
   activeGroup: PatternGroup | null;
   onApplyToGroup: (group: PatternGroup, value: unknown) => void;
@@ -317,15 +325,6 @@ export function CatalogTable({
               </TableRow>
             ) : (
               items.map(item => {
-                const itemData = item as CatalogItem & {
-                  profile?: string;
-                  thickness_mm?: number;
-                  width_work_mm?: number;
-                  width_full_mm?: number;
-                  coating?: string;
-                  notes?: string;
-                };
-                
                 return (
                   <Collapsible key={item.id} asChild>
                     <>
@@ -338,32 +337,32 @@ export function CatalogTable({
                         </TableCell>
                         <TableCell>
                           <HighlightedCell
-                            value={itemData.profile}
-                            isEmpty={!itemData.profile}
+                            value={item.profile}
+                            isEmpty={!item.profile}
                           />
                         </TableCell>
                         <TableCell>
                           <HighlightedCell
-                            value={itemData.thickness_mm ? `${itemData.thickness_mm}мм` : null}
-                            isEmpty={!itemData.thickness_mm}
+                            value={item.thickness_mm ? `${item.thickness_mm}мм` : null}
+                            isEmpty={!item.thickness_mm}
                           />
                         </TableCell>
                         <TableCell>
                           <HighlightedCell
-                            value={itemData.width_work_mm}
-                            isEmpty={!itemData.width_work_mm}
+                            value={item.width_work_mm}
+                            isEmpty={!item.width_work_mm}
                           />
                         </TableCell>
                         <TableCell>
                           <HighlightedCell
-                            value={itemData.width_full_mm}
-                            isEmpty={!itemData.width_full_mm}
+                            value={item.width_full_mm}
+                            isEmpty={!item.width_full_mm}
                           />
                         </TableCell>
                         <TableCell>
                           <HighlightedCell
-                            value={itemData.coating}
-                            isEmpty={!itemData.coating}
+                            value={item.coating}
+                            isEmpty={!item.coating}
                           />
                         </TableCell>
                         <TableCell>
@@ -372,7 +371,7 @@ export function CatalogTable({
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          {itemData.notes && (
+                          {item.notes && (
                             <CollapsibleTrigger asChild>
                               <Button
                                 variant="ghost"
@@ -390,13 +389,13 @@ export function CatalogTable({
                         </TableCell>
                       </TableRow>
                       
-                      {itemData.notes && (
+                      {item.notes && (
                         <CollapsibleContent asChild>
                           <TableRow className="bg-muted/30">
                             <TableCell colSpan={9} className="py-2">
                               <div className="text-xs text-muted-foreground px-2">
                                 <span className="font-medium">{t('products.notes', 'Заметки')}:</span>{' '}
-                                {itemData.notes}
+                                {item.notes}
                               </div>
                             </TableCell>
                           </TableRow>

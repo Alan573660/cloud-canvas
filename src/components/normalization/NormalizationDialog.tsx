@@ -9,9 +9,9 @@
  * Данные: import-normalize op=preview_rows (proxy to catalog-enricher)
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import {
   Dialog,
   DialogContent,
@@ -43,6 +43,20 @@ interface NormalizationDialogProps {
   onComplete?: () => void;
 }
 
+interface PatchSample {
+  id: string;
+  title?: string;
+  profile?: string;
+  sheet_kind?: string;
+  color_system?: string;
+  color_code?: string;
+  thickness_mm?: number | string;
+  coating?: string;
+  width_work_mm?: number;
+  width_full_mm?: number;
+  weight_kg_m2?: number;
+}
+
 interface DryRunResponse {
   ok: boolean;
   run_id?: string;
@@ -53,6 +67,7 @@ interface DryRunResponse {
     patches_ready: number;
     questions: number;
   };
+  patches_sample?: PatchSample[];
   questions?: Array<{
     type: string;
     profile?: string;
@@ -67,20 +82,6 @@ interface DryRunResponse {
   }>;
   error?: string;
   code?: string;
-}
-
-interface PreviewRowsResponse {
-  ok: boolean;
-  rows?: Array<CatalogItem & {
-    profile?: string;
-    thickness_mm?: number;
-    width_work_mm?: number;
-    width_full_mm?: number;
-    coating?: string;
-    notes?: string;
-  }>;
-  total_count?: number;
-  error?: string;
 }
 
 // =========================================
@@ -104,7 +105,8 @@ export function NormalizationDialog({
   const [aiEnabled, setAiEnabled] = useState(false); // AI OFF по умолчанию
   const [dryRunLimit, setDryRunLimit] = useState(2000); // 2000 по умолчанию
   
-  // Catalog items for table (filtered by active group)
+  // Catalog items from dry_run patches_sample (no separate preview_rows call)
+  const [previewItems, setPreviewItems] = useState<PatchSample[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
@@ -142,6 +144,9 @@ export function NormalizationDialog({
       setRunId(data.run_id || null);
       setProfileHash(data.profile_hash || null);
       
+      // Store patches_sample for table display (no separate preview_rows call)
+      setPreviewItems(data.patches_sample || []);
+      
       // Parse questions into groups (WIDTH строго по regex)
       const parsedGroups = parseQuestionsToGroups(data.questions || []);
       setGroups(parsedGroups);
@@ -166,53 +171,48 @@ export function NormalizationDialog({
     retry: false, // Manual retry for timeout
   });
 
-  // Fetch preview rows via Edge Function (proxy to catalog-enricher)
-  const previewErrorToastShownRef = useRef(false);
-
-  const {
-    data: previewData,
-    isLoading: previewLoading,
-    error: previewError,
-  } = useQuery({
-    queryKey: ['normalization-preview', organizationId, activeGroup?.group_type, activeGroup?.group_key, searchQuery, page, pageSize],
-    queryFn: async () => {
-      const { data, error } = await supabase.functions.invoke<PreviewRowsResponse>('import-normalize', {
-        body: {
-          op: 'preview_rows',
-          organization_id: organizationId,
-          import_job_id: importJobId,
-          group_type: activeGroup?.group_type,
-          filter_key: activeGroup?.group_key,
-          q: searchQuery || undefined,
-          limit: pageSize,
-          offset: (page - 1) * pageSize,
-        },
-      });
-
-      if (error) throw new Error(error.message);
-      if (!data?.ok) throw new Error(data?.error || 'Preview failed');
-      
-      return {
-        items: data.rows || [],
-        total: data.total_count || 0,
-      };
-    },
-    enabled: open && !!organizationId,
-  });
-
-  // Show a one-time toast when preview_rows fails (common case: Cloud Run endpoint not deployed -> 404)
-  useEffect(() => {
-    if (!previewError || previewErrorToastShownRef.current) return;
-    previewErrorToastShownRef.current = true;
-    toast({
-      title: t('common.error'),
-      description:
-        previewError instanceof Error
-          ? previewError.message
-          : t('normalize.previewFailed', 'Не удалось загрузить предпросмотр каталога'),
-      variant: 'destructive',
-    });
-  }, [previewError, t]);
+  // Filter and paginate preview items locally (from dry_run patches_sample)
+  const filteredItems = useMemo(() => {
+    let items = previewItems;
+    
+    // Filter by active group
+    if (activeGroup) {
+      if (activeGroup.group_type === 'WIDTH') {
+        items = items.filter(item => 
+          item.profile?.toUpperCase().includes(activeGroup.group_key.toUpperCase())
+        );
+      } else if (activeGroup.group_type === 'COLOR' || activeGroup.group_type === 'DECOR') {
+        items = items.filter(item =>
+          item.color_code?.toUpperCase().includes(activeGroup.group_key.toUpperCase()) ||
+          item.title?.toUpperCase().includes(activeGroup.group_key.toUpperCase())
+        );
+      } else if (activeGroup.group_type === 'COATING') {
+        items = items.filter(item =>
+          item.coating?.toUpperCase().includes(activeGroup.group_key.toUpperCase()) ||
+          item.title?.toUpperCase().includes(activeGroup.group_key.toUpperCase())
+        );
+      }
+    }
+    
+    // Filter by search query
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      items = items.filter(item =>
+        item.title?.toLowerCase().includes(q) ||
+        item.id?.toLowerCase().includes(q) ||
+        item.profile?.toLowerCase().includes(q)
+      );
+    }
+    
+    return items;
+  }, [previewItems, activeGroup, searchQuery]);
+  
+  const paginatedItems = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filteredItems.slice(start, start + pageSize);
+  }, [filteredItems, page, pageSize]);
+  
+  const previewLoading = dryRunMutation.isPending;
 
   // Run dry_run when dialog opens
   useEffect(() => {
@@ -502,11 +502,11 @@ export function NormalizationDialog({
             {/* Table Area */}
             <div className="flex-1 min-h-0">
               <CatalogTable
-                items={previewData?.items || []}
+                items={paginatedItems}
                 loading={previewLoading}
                 activeGroup={activeGroup}
                 onApplyToGroup={handleApplyToGroup}
-                totalCount={previewData?.total || 0}
+                totalCount={filteredItems.length}
                 page={page}
                 pageSize={pageSize}
                 onPageChange={setPage}
