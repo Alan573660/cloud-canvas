@@ -18,7 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { NormalizationDialog } from '@/components/normalization';
+import { NormalizationWizard } from '@/components/normalization';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
@@ -145,7 +145,7 @@ export function NormalizationTab() {
       </Card>
 
       {organizationId && (
-        <NormalizationDialog
+        <NormalizationWizard
           open={dialogOpen}
           onOpenChange={setDialogOpen}
           organizationId={organizationId}
