@@ -1,7 +1,7 @@
 /**
  * useNormalization — hook for all normalization backend calls.
  * 
- * Wraps: dry_run, apply (async), apply_status polling, settings-merge.
+ * Wraps: dry_run, apply (async), apply_status polling, stats, settings-merge.
  * All calls go through Supabase Edge Functions (import-normalize, settings-merge).
  */
 
@@ -21,7 +21,7 @@ export interface DryRunPatch {
   color_system?: string;
   width_work_mm?: number;
   width_full_mm?: number;
-  price?: number;
+  price_rub_m2?: number;
   unit?: string;
   sheet_kind?: string;
 }
@@ -105,6 +105,10 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   const [applyProgress, setApplyProgress] = useState(0);
   const [applyReport, setApplyReport] = useState<QualityMetrics | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
+
+  // Stats state
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [serverStats, setServerStats] = useState<QualityMetrics | null>(null);
 
   // Settings save
   const [savingSettings, setSavingSettings] = useState(false);
@@ -207,6 +211,37 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     }
   }, [organizationId]);
 
+  // ─── Fetch Stats ──────────────────────────────────────────
+
+  const fetchStats = useCallback(async () => {
+    setStatsLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('import-normalize', {
+        body: {
+          op: 'stats',
+          organization_id: organizationId,
+          import_job_id: importJobId || 'current',
+        },
+      });
+
+      if (error) throw new Error(error.message);
+
+      const result = data as { ok: boolean; metrics?: QualityMetrics; error?: string };
+      if (!result?.ok) throw new Error(result?.error || 'Stats fetch failed');
+
+      if (result.metrics) {
+        setServerStats(result.metrics);
+      }
+      return result.metrics || null;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      toast({ title: 'Ошибка stats', description: msg, variant: 'destructive' });
+      return null;
+    } finally {
+      setStatsLoading(false);
+    }
+  }, [organizationId, importJobId]);
+
   // ─── Apply ────────────────────────────────────────────────
 
   const stopPolling = useCallback(() => {
@@ -216,14 +251,15 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     }
   }, []);
 
-  const pollApplyStatus = useCallback(async (currentRunId: string) => {
+  const pollApplyStatus = useCallback(async (currentApplyId: string, currentRunId: string) => {
     try {
       const { data, error } = await supabase.functions.invoke<ApplyStatusResult>('import-normalize', {
         body: {
           op: 'apply_status',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
-          apply_id: currentRunId,
+          apply_id: currentApplyId,
+          run_id: currentRunId,
         },
       });
 
@@ -294,12 +330,13 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       }
 
       if (result?.apply_id) {
-        // Async mode — start polling
-        setApplyId(result.apply_id);
+        // Async mode — start polling with both ids
+        const newApplyId = result.apply_id;
+        setApplyId(newApplyId);
         setApplyState('PENDING');
 
         pollingRef.current = setInterval(() => {
-          pollApplyStatus(result.apply_id!);
+          pollApplyStatus(newApplyId, runId);
         }, 3000);
       } else if (result?.ok !== false && result?.patched_rows !== undefined) {
         // Sync mode — done immediately
@@ -331,6 +368,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setApplyProgress(0);
     setApplyReport(null);
     setApplyError(null);
+    setServerStats(null);
     stopPolling();
   }, [stopPolling]);
 
@@ -349,6 +387,11 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     applyReport,
     applyError,
     executeApply,
+
+    // Stats
+    statsLoading,
+    serverStats,
+    fetchStats,
 
     // Settings
     savingSettings,

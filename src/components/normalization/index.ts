@@ -6,6 +6,7 @@
 
 // New v2 components (Fixed Schema)
 export { NormalizationWizard } from './NormalizationWizard';
+export { ConfirmedSettingsEditor } from './ConfirmedSettingsEditor';
 export { QualityGates } from './QualityGates';
 export { ProductTypeFilter } from './ProductTypeFilter';
 export { ClusterTree } from './ClusterTree';
