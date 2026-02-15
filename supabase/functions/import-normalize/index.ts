@@ -5,6 +5,30 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Safe JSON parser: handles non-JSON responses from enricher gracefully
+async function safeJsonParse(response: Response): Promise<{ data: Record<string, unknown> | null; rawText: string }> {
+  const rawText = await response.text();
+  try {
+    const data = JSON.parse(rawText);
+    return { data, rawText };
+  } catch {
+    return { data: null, rawText };
+  }
+}
+
+function enricherErrorResponse(status: number, rawText: string, fallbackMsg: string) {
+  const preview = rawText.substring(0, 200);
+  console.error(`[import-normalize] Enricher returned non-JSON (status ${status}): ${preview}`);
+  return new Response(
+    JSON.stringify({
+      ok: false,
+      error: fallbackMsg,
+      detail: `Enricher returned status ${status} with non-JSON body. Preview: ${preview}`,
+    }),
+    { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+  );
+}
+
 interface DryRunRequest {
   op: 'dry_run';
   organization_id: string;
@@ -29,9 +53,9 @@ interface ApplyStatusRequest {
   organization_id: string;
   import_job_id: string;
   apply_id: string;
+  run_id?: string;
 }
 
-// NEW: Preview rows request (fetches catalog data by group filter)
 interface PreviewRowsRequest {
   op: 'preview_rows';
   organization_id: string;
@@ -43,7 +67,6 @@ interface PreviewRowsRequest {
   offset?: number;
 }
 
-// NEW: AI Chat request (structured patches only)
 interface ChatRequest {
   op: 'chat';
   organization_id: string;
@@ -57,16 +80,20 @@ interface ChatRequest {
   };
 }
 
-type NormalizeRequest = DryRunRequest | ApplyRequest | ApplyStatusRequest | PreviewRowsRequest | ChatRequest;
+interface StatsRequest {
+  op: 'stats';
+  organization_id: string;
+  import_job_id?: string;
+}
+
+type NormalizeRequest = DryRunRequest | ApplyRequest | ApplyStatusRequest | PreviewRowsRequest | ChatRequest | StatsRequest;
 
 Deno.serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    // Validate auth
     const authHeader = req.headers.get('Authorization');
     if (!authHeader?.startsWith('Bearer ')) {
       return new Response(
@@ -79,27 +106,22 @@ Deno.serve(async (req) => {
     const supabaseAnon = Deno.env.get('SUPABASE_ANON_KEY')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-    // Get Cloud Run enricher config from secrets
     const enricherUrl = Deno.env.get('CATALOG_ENRICHER_URL');
     const enricherSecret = Deno.env.get('ENRICH_SHARED_SECRET');
 
     if (!enricherUrl) {
-      console.error('[import-normalize] CATALOG_ENRICHER_URL not configured');
       return new Response(
         JSON.stringify({ ok: false, error: 'Enricher not configured' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // Validate user token using getUser (more reliable in Deno than getClaims)
     const userClient = createClient(supabaseUrl, supabaseAnon, {
       global: { headers: { Authorization: authHeader } },
     });
 
     const { data: userData, error: userError } = await userClient.auth.getUser();
-    
     if (userError || !userData?.user?.id) {
-      console.error('[import-normalize] Auth error:', userError);
       return new Response(
         JSON.stringify({ ok: false, error: 'Unauthorized' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -107,12 +129,8 @@ Deno.serve(async (req) => {
     }
 
     const userId = userData.user.id;
-
-    // Parse request
     const body: NormalizeRequest = await req.json();
     const { op, organization_id } = body;
-
-    // import_job_id is optional for preview_rows and chat operations
     const import_job_id = (body as { import_job_id?: string }).import_job_id;
 
     if (!op || !organization_id) {
@@ -122,10 +140,8 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Use service role for permission check
     const adminClient = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Check user is member of org
     const { data: profile, error: profileError } = await adminClient
       .from('profiles')
       .select('id, role')
@@ -134,14 +150,12 @@ Deno.serve(async (req) => {
       .single();
 
     if (profileError || !profile) {
-      console.error('[import-normalize] Profile check failed:', profileError);
       return new Response(
         JSON.stringify({ ok: false, error: 'Access denied' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // For operations that require import_job_id, verify it exists
     const opsRequiringJob = ['dry_run', 'apply', 'apply_status'];
     if (opsRequiringJob.includes(op) && import_job_id && import_job_id !== 'current') {
       const { data: job, error: jobError } = await adminClient
@@ -152,7 +166,6 @@ Deno.serve(async (req) => {
         .single();
 
       if (jobError || !job) {
-        console.error('[import-normalize] Job not found:', jobError);
         return new Response(
           JSON.stringify({ ok: false, error: 'Import job not found' }),
           { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -163,7 +176,6 @@ Deno.serve(async (req) => {
       console.log(`[import-normalize] Op: ${op}, Org: ${organization_id}`);
     }
 
-    // Build headers for Cloud Run enricher
     const enricherHeaders: Record<string, string> = {
       'Content-Type': 'application/json',
     };
@@ -171,39 +183,75 @@ Deno.serve(async (req) => {
       enricherHeaders['X-Internal-Secret'] = enricherSecret;
     }
 
+    // ── Helper to call enricher safely ──
+    async function callEnricher(endpoint: string, method: 'GET' | 'POST', payload?: unknown, timeoutMs = 55000) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const fetchOpts: RequestInit = {
+          method,
+          headers: enricherHeaders,
+          signal: controller.signal,
+        };
+        if (method === 'POST' && payload !== undefined) {
+          fetchOpts.body = JSON.stringify(payload);
+        }
+
+        const response = await fetch(endpoint, fetchOpts);
+        const { data, rawText } = await safeJsonParse(response);
+
+        if (data === null) {
+          return { ok: false as const, status: response.status, rawText, data: null };
+        }
+        return { ok: response.ok, status: response.status, rawText, data };
+      } catch (fetchError: unknown) {
+        const name = (fetchError as { name?: string } | null)?.name;
+        if (name === 'AbortError') {
+          return { ok: false as const, status: 0, rawText: '', data: null, timeout: true };
+        }
+        throw fetchError;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
     // =========================================
-    // Handle apply_status (polling for async apply)
+    // Handle apply_status
     // =========================================
     if (op === 'apply_status') {
       const statusBody = body as ApplyStatusRequest;
-      if (!statusBody.apply_id) {
+      const applyId = statusBody.apply_id || statusBody.run_id;
+      if (!applyId) {
         return new Response(
-          JSON.stringify({ ok: false, error: 'Missing apply_id' }),
+          JSON.stringify({ ok: false, error: 'Missing apply_id or run_id' }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
-      // Backend uses GET with query params: GET /api/enrich/apply_status?import_job_id=...&apply_id=...
-      const statusEndpoint = `${enricherUrl}/api/enrich/apply_status?import_job_id=${encodeURIComponent(import_job_id || 'current')}&apply_id=${encodeURIComponent(statusBody.apply_id)}`;
-      console.log(`[import-normalize] Polling apply status: ${statusBody.apply_id}`);
+      const statusEndpoint = `${enricherUrl}/api/enrich/apply_status?import_job_id=${encodeURIComponent(import_job_id || 'current')}&apply_id=${encodeURIComponent(applyId)}`;
+      console.log(`[import-normalize] Polling apply status: ${applyId}`);
 
-      const statusResponse = await fetch(statusEndpoint, {
-        method: 'GET',
-        headers: enricherHeaders,
-      });
+      const result = await callEnricher(statusEndpoint, 'GET', undefined, 15000);
 
-      const statusData = await statusResponse.json();
-
-      if (!statusResponse.ok) {
-        console.error('[import-normalize] Status check error:', statusResponse.status, statusData);
+      if (result.timeout) {
         return new Response(
-          JSON.stringify({ ok: false, error: statusData.error || 'Status check failed' }),
+          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Status check timed out.' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      if (result.data === null) {
+        return enricherErrorResponse(result.status, result.rawText, 'Status check returned non-JSON');
+      }
+      if (!result.ok) {
+        return new Response(
+          JSON.stringify({ ok: false, error: (result.data as Record<string, unknown>).error || 'Status check failed' }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
       return new Response(
-        JSON.stringify(statusData),
+        JSON.stringify(result.data),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -213,77 +261,47 @@ Deno.serve(async (req) => {
     // =========================================
     if (op === 'dry_run') {
       const dryRunBody = body as DryRunRequest;
-      const enricherEndpoint = `${enricherUrl}/api/enrich/dry_run`;
-      
-      // Limit: 2000 по умолчанию, макс 3000 для защиты от таймаутов
       const requestedScope = dryRunBody.scope || {};
       const enricherPayload = {
         organization_id,
         import_job_id,
-        scope: { 
-          only_where_null: requestedScope.only_where_null ?? true, 
-          limit: Math.min(requestedScope.limit ?? 2000, 3000)
+        scope: {
+          only_where_null: requestedScope.only_where_null ?? true,
+          limit: Math.min(requestedScope.limit ?? 2000, 3000),
         },
-        // AI suggestions OFF by default — пользователь включает кнопкой
         ai_suggest: dryRunBody.ai_suggest ?? false,
       };
 
-      console.log(`[import-normalize] Calling ${enricherEndpoint}, ai_suggest:`, enricherPayload.ai_suggest);
+      console.log(`[import-normalize] Calling dry_run, ai_suggest:`, enricherPayload.ai_suggest);
 
-      // Add timeout with AbortController
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 55000);
+      const result = await callEnricher(`${enricherUrl}/api/enrich/dry_run`, 'POST', enricherPayload);
 
-      let enricherResponse: Response;
-      try {
-        enricherResponse = await fetch(enricherEndpoint, {
-          method: 'POST',
-          headers: enricherHeaders,
-          body: JSON.stringify(enricherPayload),
-          signal: controller.signal,
-        });
-      } catch (fetchError: unknown) {
-        const name = (fetchError as { name?: string } | null)?.name;
-        if (name === 'AbortError') {
-          console.error('[import-normalize] dry_run timed out after 55s');
-          return new Response(
-            JSON.stringify({
-              ok: false,
-              code: 'TIMEOUT',
-              error: 'Enricher request timed out (55s). Retry with smaller limit.',
-              recommended_limit: 250,
-            }),
-            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        }
-        console.error('[import-normalize] Fetch error:', fetchError);
-        throw fetchError;
-      } finally {
-        clearTimeout(timeoutId);
-      }
-
-      const enricherData = await enricherResponse.json();
-
-      if (!enricherResponse.ok) {
-        console.error('[import-normalize] Enricher error:', enricherResponse.status, enricherData);
+      if (result.timeout) {
         return new Response(
-          JSON.stringify({ 
-            ok: false, 
-            error: enricherData.error || enricherData.detail || 'Enricher request failed',
-          }),
+          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Enricher request timed out (55s). Retry with smaller limit.', recommended_limit: 250 }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      if (result.data === null) {
+        return enricherErrorResponse(result.status, result.rawText, 'Enricher dry_run returned non-JSON response');
+      }
+      if (!result.ok) {
+        const d = result.data as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({ ok: false, error: d.error || d.detail || 'Enricher request failed' }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
-      console.log('[import-normalize] dry_run OK, questions:', enricherData.questions?.length || 0);
+      console.log('[import-normalize] dry_run OK, questions:', (result.data as Record<string, unknown[]>).questions?.length || 0);
       return new Response(
-        JSON.stringify(enricherData),
+        JSON.stringify(result.data),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     // =========================================
-    // Handle apply (async start + optional poll)
+    // Handle apply
     // =========================================
     if (op === 'apply') {
       const applyBody = body as ApplyRequest;
@@ -294,120 +312,58 @@ Deno.serve(async (req) => {
         );
       }
 
-      // Try async apply endpoint first (start + return apply_id)
-      const applyStartEndpoint = `${enricherUrl}/api/enrich/apply/start`;
-      console.log(`[import-normalize] Starting async apply at ${applyStartEndpoint}`);
+      const applyPayload = {
+        organization_id,
+        import_job_id,
+        run_id: applyBody.run_id,
+        profile_hash: applyBody.profile_hash,
+      };
 
-      // Short timeout for start - should return quickly
-      const startController = new AbortController();
-      const startTimeoutId = setTimeout(() => startController.abort(), 10000); // 10s for start
+      // Try async start first
+      const startResult = await callEnricher(`${enricherUrl}/api/enrich/apply/start`, 'POST', applyPayload, 10000);
 
-      let startResponse: Response;
-      let useAsyncMode = true;
-
-      try {
-        startResponse = await fetch(applyStartEndpoint, {
-          method: 'POST',
-          headers: enricherHeaders,
-          body: JSON.stringify({
-            organization_id,
-            import_job_id,
-            run_id: applyBody.run_id,
-            profile_hash: applyBody.profile_hash,
-          }),
-          signal: startController.signal,
-        });
-      } catch (fetchError: unknown) {
-        const name = (fetchError as { name?: string } | null)?.name;
-        // If async endpoint doesn't exist (404) or times out, fallback to sync
-        console.log('[import-normalize] Async start failed, trying sync mode:', name);
-        useAsyncMode = false;
-        startResponse = null as unknown as Response;
-      } finally {
-        clearTimeout(startTimeoutId);
-      }
-
-      // If async start succeeded
-      if (useAsyncMode && startResponse && startResponse.ok) {
-        const startData = await startResponse.json();
-        console.log('[import-normalize] Async apply started, apply_id:', startData.apply_id);
-        
+      if (startResult.ok && startResult.data) {
+        const d = startResult.data as Record<string, unknown>;
+        console.log('[import-normalize] Async apply started, apply_id:', d.apply_id);
         return new Response(
-          JSON.stringify({
-            ok: true,
-            apply_id: startData.apply_id,
-            status: 'PENDING',
-          }),
+          JSON.stringify({ ok: true, apply_id: d.apply_id, status: 'PENDING' }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
-      // Fallback to synchronous apply (for backward compatibility or small datasets)
-      const syncApplyEndpoint = `${enricherUrl}/api/enrich/apply`;
-      console.log(`[import-normalize] Using sync apply at ${syncApplyEndpoint}`);
+      // Fallback to sync apply
+      console.log('[import-normalize] Async start unavailable, falling back to sync apply');
+      const syncResult = await callEnricher(`${enricherUrl}/api/enrich/apply`, 'POST', applyPayload);
 
-      const syncController = new AbortController();
-      const syncTimeoutId = setTimeout(() => syncController.abort(), 55000);
-
-      let syncResponse: Response;
-      try {
-        syncResponse = await fetch(syncApplyEndpoint, {
-          method: 'POST',
-          headers: enricherHeaders,
-          body: JSON.stringify({
-            organization_id,
-            import_job_id,
-            run_id: applyBody.run_id,
-            profile_hash: applyBody.profile_hash,
-          }),
-          signal: syncController.signal,
-        });
-      } catch (fetchError: unknown) {
-        const name = (fetchError as { name?: string } | null)?.name;
-        if (name === 'AbortError') {
-          console.error('[import-normalize] Sync apply timed out after 55s');
-          return new Response(
-            JSON.stringify({
-              ok: false,
-              code: 'TIMEOUT',
-              error: 'Apply timed out. Please try again.',
-            }),
-            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        }
-        console.error('[import-normalize] Sync apply fetch error:', fetchError);
-        throw fetchError;
-      } finally {
-        clearTimeout(syncTimeoutId);
-      }
-
-      const syncData = await syncResponse.json();
-
-      if (!syncResponse.ok) {
-        console.error('[import-normalize] Sync apply error:', syncResponse.status, syncData);
+      if (syncResult.timeout) {
         return new Response(
-          JSON.stringify({ 
-            ok: false, 
-            error: syncData.error || syncData.detail || 'Apply failed',
-          }),
+          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Apply timed out. Please try again.' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      if (syncResult.data === null) {
+        return enricherErrorResponse(syncResult.status, syncResult.rawText, 'Apply returned non-JSON response');
+      }
+      if (!syncResult.ok) {
+        const d = syncResult.data as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({ ok: false, error: d.error || d.detail || 'Apply failed' }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
-      console.log('[import-normalize] Sync apply OK, patched_rows:', syncData.patched_rows);
+      console.log('[import-normalize] Sync apply OK');
       return new Response(
-        JSON.stringify(syncData),
+        JSON.stringify(syncResult.data),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     // =========================================
-    // Handle preview_rows (fetch catalog data by group filter)
+    // Handle preview_rows
     // =========================================
     if (op === 'preview_rows') {
       const previewBody = body as PreviewRowsRequest;
-      const previewEndpoint = `${enricherUrl}/api/enrich/preview_rows`;
-      
       const previewPayload = {
         organization_id,
         import_job_id: previewBody.import_job_id || 'current',
@@ -418,51 +374,33 @@ Deno.serve(async (req) => {
         offset: previewBody.offset ?? 0,
       };
 
-      console.log(`[import-normalize] preview_rows: filter_key=${previewPayload.filter_key}, limit=${previewPayload.limit}`);
+      const result = await callEnricher(`${enricherUrl}/api/enrich/preview_rows`, 'POST', previewPayload, 30000);
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
-
-      let previewResponse: Response;
-      try {
-        previewResponse = await fetch(previewEndpoint, {
-          method: 'POST',
-          headers: enricherHeaders,
-          body: JSON.stringify(previewPayload),
-          signal: controller.signal,
-        });
-      } catch (fetchError: unknown) {
-        const name = (fetchError as { name?: string } | null)?.name;
-        if (name === 'AbortError') {
-          console.error('[import-normalize] preview_rows timed out');
-          return new Response(
-            JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Preview request timed out.' }),
-            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        }
-        throw fetchError;
-      } finally {
-        clearTimeout(timeoutId);
-      }
-
-      const previewData = await previewResponse.json();
-
-      if (!previewResponse.ok) {
-        console.error('[import-normalize] preview_rows error:', previewResponse.status, previewData);
+      if (result.timeout) {
         return new Response(
-          JSON.stringify({ ok: false, error: previewData.error || previewData.detail || 'Preview failed' }),
+          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Preview request timed out.' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      if (result.data === null) {
+        return enricherErrorResponse(result.status, result.rawText, 'Preview returned non-JSON response');
+      }
+      if (!result.ok) {
+        const d = result.data as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({ ok: false, error: d.error || d.detail || 'Preview failed' }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
       return new Response(
-        JSON.stringify({ ok: true, ...previewData }),
+        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     // =========================================
-    // Handle chat (AI commands for structured patches)
+    // Handle chat
     // =========================================
     if (op === 'chat') {
       const chatBody = body as ChatRequest;
@@ -473,8 +411,6 @@ Deno.serve(async (req) => {
         );
       }
 
-      const chatEndpoint = `${enricherUrl}/api/enrich/chat`;
-      
       const chatPayload = {
         organization_id,
         import_job_id: chatBody.import_job_id || 'current',
@@ -482,56 +418,35 @@ Deno.serve(async (req) => {
         context: chatBody.context || null,
       };
 
-      console.log(`[import-normalize] chat: message="${chatBody.message.substring(0, 50)}...", context=${JSON.stringify(chatBody.context)}`);
+      const result = await callEnricher(`${enricherUrl}/api/enrich/chat`, 'POST', chatPayload, 45000);
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 45000);
-
-      let chatResponse: Response;
-      try {
-        chatResponse = await fetch(chatEndpoint, {
-          method: 'POST',
-          headers: enricherHeaders,
-          body: JSON.stringify(chatPayload),
-          signal: controller.signal,
-        });
-      } catch (fetchError: unknown) {
-        const name = (fetchError as { name?: string } | null)?.name;
-        if (name === 'AbortError') {
-          console.error('[import-normalize] chat timed out');
-          return new Response(
-            JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'AI request timed out.' }),
-            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        }
-        throw fetchError;
-      } finally {
-        clearTimeout(timeoutId);
-      }
-
-      const chatData = await chatResponse.json();
-
-      if (!chatResponse.ok) {
-        console.error('[import-normalize] chat error:', chatResponse.status, chatData);
+      if (result.timeout) {
         return new Response(
-          JSON.stringify({ ok: false, error: chatData.error || chatData.detail || 'Chat failed' }),
+          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'AI request timed out.' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      if (result.data === null) {
+        return enricherErrorResponse(result.status, result.rawText, 'Chat returned non-JSON response');
+      }
+      if (!result.ok) {
+        const d = result.data as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({ ok: false, error: d.error || d.detail || 'Chat failed' }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
-      // Response should contain structured patch data
       return new Response(
-        JSON.stringify({ ok: true, ...chatData }),
+        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     // =========================================
-    // Handle stats (server-side quality metrics)
+    // Handle stats
     // =========================================
     if (op === 'stats') {
-      const statsEndpoint = `${enricherUrl}/api/enrich/stats`;
-
       const statsPayload = {
         organization_id,
         import_job_id: import_job_id || 'current',
@@ -539,43 +454,27 @@ Deno.serve(async (req) => {
 
       console.log(`[import-normalize] stats: org=${organization_id}`);
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      const result = await callEnricher(`${enricherUrl}/api/enrich/stats`, 'POST', statsPayload, 30000);
 
-      let statsResponse: Response;
-      try {
-        statsResponse = await fetch(statsEndpoint, {
-          method: 'POST',
-          headers: enricherHeaders,
-          body: JSON.stringify(statsPayload),
-          signal: controller.signal,
-        });
-      } catch (fetchError: unknown) {
-        const name = (fetchError as { name?: string } | null)?.name;
-        if (name === 'AbortError') {
-          console.error('[import-normalize] stats timed out');
-          return new Response(
-            JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Stats request timed out.' }),
-            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          );
-        }
-        throw fetchError;
-      } finally {
-        clearTimeout(timeoutId);
-      }
-
-      const statsData = await statsResponse.json();
-
-      if (!statsResponse.ok) {
-        console.error('[import-normalize] stats error:', statsResponse.status, statsData);
+      if (result.timeout) {
         return new Response(
-          JSON.stringify({ ok: false, error: statsData.error || statsData.detail || 'Stats failed' }),
+          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Stats request timed out.' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      if (result.data === null) {
+        return enricherErrorResponse(result.status, result.rawText, 'Stats returned non-JSON response');
+      }
+      if (!result.ok) {
+        const d = result.data as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({ ok: false, error: d.error || d.detail || 'Stats failed' }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
       return new Response(
-        JSON.stringify({ ok: true, ...statsData }),
+        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -589,7 +488,6 @@ Deno.serve(async (req) => {
   } catch (err: unknown) {
     const name = (err as { name?: string } | null)?.name;
     if (name === 'AbortError') {
-      console.error('[import-normalize] AbortError bubbled to top-level:', err);
       return new Response(
         JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Request timed out.' }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -599,7 +497,7 @@ Deno.serve(async (req) => {
     console.error('[import-normalize] Error:', err);
     return new Response(
       JSON.stringify({ ok: false, error: String(err) }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });
