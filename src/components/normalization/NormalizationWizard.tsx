@@ -1,12 +1,5 @@
 /**
- * NormalizationWizard v2 — подключён к backend через Edge Functions.
- * 
- * Возможности:
- * - Ввод organization_id + import_job_id
- * - Dry Run → patches_sample + questions + run_id/profile_hash
- * - Save Confirmed Settings → settings-merge (deep merge)
- * - Apply (async) → polling apply_status → DONE/ERROR
- * - Quality Gates (серверные метрики заполненности)
+ * NormalizationWizard v2 — production-ready, connected to backend via Edge Functions.
  */
 
 import { useState, useMemo, useCallback } from 'react';
@@ -27,13 +20,14 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from '@/hooks/use-toast';
 import {
   Sparkles, CheckCircle2, Loader2, RefreshCw, AlertCircle,
-  Play, Save, Database, Hash, Cpu, BarChart3
+  Play, Save, Database, Hash, Cpu, BarChart3, Settings2
 } from 'lucide-react';
 
 import { ProductTypeFilter } from './ProductTypeFilter';
 import { ClusterTree } from './ClusterTree';
 import { ClusterDetailPanel } from './ClusterDetailPanel';
 import { QualityGates } from './QualityGates';
+import { ConfirmedSettingsEditor } from './ConfirmedSettingsEditor';
 import type { 
   ProductCategory, 
   ProductType, 
@@ -42,7 +36,7 @@ import type {
   AIQuestion,
 } from './types';
 import { validateProduct } from './types';
-import { useNormalization, type DryRunPatch, type BackendQuestion, type ConfirmedSettings } from '@/hooks/use-normalization';
+import { useNormalization, type DryRunPatch, type BackendQuestion } from '@/hooks/use-normalization';
 
 // ─── Props ────────────────────────────────────────────────────
 
@@ -60,7 +54,9 @@ function categorizeItem(item: { profile?: string; title?: string; sheet_kind?: s
   const sheetKind = item.sheet_kind?.toUpperCase();
   if (sheetKind === 'PROFNASTIL') return 'PROFNASTIL';
   if (sheetKind === 'METAL_TILE') return 'METALLOCHEREPICA';
-  if (sheetKind === 'ACCESSORY' || sheetKind === 'OTHER') return 'DOBOR';
+  if (sheetKind === 'ACCESSORY') return 'DOBOR';
+  // OTHER stays OTHER — don't merge into DOBOR
+  if (sheetKind === 'OTHER') return 'OTHER';
 
   const profile = (item.profile || '').toUpperCase();
   const title = (item.title || '').toLowerCase();
@@ -87,7 +83,7 @@ function patchToCanonical(item: DryRunPatch): CanonicalProduct {
     color_or_ral: item.color_code || '',
     work_width_mm: item.width_work_mm || 0,
     full_width_mm: item.width_full_mm || 0,
-    price: item.price || 0,
+    price: item.price_rub_m2 ?? 0,
     unit: item.unit === 'm2' ? 'm2' : 'sht',
     title: item.title,
   };
@@ -128,6 +124,7 @@ export function NormalizationWizard({
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [aiEnabled, setAiEnabled] = useState(false);
   const [showMetrics, setShowMetrics] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Backend hook
   const norm = useNormalization({
@@ -183,13 +180,8 @@ export function NormalizationWizard({
     norm.executeApply();
   }, [norm]);
 
-  const handleSaveConfirmed = useCallback(async () => {
-    // Build confirmed from current questions answers (placeholder — user fills via UI)
-    const settings: ConfirmedSettings = {};
-    const saved = await norm.saveConfirmedSettings(settings);
-    if (saved) {
-      toast({ title: 'Готово', description: 'Настройки сохранены. Запустите Dry Run повторно.' });
-    }
+  const handleRefreshStats = useCallback(() => {
+    norm.fetchStats();
   }, [norm]);
 
   const handleSelectCluster = useCallback((path: ClusterPath) => {
@@ -217,6 +209,9 @@ export function NormalizationWizard({
   // Apply status helpers
   const isApplying = norm.applyState === 'STARTING' || norm.applyState === 'PENDING' || norm.applyState === 'RUNNING';
 
+  // Quality metrics — prefer applyReport, fallback to serverStats
+  const activeMetrics = norm.applyReport || norm.serverStats;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[95vw] w-[1600px] h-[90vh] flex flex-col p-0">
@@ -236,7 +231,7 @@ export function NormalizationWizard({
             </div>
 
             {/* Controls row */}
-            <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap">
               {/* Job ID input (if not provided) */}
               {!propJobId && (
                 <div className="flex items-center gap-1.5">
@@ -262,10 +257,10 @@ export function NormalizationWizard({
                 Dry Run
               </Button>
 
-              {/* Save Confirmed */}
-              <Button size="sm" variant="outline" onClick={handleSaveConfirmed} disabled={norm.savingSettings || !norm.runId}>
-                {norm.savingSettings ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Save className="h-3.5 w-3.5 mr-1.5" />}
-                {t('normalize.saveConfirmed', 'Сохранить')}
+              {/* Settings editor toggle */}
+              <Button size="sm" variant={showSettings ? 'default' : 'outline'} onClick={() => setShowSettings(v => !v)}>
+                <Settings2 className="h-3.5 w-3.5 mr-1.5" />
+                {t('normalize.confirmed', 'Настройки')}
               </Button>
 
               {/* Apply */}
@@ -274,8 +269,14 @@ export function NormalizationWizard({
                 Apply
               </Button>
 
+              {/* Refresh Stats */}
+              <Button size="sm" variant="outline" onClick={handleRefreshStats} disabled={norm.statsLoading}>
+                {norm.statsLoading ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <BarChart3 className="h-3.5 w-3.5 mr-1.5" />}
+                Stats
+              </Button>
+
               {/* Metrics toggle */}
-              {(norm.applyReport || norm.dryRunResult?.stats) && (
+              {activeMetrics && (
                 <Button size="sm" variant="ghost" onClick={() => setShowMetrics(v => !v)}>
                   <BarChart3 className="h-3.5 w-3.5" />
                 </Button>
@@ -333,9 +334,19 @@ export function NormalizationWizard({
         </DialogHeader>
 
         {/* ─── Quality Gates (collapsible) ─── */}
-        {showMetrics && norm.applyReport && (
+        {showMetrics && activeMetrics && (
           <div className="px-6 py-3 border-b shrink-0">
-            <QualityGates metrics={norm.applyReport} />
+            <QualityGates metrics={activeMetrics} />
+          </div>
+        )}
+
+        {/* ─── Confirmed Settings Editor (collapsible) ─── */}
+        {showSettings && (
+          <div className="px-6 py-3 border-b shrink-0 max-h-72 overflow-y-auto">
+            <ConfirmedSettingsEditor
+              onSave={norm.saveConfirmedSettings}
+              saving={norm.savingSettings}
+            />
           </div>
         )}
 

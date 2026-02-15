@@ -526,6 +526,60 @@ Deno.serve(async (req) => {
       );
     }
 
+    // =========================================
+    // Handle stats (server-side quality metrics)
+    // =========================================
+    if (op === 'stats') {
+      const statsEndpoint = `${enricherUrl}/api/enrich/stats`;
+
+      const statsPayload = {
+        organization_id,
+        import_job_id: import_job_id || 'current',
+      };
+
+      console.log(`[import-normalize] stats: org=${organization_id}`);
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+      let statsResponse: Response;
+      try {
+        statsResponse = await fetch(statsEndpoint, {
+          method: 'POST',
+          headers: enricherHeaders,
+          body: JSON.stringify(statsPayload),
+          signal: controller.signal,
+        });
+      } catch (fetchError: unknown) {
+        const name = (fetchError as { name?: string } | null)?.name;
+        if (name === 'AbortError') {
+          console.error('[import-normalize] stats timed out');
+          return new Response(
+            JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Stats request timed out.' }),
+            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        throw fetchError;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      const statsData = await statsResponse.json();
+
+      if (!statsResponse.ok) {
+        console.error('[import-normalize] stats error:', statsResponse.status, statsData);
+        return new Response(
+          JSON.stringify({ ok: false, error: statsData.error || statsData.detail || 'Stats failed' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ ok: true, ...statsData }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     // Unknown op
     return new Response(
       JSON.stringify({ ok: false, error: `Unknown op: ${op}` }),
