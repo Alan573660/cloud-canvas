@@ -88,7 +88,9 @@
     "preparingNormalization": "Подготовка нормализации...",
     "viewNormalizationHistory": "Открыть историю нормализаций →",
     "patchedRowsSummary": "Обновлено {{count}} строк в каталоге",
-    "noChangesNeeded": "Все данные уже были нормализованы"
+    "noChangesNeeded": "Все данные уже были нормализованы",
+    "copyDebugBundle": "Копировать debug-пакет",
+    "debugBundleCopied": "Debug-пакет скопирован в буфер обмена"
   },
   "common": {
     "loading": "Загрузка...",
