@@ -205,6 +205,7 @@ Deno.serve(async (req) => {
     // ASYNC FIRE-AND-FORGET: Call Cloud Run Import Worker
     // Worker will update import_jobs.status directly when done (COMPLETED/FAILED)
     // This prevents Edge Function timeout on large files (70k+ rows)
+    console.log('[import-publish] worker_base_url=', IMPORT_WORKER_URL);
     const workerUrl = `${IMPORT_WORKER_URL}/api/import/publish`;
     console.log('[import-publish] Calling worker URL:', workerUrl);
     console.log('[import-publish] Worker payload:', JSON.stringify(workerPayload).slice(0, 500));

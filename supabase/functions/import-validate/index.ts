@@ -205,6 +205,7 @@ Deno.serve(async (req) => {
       workerPayload.options = body.options;
     }
 
+    console.log('[import-validate] worker_base_url=', IMPORT_WORKER_URL);
     const workerResponse = await fetch(`${IMPORT_WORKER_URL}/api/import/validate`, {
       method: 'POST',
       headers: { 
