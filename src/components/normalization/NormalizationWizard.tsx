@@ -113,6 +113,7 @@ export function NormalizationWizard({
   onComplete,
 }: NormalizationWizardProps) {
   const { t } = useTranslation();
+  const DEV_MODE = import.meta.env.DEV;
   
   // Job selector (if not provided via props)
   const [inputJobId, setInputJobId] = useState(propJobId || '');
@@ -122,11 +123,10 @@ export function NormalizationWizard({
   const [activeCategory, setActiveCategory] = useState<ProductCategory>('PROFNASTIL');
   const [selectedCluster, setSelectedCluster] = useState<ClusterPath | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
-  const [aiEnabled, setAiEnabled] = useState(false);
-  const [showMetrics, setShowMetrics] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showDevInfo, setShowDevInfo] = useState(false);
 
-  // Backend hook
+  // Backend hook — AI always enabled
   const norm = useNormalization({
     organizationId,
     importJobId: effectiveJobId,
@@ -171,17 +171,13 @@ export function NormalizationWizard({
 
   const isNormalizable = activeCategory === 'PROFNASTIL' || activeCategory === 'METALLOCHEREPICA';
 
-  // Handlers
-  const handleDryRun = useCallback(() => {
-    norm.executeDryRun({ aiSuggest: aiEnabled, limit: 2000 });
-  }, [norm, aiEnabled]);
+  // Handlers — AI always on
+  const handleRunNormalization = useCallback(() => {
+    norm.executeDryRun({ aiSuggest: true, limit: 2000 });
+  }, [norm]);
 
   const handleApply = useCallback(() => {
     norm.executeApply();
-  }, [norm]);
-
-  const handleRefreshStats = useCallback(() => {
-    norm.fetchStats();
   }, [norm]);
 
   const handleSelectCluster = useCallback((path: ClusterPath) => {
@@ -198,8 +194,8 @@ export function NormalizationWizard({
 
   const handleAnswerQuestion = useCallback((questionId: string, value: string | number) => {
     console.log('Answer question:', questionId, value);
-    toast({ title: 'Ответ сохранён', description: String(value) });
-  }, []);
+    toast({ title: t('normalize.answerSaved', 'Ответ сохранён'), description: String(value) });
+  }, [t]);
 
   // Progress
   const totalItems = categoryStats.PROFNASTIL.total + categoryStats.METALLOCHEREPICA.total;
@@ -209,7 +205,18 @@ export function NormalizationWizard({
   // Apply status helpers
   const isApplying = norm.applyState === 'STARTING' || norm.applyState === 'PENDING' || norm.applyState === 'RUNNING';
 
-  // Quality metrics — prefer applyReport, fallback to serverStats
+  // Human-friendly apply status
+  const getApplyStatusLabel = () => {
+    switch (norm.applyState) {
+      case 'STARTING': case 'PENDING': return t('normalize.statusScanning', 'Сканируем товары…');
+      case 'RUNNING': return t('normalize.statusApplying', 'Применяем исправления…');
+      case 'DONE': return t('normalize.statusDone', 'Готово');
+      case 'ERROR': return t('normalize.statusError', 'Ошибка');
+      default: return '';
+    }
+  };
+
+  // Quality metrics
   const activeMetrics = norm.applyReport || norm.serverStats;
 
   return (
@@ -230,76 +237,63 @@ export function NormalizationWizard({
               </div>
             </div>
 
-            {/* Controls row */}
+            {/* Controls row — clean, no dev terms */}
             <div className="flex items-center gap-2 flex-wrap">
-              {/* Job ID input (if not provided) */}
-              {!propJobId && (
+              {/* Job ID input — dev only */}
+              {DEV_MODE && !propJobId && (
                 <div className="flex items-center gap-1.5">
                   <Label className="text-xs shrink-0">Job ID:</Label>
                   <Input
                     value={inputJobId}
                     onChange={e => setInputJobId(e.target.value)}
-                    placeholder="import_job_id или 'current'"
+                    placeholder="import_job_id"
                     className="h-7 w-48 text-xs"
                   />
                 </div>
               )}
 
-              {/* AI toggle */}
-              <div className="flex items-center gap-1.5">
-                <Label className="text-xs">AI</Label>
-                <Switch checked={aiEnabled} onCheckedChange={setAiEnabled} />
-              </div>
-
-              {/* Dry Run */}
-              <Button size="sm" variant="outline" onClick={handleDryRun} disabled={norm.dryRunLoading || isApplying}>
+              {/* Main action: Run normalization */}
+              <Button size="sm" variant="outline" onClick={handleRunNormalization} disabled={norm.dryRunLoading || isApplying}>
                 {norm.dryRunLoading ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
-                Dry Run
+                {t('normalize.scanCatalog', 'Сканировать')}
               </Button>
 
-              {/* Settings editor toggle */}
+              {/* Settings */}
               <Button size="sm" variant={showSettings ? 'default' : 'outline'} onClick={() => setShowSettings(v => !v)}>
                 <Settings2 className="h-3.5 w-3.5 mr-1.5" />
                 {t('normalize.confirmed', 'Настройки')}
               </Button>
 
-              {/* Apply */}
+              {/* Apply — human-friendly label */}
               <Button size="sm" onClick={handleApply} disabled={!norm.runId || isApplying}>
                 {isApplying ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Play className="h-3.5 w-3.5 mr-1.5" />}
-                Apply
+                {t('normalize.applyNormalization', 'Применить')}
               </Button>
 
-              {/* Refresh Stats */}
-              <Button size="sm" variant="outline" onClick={handleRefreshStats} disabled={norm.statsLoading}>
-                {norm.statsLoading ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <BarChart3 className="h-3.5 w-3.5 mr-1.5" />}
-                Stats
-              </Button>
-
-              {/* Metrics toggle */}
-              {activeMetrics && (
-                <Button size="sm" variant="ghost" onClick={() => setShowMetrics(v => !v)}>
+              {/* Dev debug toggle */}
+              {DEV_MODE && (
+                <Button size="sm" variant="ghost" onClick={() => setShowDevInfo(v => !v)} title="Dev Info">
                   <BarChart3 className="h-3.5 w-3.5" />
                 </Button>
               )}
             </div>
           </div>
 
-          {/* ─── Status Bar ─── */}
+          {/* ─── Status Bar — human-friendly ─── */}
           <div className="flex items-center gap-4 mt-2 text-xs">
-            {/* Run info */}
-            {norm.runId && (
+            {/* Dev info — hidden from users */}
+            {DEV_MODE && showDevInfo && norm.runId && (
               <div className="flex items-center gap-3 text-muted-foreground">
                 <span className="flex items-center gap-1"><Hash className="h-3 w-3" /> run: <code className="font-mono">{norm.runId.slice(0, 12)}…</code></span>
                 <span className="flex items-center gap-1"><Database className="h-3 w-3" /> hash: <code className="font-mono">{norm.profileHash?.slice(0, 8)}…</code></span>
               </div>
             )}
 
-            {/* Stats from dry_run */}
+            {/* Stats from dry_run — human labels */}
             {norm.dryRunResult?.stats && (
               <div className="flex items-center gap-3 text-muted-foreground">
-                <span>Сканировано: {norm.dryRunResult.stats.rows_scanned}</span>
-                <span>Кандидатов: {norm.dryRunResult.stats.candidates}</span>
-                <span>Патчей: {norm.dryRunResult.stats.patches_ready}</span>
+                <span>{t('normalize.scannedCount', 'Проверено: {{count}}', { count: norm.dryRunResult.stats.rows_scanned })}</span>
+                <span>{t('normalize.fixesFound', 'Найдено исправлений: {{count}}', { count: norm.dryRunResult.stats.patches_ready })}</span>
               </div>
             )}
 
@@ -312,14 +306,14 @@ export function NormalizationWizard({
               </div>
             )}
 
-            {/* Apply state */}
+            {/* Apply state — human-friendly */}
             {norm.applyState !== 'IDLE' && (
               <Badge 
                 variant={norm.applyState === 'DONE' ? 'default' : norm.applyState === 'ERROR' ? 'destructive' : 'secondary'}
                 className="text-xs"
               >
                 {isApplying && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
-                {norm.applyState}
+                {getApplyStatusLabel()}
                 {norm.applyProgress > 0 && norm.applyState === 'RUNNING' && ` ${norm.applyProgress}%`}
               </Badge>
             )}
@@ -333,8 +327,8 @@ export function NormalizationWizard({
           )}
         </DialogHeader>
 
-        {/* ─── Quality Gates (collapsible) ─── */}
-        {showMetrics && activeMetrics && (
+        {/* ─── Quality Gates (dev only) ─── */}
+        {DEV_MODE && showDevInfo && activeMetrics && (
           <div className="px-6 py-3 border-b shrink-0">
             <QualityGates metrics={activeMetrics} />
           </div>
@@ -355,8 +349,8 @@ export function NormalizationWizard({
           <div className="px-6 py-2 border-b bg-purple-50/50 dark:bg-purple-900/10 shrink-0">
             <div className="flex items-center gap-2 text-xs">
               <Cpu className="h-3.5 w-3.5 text-purple-600" />
-              <span className="font-medium">{aiQuestions.length} {t('normalize.questionsFromBackend', 'вопросов от backend')}</span>
-              <span className="text-muted-foreground">— ответьте для улучшения нормализации</span>
+              <span className="font-medium">{t('normalize.improvementsFound', 'Найдены улучшения нормализации')}</span>
+              <Badge variant="secondary" className="text-xs">{aiQuestions.length}</Badge>
             </div>
           </div>
         )}
