@@ -96,7 +96,7 @@ export function NormalizationTab() {
             <Sparkles className="h-6 w-6 text-primary" />
             {t('normalize.title', 'Нормализация прайса')}
           </h2>
-          <p className="text-muted-foreground mt-1">{t('normalize.description', 'AI-ассистент для стандартизации данных каталога')}</p>
+          <p className="text-muted-foreground mt-1">{t('normalize.description', 'Стандартизация данных каталога')}</p>
         </div>
         <div className="flex gap-2">
           <Button onClick={handleNormalizeCurrent}><Sparkles className="h-4 w-4 mr-2" />{t('normalize.normalizeCurrent', 'Нормализовать каталог')}</Button>
