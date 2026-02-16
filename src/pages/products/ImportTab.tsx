@@ -17,7 +17,8 @@ import {
   XCircle,
   Ban,
   RotateCcw,
-  FileEdit
+  FileEdit,
+  Copy
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -497,6 +498,9 @@ export function ImportTab() {
                       <p className="text-xs text-muted-foreground">
                         {job.file_name || 'manual'}
                       </p>
+                      <p className="text-[10px] text-muted-foreground/60 font-mono truncate max-w-[160px]" title={job.id}>
+                        {job.id.slice(0, 8)}…
+                      </p>
                     </div>
                   </TableCell>
                   <TableCell>{job.total_rows}</TableCell>
@@ -535,6 +539,26 @@ export function ImportTab() {
                       >
                         <Eye className="h-4 w-4 mr-1" />
                         Preview
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        title={t('import.copyDebugBundle')}
+                        onClick={() => {
+                          const bundle = {
+                            org_id: profile?.organization_id,
+                            import_job_id: job.id,
+                            status: job.status,
+                            last_error_code: job.error_message?.slice(0, 200) || null,
+                            file_name: job.file_name,
+                            created_at: job.created_at,
+                          };
+                          navigator.clipboard.writeText(JSON.stringify(bundle, null, 2));
+                          toast.success(t('import.debugBundleCopied'));
+                        }}
+                      >
+                        <Copy className="h-4 w-4 mr-1" />
+                        Debug
                       </Button>
                     </div>
                   </TableCell>

@@ -45,7 +45,9 @@
     "patchedRowsSummary": "Updated {{count}} rows in catalog",
     "noChangesNeeded": "All data was already normalized",
     "normalizingStep": "Catalog data normalization",
-    "preparingNormalization": "Preparing normalization..."
+    "preparingNormalization": "Preparing normalization...",
+    "copyDebugBundle": "Copy debug bundle",
+    "debugBundleCopied": "Debug bundle copied to clipboard"
   },
   "analytics": {
     "description": "Usage, revenue and operations statistics",
