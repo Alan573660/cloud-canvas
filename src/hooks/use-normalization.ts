@@ -113,6 +113,9 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   // Settings save
   const [savingSettings, setSavingSettings] = useState(false);
 
+  // Answer question
+  const [answeringQuestion, setAnsweringQuestion] = useState(false);
+
   // Polling ref
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -357,6 +360,38 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     }
   }, [runId, profileHash, organizationId, importJobId, pollApplyStatus]);
 
+  // ─── Answer Question ───────────────────────────────────────
+
+  const answerQuestion = useCallback(async (questionType: string, token: string, value: string | number) => {
+    setAnsweringQuestion(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('import-normalize', {
+        body: {
+          op: 'answer_question',
+          organization_id: organizationId,
+          import_job_id: importJobId || 'current',
+          question_type: questionType,
+          token,
+          value,
+        },
+      });
+
+      if (error) throw new Error(error.message);
+
+      const result = data as { ok: boolean; error?: string };
+      if (!result?.ok) throw new Error(result?.error || 'Answer failed');
+
+      toast({ title: 'Ответ сохранён', description: `${questionType}: ${value}` });
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      toast({ title: 'Ошибка отправки ответа', description: msg, variant: 'destructive' });
+      return false;
+    } finally {
+      setAnsweringQuestion(false);
+    }
+  }, [organizationId, importJobId]);
+
   // ─── Reset ────────────────────────────────────────────────
 
   const reset = useCallback(() => {
@@ -396,6 +431,10 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     // Settings
     savingSettings,
     saveConfirmedSettings,
+
+    // Answer question
+    answeringQuestion,
+    answerQuestion,
 
     // Utils
     reset,

@@ -192,10 +192,19 @@ export function NormalizationWizard({
     });
   }, []);
 
-  const handleAnswerQuestion = useCallback((questionId: string, value: string | number) => {
-    console.log('Answer question:', questionId, value);
-    toast({ title: t('normalize.answerSaved', 'Ответ сохранён'), description: String(value) });
-  }, [t]);
+  const handleAnswerQuestion = useCallback(async (questionId: string, value: string | number) => {
+    // Find the original question to get type and token
+    const question = aiQuestions.find((q, i) => `q-${i}` === questionId || q.token === questionId);
+    const questionType = question?.type || questionId;
+    const token = question?.token || questionId;
+
+    const ok = await norm.answerQuestion(questionType, token, value);
+    if (ok) {
+      // Re-run dry_run to refresh clusters with the new answer applied
+      toast({ title: t('normalize.rerunning', 'Обновляем результаты…') });
+      norm.executeDryRun({ aiSuggest: true, limit: 2000 });
+    }
+  }, [norm, aiQuestions, t]);
 
   // Progress
   const totalItems = categoryStats.PROFNASTIL.total + categoryStats.METALLOCHEREPICA.total;
