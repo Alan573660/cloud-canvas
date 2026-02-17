@@ -134,6 +134,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     limit?: number;
     aiSuggest?: boolean;
     sheetKinds?: string[];
+    onlyWhereNull?: boolean;
   }) => {
     setDryRunLoading(true);
     setDryRunResult(null);
@@ -148,7 +149,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
           scope: {
-            only_where_null: true,
+            only_where_null: options?.onlyWhereNull ?? false,
             limit: options?.limit ?? 2000,
             ...(options?.sheetKinds ? { sheet_kinds: options.sheetKinds } : {}),
           },
