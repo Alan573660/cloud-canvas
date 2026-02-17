@@ -2,7 +2,7 @@
  * NormalizationWizard v2 — production-ready, connected to backend via Edge Functions.
  */
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Dialog,
@@ -89,10 +89,13 @@ function formatColorDisplay(item: { color_system?: string; color_code?: string; 
 
 function patchToCanonical(item: DryRunPatch): CanonicalProduct {
   const category = categorizeItem(item);
-  const productType: ProductType | undefined = 
+  // Map all categories to product_type, not just profnastil/metallocherepica
+  const productType: ProductType = 
     category === 'PROFNASTIL' ? 'PROFNASTIL' :
     category === 'METALLOCHEREPICA' ? 'METALLOCHEREPICA' :
-    undefined;
+    category === 'DOBOR' ? 'DOBOR' as ProductType :
+    category === 'SANDWICH' ? 'SANDWICH' as ProductType :
+    'OTHER' as ProductType;
   const zincLabel = extractZincLabel(item.notes);
   return {
     id: item.id,
@@ -199,6 +202,25 @@ export function NormalizationWizard({
     });
     return stats;
   }, [items]);
+
+  // Auto-select best category after dry_run
+  useEffect(() => {
+    if (items.length === 0) return;
+    // If current category has items, keep it
+    const currentCount = categoryStats[activeCategory]?.total || 0;
+    if (currentCount > 0) return;
+    // Find category with most items (excluding ALL)
+    const cats: ProductCategory[] = ['PROFNASTIL', 'METALLOCHEREPICA', 'DOBOR', 'SANDWICH', 'OTHER'];
+    let best: ProductCategory = 'ALL';
+    let bestCount = 0;
+    for (const c of cats) {
+      if ((categoryStats[c]?.total || 0) > bestCount) {
+        bestCount = categoryStats[c].total;
+        best = c;
+      }
+    }
+    setActiveCategory(bestCount > 0 ? best : 'ALL');
+  }, [items, categoryStats]);
 
   // Filtered items
   const filteredItems = useMemo(() => {
