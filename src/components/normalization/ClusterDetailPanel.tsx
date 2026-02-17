@@ -31,6 +31,7 @@ interface ClusterDetailPanelProps {
   aiQuestions?: AIQuestion[];
   onAnswerQuestion?: (questionId: string, value: string | number) => void;
   answeringQuestion?: boolean;
+  simpleMode?: boolean;
 }
 
 // =========================================
@@ -328,7 +329,7 @@ function ClusterHeader({
 // Main Component
 // =========================================
 export function ClusterDetailPanel({
-  items, clusterPath, loading, aiQuestions = [], onAnswerQuestion, answeringQuestion,
+  items, clusterPath, loading, aiQuestions = [], onAnswerQuestion, answeringQuestion, simpleMode,
 }: ClusterDetailPanelProps) {
   const { t } = useTranslation();
 
@@ -398,7 +399,7 @@ export function ClusterDetailPanel({
     );
   }
 
-  if (!clusterPath) {
+  if (!clusterPath && !simpleMode) {
     return (
       <div className="flex-1 flex items-center justify-center text-muted-foreground">
         <div className="text-center">

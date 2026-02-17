@@ -459,19 +459,16 @@ export function NormalizationWizard({
               </div>
             </>
           ) : (
-            <div className="flex-1 flex items-center justify-center text-muted-foreground">
-              <div className="text-center max-w-md">
-                <AlertCircle className="h-16 w-16 mx-auto mb-4 opacity-50" />
-                <h3 className="text-lg font-medium mb-2">
-                  {t('normalize.notNormalizable', 'Нормализация недоступна')}
-                </h3>
-                <p className="text-sm">
-                  {t('normalize.notNormalizableDesc', 'Нормализация доступна только для профнастила и металлочерепицы.')}
-                </p>
-                <Button variant="outline" className="mt-4" onClick={() => setActiveCategory('PROFNASTIL')}>
-                  {t('normalize.goToProfnastil', 'Перейти к Профнастилу')}
-                </Button>
-              </div>
+            <div className="flex-1 min-w-0">
+              <ClusterDetailPanel
+                items={filteredItems}
+                clusterPath={null}
+                loading={norm.dryRunLoading}
+                aiQuestions={aiQuestions}
+                onAnswerQuestion={handleAnswerQuestion}
+                answeringQuestion={norm.answeringQuestion}
+                simpleMode
+              />
             </div>
           )}
         </div>
