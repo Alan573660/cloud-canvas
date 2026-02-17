@@ -24,6 +24,8 @@ export interface DryRunPatch {
   price_rub_m2?: number;
   unit?: string;
   sheet_kind?: string;
+  notes?: string;
+  family_key?: string;
 }
 
 export interface BackendQuestion {

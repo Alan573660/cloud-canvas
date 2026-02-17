@@ -34,6 +34,7 @@ import type {
   CanonicalProduct, 
   ClusterPath,
   AIQuestion,
+  AIQuestionType,
 } from './types';
 import { validateProduct } from './types';
 import { useNormalization, type DryRunPatch, type BackendQuestion } from '@/hooks/use-normalization';
@@ -67,12 +68,32 @@ function categorizeItem(item: { profile?: string; title?: string; sheet_kind?: s
   return 'OTHER';
 }
 
+/** Extract zinc label from notes field (e.g. "ZINC:ZN275" → "ZN275") */
+function extractZincLabel(notes?: string): string | undefined {
+  if (!notes) return undefined;
+  const match = notes.match(/ZINC[:\s]*(ZN?\d+)/i);
+  return match ? match[1].toUpperCase() : undefined;
+}
+
+/** Format color display: "RAL 8017 ZN275" or "RR 32" or "DECOR Античный" or "ZN275" or "—" */
+function formatColorDisplay(item: { color_system?: string; color_code?: string; zinc_label?: string }): string {
+  const parts: string[] = [];
+  if (item.color_system && item.color_code) {
+    parts.push(`${item.color_system} ${item.color_code}`);
+  }
+  if (item.zinc_label) {
+    parts.push(item.zinc_label);
+  }
+  return parts.length > 0 ? parts.join(' ') : '—';
+}
+
 function patchToCanonical(item: DryRunPatch): CanonicalProduct {
   const category = categorizeItem(item);
   const productType: ProductType | undefined = 
     category === 'PROFNASTIL' ? 'PROFNASTIL' :
     category === 'METALLOCHEREPICA' ? 'METALLOCHEREPICA' :
     undefined;
+  const zincLabel = extractZincLabel(item.notes);
   return {
     id: item.id,
     organization_id: '',
@@ -81,17 +102,32 @@ function patchToCanonical(item: DryRunPatch): CanonicalProduct {
     thickness_mm: typeof item.thickness_mm === 'string' ? parseFloat(item.thickness_mm) : (item.thickness_mm || 0),
     coating: item.coating || '',
     color_or_ral: item.color_code || '',
+    color_system: item.color_system || '',
+    color_code: item.color_code || '',
+    zinc_label: zincLabel,
     work_width_mm: item.width_work_mm || 0,
     full_width_mm: item.width_full_mm || 0,
     price: item.price_rub_m2 ?? 0,
     unit: item.unit === 'm2' ? 'm2' : 'sht',
     title: item.title,
+    notes: item.notes,
   };
+}
+
+function mapQuestionType(backendType?: string): AIQuestionType {
+  const t = (backendType || '').toUpperCase();
+  if (t.includes('WIDTH')) return 'width';
+  if (t.includes('PROFILE')) return 'profile';
+  if (t.includes('CATEGORY') || t.includes('CAT')) return 'category';
+  if (t.includes('COLOR')) return 'color';
+  if (t.includes('COATING')) return 'coating';
+  if (t.includes('THICK')) return 'thickness';
+  return 'color'; // fallback
 }
 
 function backendQuestionToAI(q: BackendQuestion, index: number): AIQuestion {
   return {
-    type: q.type?.includes('COLOR') ? 'color' : q.type?.includes('COATING') ? 'coating' : 'thickness',
+    type: mapQuestionType(q.type),
     cluster_path: { profile: q.profile || q.token || `q-${index}` },
     token: q.token || '',
     examples: q.examples || [],
@@ -100,6 +136,7 @@ function backendQuestionToAI(q: BackendQuestion, index: number): AIQuestion {
       ? q.suggested_variants.map(String)
       : q.suggested ? [String(q.suggested)] : [],
     confidence: q.confidence || 0.5,
+    ask: q.ask,
   };
 }
 
@@ -395,6 +432,7 @@ export function NormalizationWizard({
                   loading={norm.dryRunLoading}
                   aiQuestions={aiQuestions}
                   onAnswerQuestion={handleAnswerQuestion}
+                  answeringQuestion={norm.answeringQuestion}
                 />
               </div>
             </>

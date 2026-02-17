@@ -20,17 +20,23 @@ export interface CanonicalProduct {
   product_type: ProductType;
   
   // Required fields
-  profile: string;              // e.g., "С20", "МП20", "Монтеррей"
-  thickness_mm: number;         // e.g., 0.45, 0.5, 0.7
-  coating: string;              // e.g., "Полиэстер", "Пластизол", "Оцинковка"
-  color_or_ral: string;         // e.g., "RAL3005", "Zn" (for galvanized)
-  work_width_mm: number;        // Рабочая ширина (из базы профилей)
-  full_width_mm: number;        // Полная ширина (из базы профилей)
-  price: number;                // Цена
-  unit: 'm2' | 'sht';           // Единица измерения
+  profile: string;
+  thickness_mm: number;
+  coating: string;
+  color_or_ral: string;         // e.g., "RAL3005", "Zn"
+  work_width_mm: number;
+  full_width_mm: number;
+  price: number;
+  unit: 'm2' | 'sht';
+  
+  // Color display
+  color_system?: string;        // RAL | RR | DECOR | ''
+  color_code?: string;          // e.g., "3005", "32"
+  zinc_label?: string;          // e.g., "ZN275" — extracted from notes ZINC:... token
   
   // Source data
-  title?: string;               // Original title from price list
+  title?: string;
+  notes?: string;
   raw_data?: Record<string, unknown>;
 }
 
@@ -84,14 +90,17 @@ export interface ProfileWidths {
 // =========================================
 // AI Assistant
 // =========================================
+export type AIQuestionType = 'width' | 'profile' | 'category' | 'thickness' | 'coating' | 'color';
+
 export interface AIQuestion {
-  type: 'thickness' | 'coating' | 'color';
+  type: AIQuestionType;
   cluster_path: ClusterPath;
   token: string;
   examples: string[];
   affected_count: number;
   suggestions: string[];
   confidence: number;
+  ask?: string; // human-readable question text from backend
 }
 
 export interface AIDecision {
