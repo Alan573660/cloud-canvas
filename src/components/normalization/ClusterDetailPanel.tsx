@@ -412,7 +412,7 @@ export function ClusterDetailPanel({
 
   return (
     <div className="flex flex-col h-full">
-      <ClusterHeader clusterPath={clusterPath} readyCount={readyCount} needsAttentionCount={needsAttentionCount} />
+      {clusterPath && <ClusterHeader clusterPath={clusterPath} readyCount={readyCount} needsAttentionCount={needsAttentionCount} />}
 
       {/* AI Questions for this cluster */}
       {relevantQuestions.length > 0 && (
