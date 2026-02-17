@@ -51,14 +51,22 @@ interface NormalizationWizardProps {
 
 // ─── Helpers ──────────────────────────────────────────────────
 
-function categorizeItem(item: { profile?: string; title?: string; sheet_kind?: string }): ProductCategory {
+function categorizeItem(item: { profile?: string; title?: string; sheet_kind?: string; cat_name?: string }): ProductCategory {
+  // Check sheet_kind first (from dry_run patches)
   const sheetKind = item.sheet_kind?.toUpperCase();
   if (sheetKind === 'PROFNASTIL') return 'PROFNASTIL';
   if (sheetKind === 'METAL_TILE') return 'METALLOCHEREPICA';
   if (sheetKind === 'ACCESSORY') return 'DOBOR';
-  // OTHER stays OTHER — don't merge into DOBOR
   if (sheetKind === 'OTHER') return 'OTHER';
 
+  // Check cat_name from BigQuery
+  const catName = (item.cat_name || '').toLowerCase();
+  if (catName.includes('профнастил') || catName.includes('profnastil')) return 'PROFNASTIL';
+  if (catName.includes('металлочерепица') || catName.includes('metal') && catName.includes('черепиц')) return 'METALLOCHEREPICA';
+  if (catName.includes('сэндвич') || catName.includes('панел')) return 'SANDWICH';
+  if (catName.includes('планка') || catName.includes('конек') || catName.includes('саморез') || catName.includes('добор') || catName.includes('комплектующ')) return 'DOBOR';
+
+  // Fallback: regex on profile/title
   const profile = (item.profile || '').toUpperCase();
   const title = (item.title || '').toLowerCase();
   if (/^(С|C|Н|H|НС|HC|МП|MP)-?\d/i.test(profile) || title.includes('профнастил')) return 'PROFNASTIL';
@@ -119,10 +127,12 @@ function patchToCanonical(item: DryRunPatch): CanonicalProduct {
 function catalogRowToCanonical(row: CatalogRow): CanonicalProduct {
   const extra = (row.extra_params || {}) as Record<string, unknown>;
   const sheetKind = (extra.sheet_kind as string) || '';
+  const catName = (extra.cat_name as string) || '';
   const category = categorizeItem({ 
     profile: row.profile || '', 
     title: row.title || '',
     sheet_kind: sheetKind,
+    cat_name: catName,
   });
   const productType: ProductType = 
     category === 'PROFNASTIL' ? 'PROFNASTIL' :
