@@ -37,7 +37,7 @@ import type {
   AIQuestionType,
 } from './types';
 import { validateProduct } from './types';
-import { useNormalization, type DryRunPatch, type BackendQuestion } from '@/hooks/use-normalization';
+import { useNormalization, type DryRunPatch, type BackendQuestion, type CatalogRow } from '@/hooks/use-normalization';
 
 // ─── Props ────────────────────────────────────────────────────
 
@@ -89,7 +89,6 @@ function formatColorDisplay(item: { color_system?: string; color_code?: string; 
 
 function patchToCanonical(item: DryRunPatch): CanonicalProduct {
   const category = categorizeItem(item);
-  // Map all categories to product_type, not just profnastil/metallocherepica
   const productType: ProductType = 
     category === 'PROFNASTIL' ? 'PROFNASTIL' :
     category === 'METALLOCHEREPICA' ? 'METALLOCHEREPICA' :
@@ -114,6 +113,41 @@ function patchToCanonical(item: DryRunPatch): CanonicalProduct {
     unit: item.unit === 'm2' ? 'm2' : 'sht',
     title: item.title,
     notes: item.notes,
+  };
+}
+
+function catalogRowToCanonical(row: CatalogRow): CanonicalProduct {
+  const extra = (row.extra_params || {}) as Record<string, unknown>;
+  const sheetKind = (extra.sheet_kind as string) || '';
+  const category = categorizeItem({ 
+    profile: row.profile || '', 
+    title: row.title || '',
+    sheet_kind: sheetKind,
+  });
+  const productType: ProductType = 
+    category === 'PROFNASTIL' ? 'PROFNASTIL' :
+    category === 'METALLOCHEREPICA' ? 'METALLOCHEREPICA' :
+    category === 'DOBOR' ? 'DOBOR' as ProductType :
+    category === 'SANDWICH' ? 'SANDWICH' as ProductType :
+    'OTHER' as ProductType;
+  const zincLabel = extractZincLabel(row.notes || undefined);
+  return {
+    id: row.id,
+    organization_id: '',
+    product_type: productType,
+    profile: row.profile || '',
+    thickness_mm: row.thickness_mm || 0,
+    coating: row.coating || '',
+    color_or_ral: (extra.color_code as string) || '',
+    color_system: (extra.color_system as string) || '',
+    color_code: (extra.color_code as string) || '',
+    zinc_label: zincLabel,
+    work_width_mm: row.width_work_mm || 0,
+    full_width_mm: row.width_full_mm || 0,
+    price: row.base_price_rub_m2 ?? 0,
+    unit: 'm2',
+    title: row.title || undefined,
+    notes: row.notes || undefined,
   };
 }
 
@@ -173,10 +207,32 @@ export function NormalizationWizard({
     importJobId: effectiveJobId,
   });
 
-  // Transform patches to canonical items
+  // Auto-load catalog items when dialog opens
+  useEffect(() => {
+    if (open && organizationId && norm.catalogItems.length === 0 && !norm.catalogLoading) {
+      norm.fetchCatalogItems(5000);
+    }
+  }, [open, organizationId]);
+
+  // Transform: merge catalog items with patches (patches override catalog rows)
   const items = useMemo(() => {
-    return (norm.dryRunResult?.patches_sample || []).map(patchToCanonical);
-  }, [norm.dryRunResult]);
+    const patchMap = new Map<string, CanonicalProduct>();
+    (norm.dryRunResult?.patches_sample || []).forEach(p => {
+      patchMap.set(p.id, patchToCanonical(p));
+    });
+
+    // If we have catalog items, use them as base and overlay patches
+    if (norm.catalogItems.length > 0) {
+      return norm.catalogItems.map(row => {
+        const patch = patchMap.get(row.id);
+        if (patch) return patch; // patch overrides
+        return catalogRowToCanonical(row);
+      });
+    }
+
+    // Fallback: use patches only
+    return Array.from(patchMap.values());
+  }, [norm.dryRunResult, norm.catalogItems]);
 
   // Transform questions
   const aiQuestions = useMemo(() => {
@@ -369,6 +425,20 @@ export function NormalizationWizard({
                 <span className="flex items-center gap-1"><Hash className="h-3 w-3" /> run: <code className="font-mono">{norm.runId.slice(0, 12)}…</code></span>
                 <span className="flex items-center gap-1"><Database className="h-3 w-3" /> hash: <code className="font-mono">{norm.profileHash?.slice(0, 8)}…</code></span>
               </div>
+            )}
+
+            {/* Catalog loading / total */}
+            {norm.catalogLoading && (
+              <div className="flex items-center gap-1.5 text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                <span>{t('normalize.loadingCatalog', 'Загрузка каталога…')}</span>
+              </div>
+            )}
+            {norm.catalogTotal > 0 && (
+              <span className="text-muted-foreground">
+                {t('normalize.catalogTotal', 'Всего в каталоге: {{count}}', { count: norm.catalogTotal })}
+                {norm.catalogItems.length < norm.catalogTotal && ` (${t('normalize.showing', 'показано')}: ${norm.catalogItems.length})`}
+              </span>
             )}
 
             {/* Stats from dry_run — human labels */}

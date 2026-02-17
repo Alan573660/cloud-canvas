@@ -87,6 +87,22 @@ export interface ConfirmedSettings {
   };
 }
 
+// ─── Catalog item for UI display ──────────────────────────────
+
+export interface CatalogRow {
+  id: string;
+  title?: string | null;
+  profile?: string | null;
+  thickness_mm?: number | null;
+  coating?: string | null;
+  notes?: string | null;
+  width_work_mm?: number | null;
+  width_full_mm?: number | null;
+  base_price_rub_m2?: number;
+  sku?: string | null;
+  extra_params?: Record<string, unknown>;
+}
+
 // ─── Hook ─────────────────────────────────────────────────────
 
 interface UseNormalizationOptions {
@@ -98,6 +114,11 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   // Dry run state
   const [dryRunLoading, setDryRunLoading] = useState(false);
   const [dryRunResult, setDryRunResult] = useState<DryRunResult | null>(null);
+
+  // Catalog items loaded directly from DB
+  const [catalogItems, setCatalogItems] = useState<CatalogRow[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogTotal, setCatalogTotal] = useState(0);
   const [runId, setRunId] = useState<string | null>(null);
   const [profileHash, setProfileHash] = useState<string | null>(null);
 
@@ -395,6 +416,45 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     }
   }, [organizationId, importJobId]);
 
+  // ─── Fetch Catalog Items ─────────────────────────────────
+
+  const fetchCatalogItems = useCallback(async (limit = 5000) => {
+    setCatalogLoading(true);
+    try {
+      const { count } = await supabase
+        .from('product_catalog')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', organizationId);
+      
+      setCatalogTotal(count || 0);
+
+      const allItems: CatalogRow[] = [];
+      const batchSize = 1000;
+      const maxItems = Math.min(limit, count || 0);
+      
+      for (let offset = 0; offset < maxItems; offset += batchSize) {
+        const { data, error } = await supabase
+          .from('product_catalog')
+          .select('id, title, profile, thickness_mm, coating, notes, width_work_mm, width_full_mm, base_price_rub_m2, sku, extra_params')
+          .eq('organization_id', organizationId)
+          .range(offset, offset + batchSize - 1);
+
+        if (error) throw new Error(error.message);
+        if (data) allItems.push(...(data as CatalogRow[]));
+        if (!data || data.length < batchSize) break;
+      }
+
+      setCatalogItems(allItems);
+      return allItems;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      toast({ title: 'Ошибка загрузки каталога', description: msg, variant: 'destructive' });
+      return [];
+    } finally {
+      setCatalogLoading(false);
+    }
+  }, [organizationId]);
+
   // ─── Reset ────────────────────────────────────────────────
 
   const reset = useCallback(() => {
@@ -407,6 +467,8 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setApplyReport(null);
     setApplyError(null);
     setServerStats(null);
+    setCatalogItems([]);
+    setCatalogTotal(0);
     stopPolling();
   }, [stopPolling]);
 
@@ -417,6 +479,12 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     runId,
     profileHash,
     executeDryRun,
+
+    // Catalog items
+    catalogItems,
+    catalogLoading,
+    catalogTotal,
+    fetchCatalogItems,
 
     // Apply
     applyState,
