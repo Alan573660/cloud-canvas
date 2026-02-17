@@ -165,6 +165,7 @@ export function NormalizationWizard({
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [showSettings, setShowSettings] = useState(false);
   const [showDevInfo, setShowDevInfo] = useState(false);
+  const [onlyIncomplete, setOnlyIncomplete] = useState(false);
 
   // Backend hook — AI always enabled
   const norm = useNormalization({
@@ -232,8 +233,8 @@ export function NormalizationWizard({
 
   // Handlers — AI always on
   const handleRunNormalization = useCallback(() => {
-    norm.executeDryRun({ aiSuggest: true, limit: 2000 });
-  }, [norm]);
+    norm.executeDryRun({ aiSuggest: true, limit: 2000, onlyWhereNull: onlyIncomplete });
+  }, [norm, onlyIncomplete]);
 
   const handleApply = useCallback(() => {
     norm.executeApply();
@@ -319,6 +320,19 @@ export function NormalizationWizard({
                   />
                 </div>
               )}
+
+              {/* Filter toggle */}
+              <div className="flex items-center gap-1.5">
+                <Switch
+                  id="only-incomplete"
+                  checked={onlyIncomplete}
+                  onCheckedChange={setOnlyIncomplete}
+                  className="scale-75"
+                />
+                <Label htmlFor="only-incomplete" className="text-xs cursor-pointer">
+                  {t('normalize.onlyIncomplete', 'Только незаполненные')}
+                </Label>
+              </div>
 
               {/* Main action: Run normalization */}
               <Button size="sm" variant="outline" onClick={handleRunNormalization} disabled={norm.dryRunLoading || isApplying}>
