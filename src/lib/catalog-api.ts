@@ -1,12 +1,11 @@
 /**
  * Catalog API Client
  * 
- * Reads product data from Cloud Run pricing-api-saas.
- * Supabase product_catalog is used ONLY for overrides (is_active, custom fields).
+ * All requests go through Supabase Edge Function `catalog-proxy`.
+ * Direct browser access to pricing-api-saas is prohibited.
  */
 
-// Cloud Run API base URL (pricing-api-saas)
-const CATALOG_API_BASE = import.meta.env.VITE_CATALOG_API_URL || 'https://pricing-api-saas-37830921583.us-central1.run.app';
+import { supabase } from '@/integrations/supabase/client';
 
 // ============= Types =============
 
@@ -81,66 +80,67 @@ export interface CatalogFacetsRequest {
 // ============= API Functions =============
 
 /**
- * Fetch catalog items from Cloud Run API
+ * Fetch catalog items via catalog-proxy Edge Function
  */
 export async function fetchCatalogItems(
   params: CatalogItemsRequest
 ): Promise<CatalogItemsResponse> {
-  const url = new URL(`${CATALOG_API_BASE}/api/catalog/items`);
-  
-  url.searchParams.set('organization_id', params.organization_id);
-  if (params.limit) url.searchParams.set('limit', String(params.limit));
-  if (params.offset !== undefined) url.searchParams.set('offset', String(params.offset));
-  if (params.q) url.searchParams.set('q', params.q);
-  if (params.unit) url.searchParams.set('unit', params.unit);
-  if (params.cat_name) url.searchParams.set('cat_name', params.cat_name);
-  if (params.sort) url.searchParams.set('sort', params.sort);
+  const { organization_id, ...rest } = params;
 
-  const response = await fetch(url.toString(), {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
+  const proxyParams: Record<string, string | number> = {};
+  if (rest.limit) proxyParams.limit = rest.limit;
+  if (rest.offset !== undefined) proxyParams.offset = rest.offset;
+  if (rest.q) proxyParams.q = rest.q;
+  if (rest.unit) proxyParams.unit = rest.unit;
+  if (rest.cat_name) proxyParams.cat_name = rest.cat_name;
+  if (rest.sort) proxyParams.sort = rest.sort;
+
+  const { data, error } = await supabase.functions.invoke('catalog-proxy', {
+    body: {
+      endpoint: '/api/catalog/items',
+      organization_id,
+      params: proxyParams,
     },
   });
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Catalog API error: ${response.status} - ${error}`);
+  if (error) throw new Error(`Catalog proxy error: ${error.message}`);
+
+  const result = data as CatalogItemsResponse & { ok?: boolean; error?: string };
+  if (result?.ok === false) {
+    throw new Error(result.error || 'Catalog proxy returned error');
   }
 
-  return response.json();
+  return result;
 }
 
 /**
- * Fetch unique filter values (facets) from Catalog API
+ * Fetch unique filter values (facets) via catalog-proxy Edge Function
  */
 export async function fetchCatalogFacets(
   params: CatalogFacetsRequest
 ): Promise<CatalogFacets> {
-  const url = new URL(`${CATALOG_API_BASE}/api/catalog/facets`);
-  url.searchParams.set('organization_id', params.organization_id);
-
-  const response = await fetch(url.toString(), {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
+  const { data, error } = await supabase.functions.invoke('catalog-proxy', {
+    body: {
+      endpoint: '/api/catalog/facets',
+      organization_id: params.organization_id,
+      params: {},
     },
   });
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Catalog Facets API error: ${response.status} - ${error}`);
+  if (error) throw new Error(`Catalog facets proxy error: ${error.message}`);
+
+  const result = data as CatalogFacetsResponse & { error?: string };
+  if (result?.ok === false) {
+    throw new Error((result as { error?: string }).error || 'Facets proxy returned error');
   }
 
-  const data: CatalogFacetsResponse = await response.json();
-  
   // Return facets with cnt preserved for UI display
   return {
-    units: data.units.filter(u => u.unit),
-    categories: data.categories.filter(c => c.cat_name),
-    priceMin: data.price_min,
-    priceMax: data.price_max,
-    total: data.total,
+    units: (result.units || []).filter(u => u.unit),
+    categories: (result.categories || []).filter(c => c.cat_name),
+    priceMin: result.price_min,
+    priceMax: result.price_max,
+    total: result.total,
   };
 }
 

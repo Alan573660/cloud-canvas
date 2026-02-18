@@ -3,11 +3,18 @@
  * 
  * Wraps: dry_run, apply (async), apply_status polling, stats, settings-merge.
  * All calls go through Supabase Edge Functions (import-normalize, settings-merge).
+ * 
+ * Security & stability features:
+ * - Unified error parsing (422, 401, 5xx)
+ * - PROFILE_HASH_MISMATCH auto-recovery
+ * - Double-click protection for answer_question
+ * - Polling limits (max 7 min / 300 requests)
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
+import { parseEdgeFunctionError, isHashMismatch } from '@/lib/edge-error-utils';
 
 // ─── Types ────────────────────────────────────────────────────
 
@@ -29,7 +36,7 @@ export interface DryRunPatch {
 }
 
 export interface BackendQuestion {
-  type: string;          // WIDTH_MASTER, COATING_MAP, COLOR_MAP, WIDTH_CONFIRM, etc.
+  type: string;
   token?: string;
   profile?: string;
   examples?: string[];
@@ -56,7 +63,7 @@ export interface DryRunResult {
   recommended_limit?: number;
 }
 
-export type ApplyState = 'IDLE' | 'STARTING' | 'PENDING' | 'RUNNING' | 'DONE' | 'ERROR';
+export type ApplyState = 'IDLE' | 'STARTING' | 'PENDING' | 'RUNNING' | 'DONE' | 'ERROR' | 'POLL_EXCEEDED';
 
 export interface ApplyStatusResult {
   state?: string;
@@ -103,6 +110,12 @@ export interface CatalogRow {
   extra_params?: Record<string, unknown>;
 }
 
+// ─── Polling constants ────────────────────────────────────────
+
+const POLL_INTERVAL_MS = 3000;
+const POLL_MAX_DURATION_MS = 7 * 60 * 1000; // 7 minutes
+const POLL_MAX_REQUESTS = 300;
+
 // ─── Hook ─────────────────────────────────────────────────────
 
 interface UseNormalizationOptions {
@@ -136,11 +149,14 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   // Settings save
   const [savingSettings, setSavingSettings] = useState(false);
 
-  // Answer question
+  // Answer question — with double-click lock
   const [answeringQuestion, setAnsweringQuestion] = useState(false);
+  const answerLocksRef = useRef<Set<string>>(new Set());
 
-  // Polling ref
+  // Polling ref + counters
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollStartRef = useRef<number>(0);
+  const pollCountRef = useRef<number>(0);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -190,7 +206,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
             variant: 'destructive',
           });
         } else {
-          throw new Error(result?.error || 'Dry run failed');
+          throw new Error(parseEdgeFunctionError(null, result));
         }
         return null;
       }
@@ -200,8 +216,8 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       setDryRunResult(result);
       return result;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
-      toast({ title: 'Ошибка dry_run', description: msg, variant: 'destructive' });
+      const msg = parseEdgeFunctionError(err);
+      toast({ title: 'Ошибка анализа', description: msg, variant: 'destructive' });
       return null;
     } finally {
       setDryRunLoading(false);
@@ -225,12 +241,12 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       if (error) throw new Error(error.message);
 
       const result = data as { ok: boolean; error?: string };
-      if (!result?.ok) throw new Error(result?.error || 'Save failed');
+      if (!result?.ok) throw new Error(parseEdgeFunctionError(null, result));
 
       toast({ title: 'Настройки сохранены', description: 'pricing.* обновлены через deep merge' });
       return true;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
+      const msg = parseEdgeFunctionError(err);
       toast({ title: 'Ошибка сохранения', description: msg, variant: 'destructive' });
       return false;
     } finally {
@@ -254,14 +270,14 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       if (error) throw new Error(error.message);
 
       const result = data as { ok: boolean; metrics?: QualityMetrics; error?: string };
-      if (!result?.ok) throw new Error(result?.error || 'Stats fetch failed');
+      if (!result?.ok) throw new Error(parseEdgeFunctionError(null, result));
 
       if (result.metrics) {
         setServerStats(result.metrics);
       }
       return result.metrics || null;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
+      const msg = parseEdgeFunctionError(err);
       toast({ title: 'Ошибка stats', description: msg, variant: 'destructive' });
       return null;
     } finally {
@@ -276,9 +292,25 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       clearInterval(pollingRef.current);
       pollingRef.current = null;
     }
+    pollCountRef.current = 0;
+    pollStartRef.current = 0;
   }, []);
 
   const pollApplyStatus = useCallback(async (currentApplyId: string, currentRunId: string) => {
+    // Check polling limits
+    pollCountRef.current += 1;
+    const elapsed = Date.now() - pollStartRef.current;
+
+    if (elapsed > POLL_MAX_DURATION_MS || pollCountRef.current > POLL_MAX_REQUESTS) {
+      setApplyState('POLL_EXCEEDED');
+      setApplyError(
+        `Polling превысил лимит (${Math.round(elapsed / 1000)}с / ${pollCountRef.current} запросов). ` +
+        `Нажмите «Повторить» для проверки статуса.`
+      );
+      stopPolling();
+      return;
+    }
+
     try {
       const { data, error } = await supabase.functions.invoke<ApplyStatusResult>('import-normalize', {
         body: {
@@ -305,7 +337,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
         toast({ title: 'Нормализация завершена' });
       } else if (state === 'ERROR' || state === 'FAILED') {
         setApplyState('ERROR');
-        setApplyError(result.error || 'Apply failed');
+        setApplyError(parseEdgeFunctionError(null, result));
         stopPolling();
       } else {
         setApplyState('RUNNING');
@@ -319,7 +351,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
 
   const executeApply = useCallback(async () => {
     if (!runId || !profileHash) {
-      toast({ title: 'Ошибка', description: 'Сначала выполните Dry Run', variant: 'destructive' });
+      toast({ title: 'Ошибка', description: 'Сначала выполните анализ', variant: 'destructive' });
       return;
     }
 
@@ -348,7 +380,32 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
         patched_rows?: number;
         error?: string;
         code?: string;
+        error_code?: string;
       };
+
+      // --- PROFILE_HASH_MISMATCH recovery ---
+      if (isHashMismatch(result)) {
+        toast({
+          title: 'Настройки изменились',
+          description: 'Автоматически пересканируем каталог…',
+        });
+        setApplyState('IDLE');
+        // Auto-retry: re-run dry_run then user can re-apply
+        const newResult = await executeDryRun({ aiSuggest: true, limit: 2000 });
+        if (newResult) {
+          toast({
+            title: 'Пересканирование завершено',
+            description: 'Нажмите «Применить» снова.',
+          });
+        } else {
+          toast({
+            title: 'Не удалось пересканировать',
+            description: 'Попробуйте нажать «Сканировать» вручную.',
+            variant: 'destructive',
+          });
+        }
+        return;
+      }
 
       if (result?.code === 'TIMEOUT') {
         setApplyState('ERROR');
@@ -357,14 +414,16 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       }
 
       if (result?.apply_id) {
-        // Async mode — start polling with both ids
+        // Async mode — start polling with limits
         const newApplyId = result.apply_id;
         setApplyId(newApplyId);
         setApplyState('PENDING');
+        pollStartRef.current = Date.now();
+        pollCountRef.current = 0;
 
         pollingRef.current = setInterval(() => {
           pollApplyStatus(newApplyId, runId);
-        }, 3000);
+        }, POLL_INTERVAL_MS);
       } else if (result?.ok !== false && result?.patched_rows !== undefined) {
         // Sync mode — done immediately
         setApplyState('DONE');
@@ -374,20 +433,29 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
           description: `Обновлено строк: ${result.patched_rows}`,
         });
       } else {
-        throw new Error(result?.error || 'Apply failed');
+        throw new Error(parseEdgeFunctionError(null, result));
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
+      const msg = parseEdgeFunctionError(err);
       setApplyState('ERROR');
       setApplyError(msg);
-      toast({ title: 'Ошибка apply', description: msg, variant: 'destructive' });
+      toast({ title: 'Ошибка применения', description: msg, variant: 'destructive' });
     }
-  }, [runId, profileHash, organizationId, importJobId, pollApplyStatus]);
+  }, [runId, profileHash, organizationId, importJobId, pollApplyStatus, executeDryRun]);
 
-  // ─── Answer Question ───────────────────────────────────────
+  // ─── Answer Question (with double-click protection) ────────
 
   const answerQuestion = useCallback(async (questionType: string, token: string, value: string | number) => {
+    // Double-click lock: key = type + token
+    const lockKey = `${questionType}:${token}`;
+    if (answerLocksRef.current.has(lockKey)) {
+      console.log(`[answerQuestion] Ignoring duplicate for ${lockKey}`);
+      return false;
+    }
+
+    answerLocksRef.current.add(lockKey);
     setAnsweringQuestion(true);
+
     try {
       const { data, error } = await supabase.functions.invoke('import-normalize', {
         body: {
@@ -402,19 +470,34 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
 
       if (error) throw new Error(error.message);
 
-      const result = data as { ok: boolean; error?: string };
-      if (!result?.ok) throw new Error(result?.error || 'Answer failed');
+      const result = data as { ok: boolean; error?: string; code?: string; error_code?: string };
+
+      // Hash mismatch on answer → auto-retry dry_run
+      if (isHashMismatch(result)) {
+        toast({
+          title: 'Настройки изменились',
+          description: 'Пересканируем каталог…',
+        });
+        await executeDryRun({ aiSuggest: true, limit: 2000 });
+        return false;
+      }
+
+      if (!result?.ok) throw new Error(parseEdgeFunctionError(null, result));
 
       toast({ title: 'Ответ сохранён', description: `${questionType}: ${value}` });
       return true;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
+      const msg = parseEdgeFunctionError(err);
       toast({ title: 'Ошибка отправки ответа', description: msg, variant: 'destructive' });
       return false;
     } finally {
       setAnsweringQuestion(false);
+      // Release lock after 500ms debounce
+      setTimeout(() => {
+        answerLocksRef.current.delete(lockKey);
+      }, 500);
     }
-  }, [organizationId, importJobId]);
+  }, [organizationId, importJobId, executeDryRun]);
 
   // ─── Fetch Catalog Items ─────────────────────────────────
 
@@ -447,7 +530,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       setCatalogItems(allItems);
       return allItems;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
+      const msg = parseEdgeFunctionError(err);
       toast({ title: 'Ошибка загрузки каталога', description: msg, variant: 'destructive' });
       return [];
     } finally {
@@ -469,6 +552,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setServerStats(null);
     setCatalogItems([]);
     setCatalogTotal(0);
+    answerLocksRef.current.clear();
     stopPolling();
   }, [stopPolling]);
 
