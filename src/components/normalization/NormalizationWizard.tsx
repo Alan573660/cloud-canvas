@@ -51,36 +51,14 @@ interface NormalizationWizardProps {
 
 // ─── Helpers ──────────────────────────────────────────────────
 
-/** Map a BigQuery cat_name to our broad product category */
-function categorizeCatName(catName: string): ProductCategory {
-  const cn = catName.toLowerCase();
-  // Profnastil: "Профилированный лист", profiles like "МП-20", "С-8", "НС-35", "Листы плоские"
-  if (cn.includes('профилированный лист') || cn.includes('листы плоские')) return 'PROFNASTIL';
-  if (/^(мп|с|нс|н)-?\d/i.test(cn)) return 'PROFNASTIL';
-  // Metallocherepica
-  if (cn.includes('металлочерепиц') || cn.includes('монтеррей')) return 'METALLOCHEREPICA';
-  // Sandwich panels: ТСП, Airpanel
-  if (cn.includes('тсп') || cn.includes('airpanel')) return 'SANDWICH';
-  // Dobor: accessories, flashings, safety
-  if (cn.includes('фасонные изделия') || cn.includes('саморез') || cn.includes('снегозадержатель')
-    || cn.includes('лестниц') && cn.includes('кровельн') || cn.includes('ограждения кровельн')
-    || cn.includes('переходные мостики') || cn.includes('элементы безопасности')
-    || cn.includes('планка') && cn.includes('для тсп')) return 'DOBOR';
-  return 'OTHER';
-}
-
-function categorizeItem(item: { profile?: string; title?: string; sheet_kind?: string; cat_name?: string }): ProductCategory {
-  // Check sheet_kind first (from dry_run patches)
+function categorizeItem(item: { profile?: string; title?: string; sheet_kind?: string }): ProductCategory {
   const sheetKind = item.sheet_kind?.toUpperCase();
   if (sheetKind === 'PROFNASTIL') return 'PROFNASTIL';
   if (sheetKind === 'METAL_TILE') return 'METALLOCHEREPICA';
   if (sheetKind === 'ACCESSORY') return 'DOBOR';
+  // OTHER stays OTHER — don't merge into DOBOR
   if (sheetKind === 'OTHER') return 'OTHER';
 
-  // Check cat_name from BigQuery
-  if (item.cat_name) return categorizeCatName(item.cat_name);
-
-  // Fallback: regex on profile/title
   const profile = (item.profile || '').toUpperCase();
   const title = (item.title || '').toLowerCase();
   if (/^(С|C|Н|H|НС|HC|МП|MP)-?\d/i.test(profile) || title.includes('профнастил')) return 'PROFNASTIL';
@@ -141,12 +119,10 @@ function patchToCanonical(item: DryRunPatch): CanonicalProduct {
 function catalogRowToCanonical(row: CatalogRow): CanonicalProduct {
   const extra = (row.extra_params || {}) as Record<string, unknown>;
   const sheetKind = (extra.sheet_kind as string) || '';
-  const catName = (extra.cat_name as string) || '';
   const category = categorizeItem({ 
     profile: row.profile || '', 
     title: row.title || '',
     sheet_kind: sheetKind,
-    cat_name: catName,
   });
   const productType: ProductType = 
     category === 'PROFNASTIL' ? 'PROFNASTIL' :
@@ -231,30 +207,12 @@ export function NormalizationWizard({
     importJobId: effectiveJobId,
   });
 
-  // Auto-load facets when dialog opens
+  // Auto-load catalog items when dialog opens
   useEffect(() => {
-    if (open && organizationId && norm.catalogFacets.length === 0 && !norm.facetsLoading) {
-      norm.fetchCatalogFacets();
+    if (open && organizationId && norm.catalogItems.length === 0 && !norm.catalogLoading) {
+      norm.fetchCatalogItems(5000);
     }
   }, [open, organizationId]);
-
-  // Compute category stats from BigQuery facets (aggregated counts)
-  const categoryStats = useMemo(() => {
-    const stats: Record<ProductCategory, { total: number; ready: number; needsAttention: number }> = {
-      ALL: { total: norm.catalogTotal, ready: 0, needsAttention: 0 },
-      PROFNASTIL: { total: 0, ready: 0, needsAttention: 0 },
-      METALLOCHEREPICA: { total: 0, ready: 0, needsAttention: 0 },
-      DOBOR: { total: 0, ready: 0, needsAttention: 0 },
-      SANDWICH: { total: 0, ready: 0, needsAttention: 0 },
-      OTHER: { total: 0, ready: 0, needsAttention: 0 },
-    };
-    // Aggregate BigQuery cat_name facets into our broad categories
-    norm.catalogFacets.forEach(facet => {
-      const cat = categorizeCatName(facet.cat_name);
-      stats[cat].total += facet.cnt;
-    });
-    return stats;
-  }, [norm.catalogFacets, norm.catalogTotal]);
 
   // Transform: merge catalog items with patches (patches override catalog rows)
   const items = useMemo(() => {
@@ -263,14 +221,16 @@ export function NormalizationWizard({
       patchMap.set(p.id, patchToCanonical(p));
     });
 
+    // If we have catalog items, use them as base and overlay patches
     if (norm.catalogItems.length > 0) {
       return norm.catalogItems.map(row => {
         const patch = patchMap.get(row.id);
-        if (patch) return patch;
+        if (patch) return patch; // patch overrides
         return catalogRowToCanonical(row);
       });
     }
 
+    // Fallback: use patches only
     return Array.from(patchMap.values());
   }, [norm.dryRunResult, norm.catalogItems]);
 
@@ -279,11 +239,34 @@ export function NormalizationWizard({
     return (norm.dryRunResult?.questions || []).map(backendQuestionToAI);
   }, [norm.dryRunResult]);
 
-  // Auto-select best category after facets load
+  // Category stats
+  const categoryStats = useMemo(() => {
+    const stats: Record<ProductCategory, { total: number; ready: number; needsAttention: number }> = {
+      ALL: { total: 0, ready: 0, needsAttention: 0 },
+      PROFNASTIL: { total: 0, ready: 0, needsAttention: 0 },
+      METALLOCHEREPICA: { total: 0, ready: 0, needsAttention: 0 },
+      DOBOR: { total: 0, ready: 0, needsAttention: 0 },
+      SANDWICH: { total: 0, ready: 0, needsAttention: 0 },
+      OTHER: { total: 0, ready: 0, needsAttention: 0 },
+    };
+    items.forEach(item => {
+      const cat = item.product_type || 'OTHER';
+      const v = validateProduct(item);
+      stats.ALL.total++;
+      stats[cat].total++;
+      if (v.status === 'ready') { stats.ALL.ready++; stats[cat].ready++; }
+      else { stats.ALL.needsAttention++; stats[cat].needsAttention++; }
+    });
+    return stats;
+  }, [items]);
+
+  // Auto-select best category after dry_run
   useEffect(() => {
-    if (norm.catalogFacets.length === 0) return;
+    if (items.length === 0) return;
+    // If current category has items, keep it
     const currentCount = categoryStats[activeCategory]?.total || 0;
     if (currentCount > 0) return;
+    // Find category with most items (excluding ALL)
     const cats: ProductCategory[] = ['PROFNASTIL', 'METALLOCHEREPICA', 'DOBOR', 'SANDWICH', 'OTHER'];
     let best: ProductCategory = 'ALL';
     let bestCount = 0;
@@ -294,32 +277,9 @@ export function NormalizationWizard({
       }
     }
     setActiveCategory(bestCount > 0 ? best : 'ALL');
-  }, [norm.catalogFacets, categoryStats]);
+  }, [items, categoryStats]);
 
-  // Load items when category changes — fetch from BigQuery with cat_name filter
-  useEffect(() => {
-    if (!open || !organizationId || norm.catalogFacets.length === 0) return;
-    
-    // Build list of cat_names that match the selected category
-    // For ALL, load first 5000 items (no filter)
-    if (activeCategory === 'ALL') {
-      norm.fetchCatalogItems(5000);
-      return;
-    }
-    
-    // Find first matching cat_name for the selected category and load items
-    const matchingCatNames = norm.catalogFacets
-      .filter(f => categorizeCatName(f.cat_name) === activeCategory)
-      .sort((a, b) => b.cnt - a.cnt);
-    
-    if (matchingCatNames.length > 0) {
-      // Load items for the largest matching cat_name first
-      // BigQuery API supports single cat_name filter
-      norm.fetchCatalogItems(5000, matchingCatNames[0].cat_name);
-    }
-  }, [open, organizationId, activeCategory, norm.catalogFacets]);
-
-  // Filtered items — already filtered by category via BQ API, but double-check
+  // Filtered items
   const filteredItems = useMemo(() => {
     if (activeCategory === 'ALL') return items;
     return items.filter(i => (i.product_type || 'OTHER') === activeCategory);

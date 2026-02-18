@@ -8,12 +8,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
-import { 
-  fetchCatalogItems as fetchCatalogItemsFromAPI, 
-  fetchCatalogFacets as fetchFacetsFromAPI,
-  type CatalogItem,
-  type CategoryFacet,
-} from '@/lib/catalog-api';
 
 // ─── Types ────────────────────────────────────────────────────
 
@@ -121,14 +115,10 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   const [dryRunLoading, setDryRunLoading] = useState(false);
   const [dryRunResult, setDryRunResult] = useState<DryRunResult | null>(null);
 
-  // Catalog items loaded from BigQuery API
+  // Catalog items loaded directly from DB
   const [catalogItems, setCatalogItems] = useState<CatalogRow[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogTotal, setCatalogTotal] = useState(0);
-  
-  // BigQuery facets (category counts)
-  const [catalogFacets, setCatalogFacets] = useState<CategoryFacet[]>([]);
-  const [facetsLoading, setFacetsLoading] = useState(false);
   const [runId, setRunId] = useState<string | null>(null);
   const [profileHash, setProfileHash] = useState<string | null>(null);
 
@@ -426,61 +416,32 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     }
   }, [organizationId, importJobId]);
 
-  // ─── Fetch Catalog Facets (category counts from BigQuery) ──
+  // ─── Fetch Catalog Items ─────────────────────────────────
 
-  const fetchCatalogFacetsBQ = useCallback(async () => {
-    setFacetsLoading(true);
-    try {
-      const facets = await fetchFacetsFromAPI({ organization_id: organizationId });
-      setCatalogFacets(facets.categories);
-      setCatalogTotal(facets.total);
-      return facets;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
-      toast({ title: 'Ошибка загрузки фасетов', description: msg, variant: 'destructive' });
-      return null;
-    } finally {
-      setFacetsLoading(false);
-    }
-  }, [organizationId]);
-
-  // ─── Fetch Catalog Items (with optional cat_name filter) ──
-
-  const fetchCatalogItemsBQ = useCallback(async (limit = 5000, catNameFilter?: string) => {
+  const fetchCatalogItems = useCallback(async (limit = 5000) => {
     setCatalogLoading(true);
     try {
+      const { count } = await supabase
+        .from('product_catalog')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', organizationId);
+      
+      setCatalogTotal(count || 0);
+
       const allItems: CatalogRow[] = [];
       const batchSize = 1000;
+      const maxItems = Math.min(limit, count || 0);
       
-      for (let offset = 0; offset < limit; offset += batchSize) {
-        const response = await fetchCatalogItemsFromAPI({
-          organization_id: organizationId,
-          limit: batchSize,
-          offset,
-          cat_name: catNameFilter || undefined,
-        });
+      for (let offset = 0; offset < maxItems; offset += batchSize) {
+        const { data, error } = await supabase
+          .from('product_catalog')
+          .select('id, title, profile, thickness_mm, coating, notes, width_work_mm, width_full_mm, base_price_rub_m2, sku, extra_params')
+          .eq('organization_id', organizationId)
+          .range(offset, offset + batchSize - 1);
 
-        if (response.items) {
-          const mapped: CatalogRow[] = response.items.map(item => ({
-            id: item.id,
-            title: item.title,
-            profile: null,
-            thickness_mm: null,
-            coating: null,
-            notes: null,
-            width_work_mm: null,
-            width_full_mm: null,
-            base_price_rub_m2: item.price_rub_m2 || 0,
-            sku: null,
-            extra_params: {
-              cat_name: item.cat_name,
-              cat_tree: item.cat_tree,
-              unit: item.unit,
-            },
-          }));
-          allItems.push(...mapped);
-        }
-        if (!response.items || response.items.length < batchSize) break;
+        if (error) throw new Error(error.message);
+        if (data) allItems.push(...(data as CatalogRow[]));
+        if (!data || data.length < batchSize) break;
       }
 
       setCatalogItems(allItems);
@@ -519,14 +480,11 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     profileHash,
     executeDryRun,
 
-    // Catalog items & facets
+    // Catalog items
     catalogItems,
     catalogLoading,
     catalogTotal,
-    catalogFacets,
-    facetsLoading,
-    fetchCatalogItems: fetchCatalogItemsBQ,
-    fetchCatalogFacets: fetchCatalogFacetsBQ,
+    fetchCatalogItems,
 
     // Apply
     applyState,
