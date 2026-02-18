@@ -11,3 +11,6 @@ verify_jwt = false
 
 [functions.import-normalize]
 verify_jwt = false
+
+[functions.catalog-proxy]
+verify_jwt = false

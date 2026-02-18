@@ -337,6 +337,7 @@ export function NormalizationWizard({
       case 'RUNNING': return t('normalize.statusApplying', 'Применяем исправления…');
       case 'DONE': return t('normalize.statusDone', 'Готово');
       case 'ERROR': return t('normalize.statusError', 'Ошибка');
+      case 'POLL_EXCEEDED': return t('normalize.statusPollExceeded', 'Превышен лимит ожидания');
       default: return '';
     }
   };
@@ -461,7 +462,7 @@ export function NormalizationWizard({
             {/* Apply state — human-friendly */}
             {norm.applyState !== 'IDLE' && (
               <Badge 
-                variant={norm.applyState === 'DONE' ? 'default' : norm.applyState === 'ERROR' ? 'destructive' : 'secondary'}
+                variant={norm.applyState === 'DONE' ? 'default' : (norm.applyState === 'ERROR' || norm.applyState === 'POLL_EXCEEDED') ? 'destructive' : 'secondary'}
                 className="text-xs"
               >
                 {isApplying && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
