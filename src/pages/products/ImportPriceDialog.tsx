@@ -80,6 +80,23 @@ interface NormalizationResult {
   skipped?: boolean;
 }
 
+/** Map raw backend errors to user-friendly messages */
+function mapPublishError(raw: string, t: (key: string, fallback: string) => string): string {
+  if (raw.includes('Forbidden') || raw.includes('403')) {
+    return t('import.errorForbidden', 'Сервер импорта временно недоступен (ошибка доступа). Обратитесь к администратору.');
+  }
+  if (raw.includes('Supabase is not configured') || raw.includes('CONFIG_ERROR') || raw.includes('not set')) {
+    return t('import.errorConfig', 'Сервер импорта не настроен. Обратитесь к администратору для проверки конфигурации.');
+  }
+  if (raw.includes('WORKER_UNREACHABLE') || raw.includes('Worker unreachable')) {
+    return t('import.errorUnreachable', 'Сервер импорта недоступен. Попробуйте позже или обратитесь к администратору.');
+  }
+  if (raw.includes('File not found')) {
+    return t('import.errorFileNotFound', 'Файл не найден в хранилище. Попробуйте загрузить заново.');
+  }
+  return raw;
+}
+
 export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPriceDialogProps) {
   const { t } = useTranslation();
   const { profile } = useAuth();
@@ -283,7 +300,8 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     },
     onError: async (error) => {
       console.error('[ImportPriceDialog] Validate failed:', error);
-      setErrorMessage(error instanceof Error ? error.message : 'Validation failed');
+      const raw = error instanceof Error ? error.message : 'Validation failed';
+      setErrorMessage(mapPublishError(raw, t));
       setStep('error');
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
     },
@@ -364,7 +382,9 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
         return;
       }
       
-      setErrorMessage(errorMsg);
+      // Map infrastructure errors to user-friendly messages
+      const userMessage = mapPublishError(errorMsg, t);
+      setErrorMessage(userMessage);
       setStep('error');
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
     },
