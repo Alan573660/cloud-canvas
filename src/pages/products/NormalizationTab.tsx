@@ -1,15 +1,22 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { 
-  Sparkles, History, Play, Clock, CheckCircle2, 
+  Sparkles, Play, Clock, CheckCircle2, 
   XCircle, RefreshCw, FileText, Loader2
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
 import {
   Table,
   TableBody,
@@ -18,7 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { NormalizationWizard } from '@/components/normalization';
+import { NormalizationWizard } from '@/components/import/NormalizationWizard';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
@@ -64,20 +71,29 @@ export function NormalizationTab() {
     enabled: !!organizationId,
   });
 
-  const handleStartNormalization = (jobId: string) => {
+  const handleStartNormalization = useCallback((jobId: string) => {
     setSelectedJobId(jobId);
     setDialogOpen(true);
-  };
+  }, []);
 
-  const handleNormalizeCurrent = () => {
+  const handleNormalizeCurrent = useCallback(() => {
     setSelectedJobId(null);
     setDialogOpen(true);
-  };
+  }, []);
+
+  const handleComplete = useCallback(() => {
+    setDialogOpen(false);
+    refetch();
+  }, [refetch]);
+
+  const handleSkip = useCallback(() => {
+    setDialogOpen(false);
+  }, []);
 
   const getStatusBadge = (status: string, summary: NormalizationSession['summary']) => {
     const hasEnrich = !!summary?.enrich?.completed_at;
     if (hasEnrich) {
-      return <Badge variant="default" className="bg-green-600"><CheckCircle2 className="h-3 w-3 mr-1" />{t('normalize.normalized', 'Нормализован')}</Badge>;
+      return <Badge className="bg-green-600 text-white"><CheckCircle2 className="h-3 w-3 mr-1" />{t('normalize.normalized', 'Нормализован')}</Badge>;
     }
     if (status === 'COMPLETED') {
       return <Badge variant="secondary"><CheckCircle2 className="h-3 w-3 mr-1" />{t('normalize.imported', 'Импортирован')}</Badge>;
@@ -96,7 +112,7 @@ export function NormalizationTab() {
             <Sparkles className="h-6 w-6 text-primary" />
             {t('normalize.title', 'Нормализация прайса')}
           </h2>
-          <p className="text-muted-foreground mt-1">{t('normalize.description', 'Стандартизация данных каталога')}</p>
+          <p className="text-muted-foreground mt-1">{t('normalize.description', 'Стандартизация данных каталога: профили, толщины, покрытия, цвета')}</p>
         </div>
         <div className="flex gap-2">
           <Button onClick={handleNormalizeCurrent}><Sparkles className="h-4 w-4 mr-2" />{t('normalize.normalizeCurrent', 'Нормализовать каталог')}</Button>
@@ -112,7 +128,7 @@ export function NormalizationTab() {
           {isLoading ? (
             <div className="flex items-center justify-center py-12"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>
           ) : !sessions?.length ? (
-            <div className="text-center py-12"><FileText className="h-12 w-12 mx-auto text-muted-foreground mb-4" /><p className="text-muted-foreground">{t('normalize.noSessions', 'Нет сессий')}</p></div>
+            <div className="text-center py-12"><FileText className="h-12 w-12 mx-auto text-muted-foreground mb-4" /><p className="text-muted-foreground">{t('normalize.noSessions', 'Нет сессий нормализации. Загрузите прайс-лист на вкладке «Импорт».')}</p></div>
           ) : (
             <Table>
               <TableHeader>
@@ -144,14 +160,31 @@ export function NormalizationTab() {
         </CardContent>
       </Card>
 
+      {/* Full-featured Normalization Wizard wrapped in Dialog */}
       {organizationId && (
-        <NormalizationWizard
-          open={dialogOpen}
-          onOpenChange={setDialogOpen}
-          organizationId={organizationId}
-          importJobId={selectedJobId || undefined}
-          onComplete={() => { setDialogOpen(false); refetch(); }}
-        />
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Sparkles className="h-5 w-5 text-primary" />
+                {t('normalize.wizardTitle', 'Нормализация каталога')}
+              </DialogTitle>
+              <DialogDescription>
+                {t('normalize.wizardDesc', 'AI распознаёт профили, ширины, покрытия и цвета')}
+              </DialogDescription>
+            </DialogHeader>
+            {dialogOpen && (
+              <NormalizationWizard
+                organizationId={organizationId}
+                importJobId={selectedJobId || 'current'}
+                stagingSample={[]}
+                onComplete={handleComplete}
+                onSkip={handleSkip}
+                autoStart
+              />
+            )}
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );
