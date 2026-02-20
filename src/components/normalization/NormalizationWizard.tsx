@@ -74,19 +74,43 @@ const CAT_LABELS: Record<string, string> = {
 
 // ─── Helpers ──────────────────────────────────────────────────
 
-function categorizeItem(item: { profile?: string; title?: string; sheet_kind?: string }): ProductCategory {
-  const sheetKind = item.sheet_kind?.toUpperCase();
+// Профнастил профили: C8, C10, C20, C21, HC35, NS35, NS57, МП20, НС57, Н60, etc.
+const RE_PROFNASTIL_PROFILE = /^(NS|НС|С|C|Н|H|НС|HC|МП|MP|Н)-?\d/i;
+// Металлочерепица профили: Монтеррей, Каскад, Супермонтеррей, Modern, Adamante, Cascade, etc.
+const RE_METALLOCHEREPICA_TITLE = /металлочерепица|monterrey|монтеррей|cascade|каскад|adamante|адаманте|quadro|квадро|genesis|dimos|luxury|supermonterey|супермонтеррей|modern|vintage|country/i;
+const RE_PROFNASTIL_TITLE = /профнастил|профлист/i;
+const RE_DOBOR_TITLE = /планка|конёк|конек|ендова|карниз|ветровая|заглушка|шуруп|саморез|кронштейн|крепёж|крепеж|болт|гайка|шайба|доборн/i;
+const RE_SANDWICH_TITLE = /сэндвич|sandwich|панель утеплен/i;
+
+function categorizeItem(item: { profile?: string; title?: string; sheet_kind?: string; family_key?: string }): ProductCategory {
+  const sheetKind = (item.sheet_kind || '').toUpperCase();
+  
+  // Priority 1: explicit sheet_kind from backend
   if (sheetKind === 'PROFNASTIL') return 'PROFNASTIL';
   if (sheetKind === 'METAL_TILE') return 'METALLOCHEREPICA';
-  if (sheetKind === 'ACCESSORY') return 'DOBOR';
-  if (sheetKind === 'OTHER') return 'OTHER';
+  if (sheetKind === 'ACCESSORY' || sheetKind === 'DOBOR') return 'DOBOR';
+  if (sheetKind === 'SANDWICH') return 'SANDWICH';
 
-  const profile = (item.profile || '').toUpperCase();
-  const title = (item.title || '').toLowerCase();
-  if (/^(С|C|Н|H|НС|HC|МП|MP)-?\d/i.test(profile) || title.includes('профнастил')) return 'PROFNASTIL';
-  if (title.includes('металлочерепица') || title.includes('монтеррей')) return 'METALLOCHEREPICA';
-  if (title.includes('сэндвич') || title.includes('панель')) return 'SANDWICH';
-  if (title.includes('планка') || title.includes('конек') || title.includes('саморез')) return 'DOBOR';
+  const profile = (item.profile || '').trim();
+  const title = (item.title || '').trim();
+  const familyKey = (item.family_key || '').toUpperCase();
+
+  // Priority 2: family_key hint from enricher (e.g. "METAL_TILE|Cascade")
+  if (familyKey.includes('METAL_TILE') || familyKey.includes('METALLOCHEREPICA')) return 'METALLOCHEREPICA';
+  if (familyKey.includes('PROFNASTIL') || familyKey.includes('CORRUGATED')) return 'PROFNASTIL';
+
+  // Priority 3: profile regex — profnastil profiles like C8, NS57, НС35, МП20
+  if (profile && RE_PROFNASTIL_PROFILE.test(profile)) return 'PROFNASTIL';
+
+  // Priority 4: title-based detection
+  if (RE_PROFNASTIL_TITLE.test(title)) return 'PROFNASTIL';
+  if (RE_METALLOCHEREPICA_TITLE.test(title)) return 'METALLOCHEREPICA';
+  if (RE_SANDWICH_TITLE.test(title)) return 'SANDWICH';
+  if (RE_DOBOR_TITLE.test(title)) return 'DOBOR';
+
+  // Priority 5: if profile looks like metallocherepica pattern (e.g. "Cascade", "Monterrey")
+  if (RE_METALLOCHEREPICA_TITLE.test(profile)) return 'METALLOCHEREPICA';
+
   return 'OTHER';
 }
 
@@ -97,7 +121,12 @@ function extractZincLabel(notes?: string): string | undefined {
 }
 
 function patchToCanonical(item: DryRunPatch): CanonicalProduct {
-  const category = categorizeItem(item);
+  const category = categorizeItem({
+    profile: item.profile,
+    title: item.title,
+    sheet_kind: item.sheet_kind,
+    family_key: item.family_key,
+  });
   const productType: ProductType =
     category === 'PROFNASTIL' ? 'PROFNASTIL' :
     category === 'METALLOCHEREPICA' ? 'METALLOCHEREPICA' :
@@ -226,22 +255,37 @@ function QuestionAnswerForm({
   onClose: () => void;
   loading: boolean;
 }) {
+  const isWidth = question.type === 'width';
+  const [fullMm, setFullMm] = useState('');
+  const [workMm, setWorkMm] = useState('');
   const [value, setValue] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
 
   const handleSubmit = () => {
-    const finalValue = question.type === 'width' ? selected.join(',') : (value || selected[0] || '');
+    let finalValue = '';
+    if (isWidth) {
+      if (!fullMm) return;
+      finalValue = workMm ? `${fullMm}:${workMm}` : fullMm;
+    } else {
+      finalValue = value || selected[0] || '';
+    }
     if (finalValue) onSubmit(finalValue);
   };
+
+  const canSubmit = isWidth ? !!fullMm : (!!value || selected.length > 0);
 
   return (
     <div className="border rounded-lg p-3 bg-muted/30 space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold">
-          {Q_TYPE_CONFIG[question.type?.toUpperCase() || '']?.label || question.type}
-          {question.token && <span className="ml-1 text-muted-foreground font-normal">«{question.token}»</span>}
-        </span>
-        <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+        <div>
+          <span className="text-xs font-semibold">
+            {Q_TYPE_CONFIG[(question.type || '').toUpperCase() + '_MASTER'] || Q_TYPE_CONFIG[(question.type || '').toUpperCase() + '_MAP'] ? 
+              (Q_TYPE_CONFIG[(question.type || '').toUpperCase() + '_MASTER'] || Q_TYPE_CONFIG[(question.type || '').toUpperCase() + '_MAP'])?.label
+              : question.type}
+          </span>
+          {question.token && <span className="ml-1 text-[10px] text-muted-foreground">«{question.token}»</span>}
+        </div>
+        <button onClick={onClose} className="text-muted-foreground hover:text-foreground p-0.5">
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
@@ -250,55 +294,104 @@ function QuestionAnswerForm({
         <p className="text-xs text-muted-foreground">{question.ask}</p>
       )}
 
-      {/* Suggestions as chips */}
-      {question.suggestions.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {question.suggestions.map(s => (
-            <button
-              key={s}
-              onClick={() => {
-                if (question.type === 'width') {
-                  setSelected(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]);
-                } else {
-                  setValue(s);
-                  setSelected([s]);
-                }
-              }}
-              className={`text-xs px-2 py-0.5 rounded border transition-colors ${
-                selected.includes(s)
-                  ? 'bg-primary text-primary-foreground border-primary'
-                  : 'border-border bg-background hover:border-primary'
-              }`}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Manual input */}
-      <Input
-        value={value}
-        onChange={e => setValue(e.target.value)}
-        placeholder={question.type === 'width' ? 'Например: 1150 или 1150:1100' : 'Введите значение…'}
-        className="h-7 text-xs"
-      />
-
       {question.affected_count > 0 && (
-        <p className="text-xs text-muted-foreground">Затронуто товаров: {question.affected_count}</p>
+        <p className="text-[10px] text-muted-foreground">
+          Затронуто товаров: <strong>{question.affected_count}</strong>
+        </p>
       )}
 
-      <div className="flex gap-2">
-        <Button size="sm" onClick={handleSubmit} disabled={loading || (!value && selected.length === 0)} className="h-7 text-xs flex-1">
-          {loading ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
-          Подтвердить
-        </Button>
-      </div>
+      {/* WIDTH: two separate fields */}
+      {isWidth ? (
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] text-muted-foreground block mb-1">Полная, мм *</label>
+              <Input
+                value={fullMm}
+                onChange={e => setFullMm(e.target.value.replace(/\D/g, ''))}
+                placeholder="1200"
+                className="h-7 text-xs"
+                inputMode="numeric"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-muted-foreground block mb-1">Рабочая, мм</label>
+              <Input
+                value={workMm}
+                onChange={e => setWorkMm(e.target.value.replace(/\D/g, ''))}
+                placeholder="необяз."
+                className="h-7 text-xs"
+                inputMode="numeric"
+              />
+            </div>
+          </div>
+          {/* Suggestions for width */}
+          {question.suggestions.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {question.suggestions.map(s => (
+                <button
+                  key={s}
+                  onClick={() => {
+                    const parts = s.split(':');
+                    setFullMm(parts[0] || '');
+                    setWorkMm(parts[1] || '');
+                  }}
+                  className="text-[10px] px-2 py-0.5 rounded border border-border bg-background hover:border-primary transition-colors"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
+          {/* Suggestions as chips */}
+          {question.suggestions.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {question.suggestions.map(s => (
+                <button
+                  key={s}
+                  onClick={() => { setValue(s); setSelected([s]); }}
+                  className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                    selected.includes(s)
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'border-border bg-background hover:border-primary'
+                  }`}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+          <Input
+            value={value}
+            onChange={e => setValue(e.target.value)}
+            placeholder="Введите значение…"
+            className="h-7 text-xs"
+          />
+        </>
+      )}
+
+      <Button size="sm" onClick={handleSubmit} disabled={loading || !canSubmit} className="h-7 text-xs w-full">
+        {loading ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
+        Подтвердить
+      </Button>
     </div>
   );
 }
 
 // ─── Right Panel: AI Chat ─────────────────────────────────────
+
+// Примеры команд для AI-чата
+const CHAT_EXAMPLES = [
+  'Установи покрытие MattPE → Матовый полиэстер',
+  'Установи покрытие Plastisol → Пластизол',
+  'Установи покрытие Valori → Пуральметалл',
+  'Установи цвет RAL9003 → белый',
+  'Установи цвет RR32 → тёмно-коричневый',
+  'Какие товары с неизвестным профилем?',
+];
 
 function AIChatPanel({
   organizationId,
@@ -307,16 +400,17 @@ function AIChatPanel({
   organizationId: string;
   importJobId?: string;
 }) {
-  const [messages, setMessages] = useState<Array<{ role: 'user' | 'ai'; text: string }>>([]);
+  const [messages, setMessages] = useState<Array<{ role: 'user' | 'ai'; text: string; isError?: boolean }>>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const [showExamples, setShowExamples] = useState(true);
+  const scrollEndRef = useRef<HTMLDivElement>(null);
 
-  // Import supabase inline to avoid circular deps
-  const sendMessage = useCallback(async () => {
-    if (!input.trim() || loading) return;
-    const msg = input.trim();
+  const sendMessage = useCallback(async (overrideMsg?: string) => {
+    const msg = (overrideMsg || input).trim();
+    if (!msg || loading) return;
     setInput('');
+    setShowExamples(false);
     setMessages(prev => [...prev, { role: 'user', text: msg }]);
     setLoading(true);
 
@@ -327,15 +421,11 @@ function AIChatPanel({
         organization_id: organizationId,
         import_job_id: importJobId || 'current',
         message: msg,
-        // context passed from parent if available (activeGroup)
       };
-      console.log('[AIChatPanel] -> invoke import-normalize/chat', payload);
 
       const { data, error: invokeError } = await supabase.functions.invoke('import-normalize', {
         body: payload,
       });
-
-      console.log('[AIChatPanel] <- response:', data, 'invokeError:', invokeError);
 
       if (invokeError) throw new Error(invokeError.message);
 
@@ -350,49 +440,71 @@ function AIChatPanel({
         ai_disabled?: boolean;
       };
 
-      // Handle { ok: false, error: ... } with HTTP 200
       if (result?.ok === false) {
         let errMsg = result.error || 'Ошибка ИИ';
         if (result.code === 'TIMEOUT') errMsg = 'ИИ не ответил вовремя. Попробуйте ещё раз.';
-        if (result.ai_disabled) errMsg = `ИИ отключён. Причина: ${result.ai_skip_reason || 'не указана'}`;
-        setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${errMsg}` }]);
+        if (result.ai_disabled) errMsg = `ИИ отключён: ${result.ai_skip_reason || 'неизвестная причина'}`;
+        setMessages(prev => [...prev, { role: 'ai', text: errMsg, isError: true }]);
         return;
       }
 
-      // Show ai_skip_reason as info if present even on ok:true
-      if (result?.ai_skip_reason) {
-        console.info('[AIChatPanel] ai_skip_reason:', result.ai_skip_reason);
+      const reply = result?.reply || result?.answer || result?.message || '';
+
+      // Detect "Could not parse command" — give user-friendly guidance
+      if (!reply || reply.toLowerCase().includes('could not parse') || reply.toLowerCase().includes('не удалось')) {
+        setMessages(prev => [...prev, {
+          role: 'ai',
+          text: '⚠️ ИИ-чат работает с командами нормализации. Примеры:\n\n• «Установи покрытие MattPE → Матовый полиэстер»\n• «Установи цвет RR32 → тёмно-коричневый»\n• «Какие товары с неизвестным профилем?»',
+        }]);
+        return;
       }
 
-      const reply = result?.reply || result?.answer || result?.message || 'Нет ответа от ИИ';
       setMessages(prev => [...prev, { role: 'ai', text: reply }]);
     } catch (err) {
       console.error('[AIChatPanel] sendMessage error:', err);
       const errMsg = err instanceof Error ? err.message : 'Ошибка подключения к ИИ';
-      setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${errMsg}` }]);
+      setMessages(prev => [...prev, { role: 'ai', text: errMsg, isError: true }]);
     } finally {
       setLoading(false);
-      setTimeout(() => scrollRef.current?.scrollTo({ top: 9999, behavior: 'smooth' }), 100);
+      setTimeout(() => scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     }
   }, [input, loading, organizationId, importJobId]);
 
   return (
     <div className="flex flex-col h-full">
-      <ScrollArea className="flex-1 min-h-0 p-3" ref={scrollRef as React.Ref<HTMLDivElement>}>
-        {messages.length === 0 && (
-          <div className="text-center py-8 text-muted-foreground text-xs">
-            <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-30" />
-            <p>Спросите ИИ о любом товаре или правиле</p>
-            <p className="mt-1 opacity-70">«Почему этот товар попал в Профнастил?»</p>
-          </div>
-        )}
-        <div className="space-y-2">
+      <ScrollArea className="flex-1 min-h-0">
+        <div className="p-3 space-y-2">
+          {/* Welcome / examples */}
+          {showExamples && messages.length === 0 && (
+            <div className="space-y-2">
+              <div className="text-center py-3 text-muted-foreground">
+                <MessageSquare className="h-7 w-7 mx-auto mb-2 opacity-30" />
+                <p className="text-xs font-medium">ИИ-чат для нормализации</p>
+                <p className="text-[10px] mt-0.5 opacity-70">Отдавайте команды или задайте вопрос</p>
+              </div>
+              <div className="space-y-1">
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Примеры команд</p>
+                {CHAT_EXAMPLES.map((ex, i) => (
+                  <button
+                    key={i}
+                    onClick={() => sendMessage(ex)}
+                    className="w-full text-left text-[11px] px-2 py-1.5 rounded border border-border hover:border-primary hover:bg-primary/5 transition-colors text-foreground"
+                  >
+                    {ex}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {messages.map((m, i) => (
             <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[85%] rounded-lg px-3 py-2 text-xs ${
+              <div className={`max-w-[90%] rounded-lg px-3 py-2 text-xs whitespace-pre-line ${
                 m.role === 'user'
                   ? 'bg-primary text-primary-foreground'
-                  : 'bg-muted text-foreground'
+                  : m.isError
+                    ? 'bg-destructive/10 text-destructive border border-destructive/20'
+                    : 'bg-muted text-foreground'
               }`}>
                 {m.text}
               </div>
@@ -405,19 +517,20 @@ function AIChatPanel({
               </div>
             </div>
           )}
+          <div ref={scrollEndRef} />
         </div>
       </ScrollArea>
 
-      <div className="p-3 border-t flex gap-2">
+      <div className="p-2 border-t flex gap-2">
         <Textarea
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-          placeholder="Спросить ИИ…"
-          className="text-xs resize-none h-8 min-h-0 py-1.5"
-          rows={1}
+          placeholder="Спросить ИИ… (Enter — отправить)"
+          className="text-xs resize-none min-h-0 py-1.5"
+          rows={2}
         />
-        <Button size="sm" onClick={sendMessage} disabled={!input.trim() || loading} className="h-8 w-8 p-0 shrink-0">
+        <Button size="sm" onClick={() => sendMessage()} disabled={!input.trim() || loading} className="h-auto w-8 p-0 shrink-0 self-end mb-0.5">
           <Send className="h-3.5 w-3.5" />
         </Button>
       </div>
