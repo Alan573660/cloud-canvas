@@ -94,6 +94,18 @@ function mapPublishError(raw: string, t: (key: string, fallback: string) => stri
   if (raw.includes('File not found')) {
     return t('import.errorFileNotFound', 'Файл не найден в хранилище. Попробуйте загрузить заново.');
   }
+  // Python worker uses error_types not matching DB constraint (e.g. INVALID_PRICE)
+  if (raw.includes('WORKER_ERROR_TYPE_MISMATCH') || raw.includes('import_errors_error_type_check') || raw.includes('23514')) {
+    return t('import.errorWorkerMismatch',
+      'Файл содержит строки с недопустимыми значениями (например, нулевая цена или некорректный SKU). ' +
+      'Проверьте исходный файл и попробуйте ещё раз. Если проблема повторяется — обратитесь к администратору для обновления воркера.'
+    );
+  }
+  if (raw.includes('Decimal is not JSON serializable')) {
+    return t('import.errorDecimal',
+      'Ошибка сериализации данных на сервере импорта. Обратитесь к администратору для обновления воркера.'
+    );
+  }
   return raw;
 }
 

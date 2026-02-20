@@ -209,7 +209,25 @@ Deno.serve(async (req) => {
     const workerUrl = `${IMPORT_WORKER_URL}/api/import/publish`;
     console.log('[import-publish] Calling worker URL:', workerUrl);
     console.log('[import-publish] Worker payload:', JSON.stringify(workerPayload).slice(0, 500));
-    
+
+    // Valid error_type values allowed by import_errors check constraint
+    const VALID_ERROR_TYPES = new Set([
+      'MISSING_REQUIRED', 'INVALID_TYPE', 'INVALID_VALUE',
+      'NOT_FOUND_REFERENCE', 'DUPLICATE_KEY', 'OUT_OF_RANGE', 'CONFLICT', 'UNKNOWN'
+    ]);
+
+    // Maps worker-specific error types to valid DB enum values
+    function normalizeErrorType(raw: string): string {
+      if (VALID_ERROR_TYPES.has(raw)) return raw;
+      if (raw.includes('PRICE') || raw.includes('AMOUNT')) return 'INVALID_VALUE';
+      if (raw.includes('MISSING') || raw.includes('REQUIRED')) return 'MISSING_REQUIRED';
+      if (raw.includes('TYPE') || raw.includes('FORMAT')) return 'INVALID_TYPE';
+      if (raw.includes('DUPLICATE') || raw.includes('DUP')) return 'DUPLICATE_KEY';
+      if (raw.includes('RANGE')) return 'OUT_OF_RANGE';
+      if (raw.includes('NOT_FOUND') || raw.includes('REFERENCE')) return 'NOT_FOUND_REFERENCE';
+      return 'UNKNOWN';
+    }
+
     fetch(workerUrl, {
       method: 'POST',
       headers: { 
@@ -231,8 +249,19 @@ Deno.serve(async (req) => {
         let errorCode = 'WORKER_ERROR';
         try {
           const errJson = JSON.parse(workerResult);
-          errorMessage = errJson.detail || errJson.error || errorMessage;
-          errorCode = errJson.error_code || errorCode;
+          const rawDetail = errJson.detail || errJson.error || '';
+
+          // Detect import_errors constraint violation: worker is using non-allowed error_type
+          // This happens when Python worker uses INVALID_PRICE, INVALID_SKU, etc.
+          if (rawDetail.includes('import_errors_error_type_check') || rawDetail.includes('23514')) {
+            console.error('[import-publish] Worker used invalid error_type in import_errors (check constraint violation)');
+            errorMessage = 'Ошибка валидации данных: файл содержит строки с невалидными ценами или SKU. ' +
+              'Воркер использует неподдерживаемый тип ошибки. Обновите Python-воркер (normalizeErrorType).';
+            errorCode = 'WORKER_ERROR_TYPE_MISMATCH';
+          } else {
+            errorMessage = rawDetail.slice(0, 400) || errorMessage;
+            errorCode = errJson.error_code || errorCode;
+          }
         } catch {
           errorMessage = workerResult.slice(0, 200) || errorMessage;
         }
@@ -248,7 +277,7 @@ Deno.serve(async (req) => {
           })
           .eq('id', body.import_job_id);
         
-        console.log('[import-publish] Job marked as FAILED due to worker error');
+        console.log('[import-publish] Job marked as FAILED due to worker error, code:', errorCode);
       }
     }).catch(async (err) => {
       console.error('[import-publish] Worker fetch error:', err);
@@ -265,6 +294,9 @@ Deno.serve(async (req) => {
       
       console.log('[import-publish] Job marked as FAILED due to network error');
     });
+
+    // Export normalizeErrorType for potential reuse
+    console.log('[import-publish] normalizeErrorType loaded, VALID_ERROR_TYPES:', [...VALID_ERROR_TYPES].join(', '));
 
     console.log('[import-publish] Worker call dispatched (async), returning immediately');
 

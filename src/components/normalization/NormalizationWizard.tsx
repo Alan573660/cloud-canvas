@@ -442,19 +442,20 @@ function AIChatPanel({
 
       if (result?.ok === false) {
         let errMsg = result.error || 'Ошибка ИИ';
-        if (result.code === 'TIMEOUT') errMsg = 'ИИ не ответил вовремя. Попробуйте ещё раз.';
+        if (result.code === 'TIMEOUT') errMsg = '⏱ ИИ не ответил вовремя. Попробуйте ещё раз.';
         if (result.ai_disabled) errMsg = `ИИ отключён: ${result.ai_skip_reason || 'неизвестная причина'}`;
-        setMessages(prev => [...prev, { role: 'ai', text: errMsg, isError: true }]);
+        console.error('[AIChatPanel] AI error response:', result);
+        setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${errMsg}`, isError: true }]);
         return;
       }
 
       const reply = result?.reply || result?.answer || result?.message || '';
 
-      // Detect "Could not parse command" — give user-friendly guidance
+      // Detect "Could not parse command" or empty reply — give user-friendly guidance
       if (!reply || reply.toLowerCase().includes('could not parse') || reply.toLowerCase().includes('не удалось')) {
         setMessages(prev => [...prev, {
           role: 'ai',
-          text: '⚠️ ИИ-чат работает с командами нормализации. Примеры:\n\n• «Установи покрытие MattPE → Матовый полиэстер»\n• «Установи цвет RR32 → тёмно-коричневый»\n• «Какие товары с неизвестным профилем?»',
+          text: '💡 Примеры команд:\n\n• «Установи покрытие MattPE → Матовый полиэстер»\n• «Установи покрытие Plastisol → Пластизол»\n• «Установи цвет RAL9003 → белый»\n• «Установи цвет RR32 → тёмно-коричневый»\n• «Какие товары с неизвестным профилем?»',
         }]);
         return;
       }
@@ -463,7 +464,10 @@ function AIChatPanel({
     } catch (err) {
       console.error('[AIChatPanel] sendMessage error:', err);
       const errMsg = err instanceof Error ? err.message : 'Ошибка подключения к ИИ';
-      setMessages(prev => [...prev, { role: 'ai', text: errMsg, isError: true }]);
+      const friendlyErr = errMsg.includes('401') ? 'Требуется авторизация. Перезайдите в систему.'
+        : errMsg.includes('403') ? 'Нет доступа к ИИ-чату.'
+        : errMsg.substring(0, 200);
+      setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${friendlyErr}`, isError: true }]);
     } finally {
       setLoading(false);
       setTimeout(() => scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
