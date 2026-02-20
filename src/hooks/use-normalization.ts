@@ -658,44 +658,52 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     }
   }, [organizationId, importJobId, executeDryRun]);
 
-  // ─── Fetch Catalog Items ─────────────────────────────────
+  // ─── Fetch Catalog Items via enricher preview_rows (BigQuery) ────────
 
-  const fetchCatalogItems = useCallback(async (limit = 5000) => {
+  const fetchCatalogItems = useCallback(async (limit = 500) => {
     setCatalogLoading(true);
     try {
-      const { count } = await supabase
-        .from('product_catalog')
-        .select('id', { count: 'exact', head: true })
-        .eq('organization_id', organizationId);
-      
-      setCatalogTotal(count || 0);
+      const { data, error } = await supabase.functions.invoke('import-normalize', {
+        body: {
+          op: 'preview_rows',
+          organization_id: organizationId,
+          import_job_id: importJobId || 'current',
+          limit: Math.min(limit, 500),
+          offset: 0,
+        },
+      });
 
-      const allItems: CatalogRow[] = [];
-      const batchSize = 1000;
-      const maxItems = Math.min(limit, count || 0);
-      
-      for (let offset = 0; offset < maxItems; offset += batchSize) {
-        const { data, error } = await supabase
-          .from('product_catalog')
-          .select('id, title, profile, thickness_mm, coating, notes, width_work_mm, width_full_mm, base_price_rub_m2, sku, extra_params')
-          .eq('organization_id', organizationId)
-          .range(offset, offset + batchSize - 1);
+      if (error) throw new Error(error.message);
 
-        if (error) throw new Error(error.message);
-        if (data) allItems.push(...(data as CatalogRow[]));
-        if (!data || data.length < batchSize) break;
+      const result = data as {
+        ok: boolean;
+        total_count?: number;
+        rows?: CatalogRow[];
+        error?: string;
+      };
+
+      if (!result?.ok) {
+        // If enricher not available or catalog not in BQ yet, return empty silently
+        console.warn('[fetchCatalogItems] preview_rows returned not ok:', result?.error);
+        setCatalogItems([]);
+        setCatalogTotal(0);
+        return [];
       }
 
-      setCatalogItems(allItems);
-      return allItems;
+      const rows = (result.rows || []) as CatalogRow[];
+      setCatalogTotal(result.total_count || rows.length);
+      setCatalogItems(rows);
+      return rows;
     } catch (err) {
       const msg = parseEdgeFunctionError(err);
-      toast({ title: 'Ошибка загрузки каталога', description: msg, variant: 'destructive' });
+      console.warn('[fetchCatalogItems] preview_rows error (enricher may be unavailable):', msg);
+      // Don't show destructive toast for background load — wizard still works with dry_run data
+      setCatalogItems([]);
       return [];
     } finally {
       setCatalogLoading(false);
     }
-  }, [organizationId]);
+  }, [organizationId, importJobId]);
 
   // ─── Reset ────────────────────────────────────────────────
 
