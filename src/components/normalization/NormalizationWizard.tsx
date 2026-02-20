@@ -207,31 +207,28 @@ export function NormalizationWizard({
     importJobId: effectiveJobId,
   });
 
-  // Auto-load catalog items when dialog opens
+  // Auto-load preview when dialog opens (BigQuery via enricher)
   useEffect(() => {
-    if (open && organizationId && norm.catalogItems.length === 0 && !norm.catalogLoading) {
-      norm.fetchCatalogItems(5000);
+    if (open && organizationId && norm.catalogItems.length === 0 && !norm.catalogLoading && !norm.dryRunResult) {
+      norm.fetchCatalogItems(500);
     }
   }, [open, organizationId]);
 
-  // Transform: merge catalog items with patches (patches override catalog rows)
+  // Transform: use dry_run patches_sample as primary source (BigQuery data),
+  // fall back to preview_rows catalog items before first scan.
   const items = useMemo(() => {
-    const patchMap = new Map<string, CanonicalProduct>();
-    (norm.dryRunResult?.patches_sample || []).forEach(p => {
-      patchMap.set(p.id, patchToCanonical(p));
-    });
-
-    // If we have catalog items, use them as base and overlay patches
-    if (norm.catalogItems.length > 0) {
-      return norm.catalogItems.map(row => {
-        const patch = patchMap.get(row.id);
-        if (patch) return patch; // patch overrides
-        return catalogRowToCanonical(row);
-      });
+    // After dry_run: patches_sample contains all enriched items from BQ
+    const patches = norm.dryRunResult?.patches_sample || [];
+    if (patches.length > 0) {
+      return patches.map(patchToCanonical);
     }
 
-    // Fallback: use patches only
-    return Array.from(patchMap.values());
+    // Before dry_run: show preview_rows from enricher (BigQuery)
+    if (norm.catalogItems.length > 0) {
+      return norm.catalogItems.map(catalogRowToCanonical);
+    }
+
+    return [];
   }, [norm.dryRunResult, norm.catalogItems]);
 
   // Transform questions
@@ -432,20 +429,22 @@ export function NormalizationWizard({
             {norm.catalogLoading && (
               <div className="flex items-center gap-1.5 text-muted-foreground">
                 <Loader2 className="h-3 w-3 animate-spin" />
-                <span>{t('normalize.loadingCatalog', 'Загрузка каталога…')}</span>
+                <span>{t('normalize.loadingCatalog', 'Загрузка каталога из BigQuery…')}</span>
               </div>
             )}
-            {norm.catalogTotal > 0 && (
+            {/* Show items count: prefer dry_run patches count, then preview_rows total */}
+            {!norm.catalogLoading && (norm.dryRunResult?.stats?.rows_scanned || norm.catalogTotal > 0) && (
               <span className="text-muted-foreground">
-                {t('normalize.catalogTotal', 'Всего в каталоге: {{count}}', { count: norm.catalogTotal })}
-                {norm.catalogItems.length < norm.catalogTotal && ` (${t('normalize.showing', 'показано')}: ${norm.catalogItems.length})`}
+                {norm.dryRunResult?.stats
+                  ? t('normalize.catalogTotal', 'Всего в каталоге: {{count}}', { count: norm.dryRunResult.stats.rows_scanned })
+                  : t('normalize.catalogTotal', 'Всего в каталоге: {{count}}', { count: norm.catalogTotal })
+                }
               </span>
             )}
 
             {/* Stats from dry_run — human labels */}
             {norm.dryRunResult?.stats && (
               <div className="flex items-center gap-3 text-muted-foreground">
-                <span>{t('normalize.scannedCount', 'Проверено: {{count}}', { count: norm.dryRunResult.stats.rows_scanned })}</span>
                 <span>{t('normalize.fixesFound', 'Найдено исправлений: {{count}}', { count: norm.dryRunResult.stats.patches_ready })}</span>
               </div>
             )}
@@ -453,7 +452,7 @@ export function NormalizationWizard({
             {/* Local progress */}
             {items.length > 0 && (
               <div className="flex items-center gap-2 ml-auto">
-                <CheckCircle2 className="h-3 w-3 text-green-600" />
+                <CheckCircle2 className="h-3 w-3 text-primary" />
                 <span>{readyItems}/{totalItems}</span>
                 <Progress value={progressPercent} className="w-24 h-1.5" />
               </div>
@@ -499,9 +498,9 @@ export function NormalizationWizard({
 
         {/* ─── Questions Banner ─── */}
         {aiQuestions.length > 0 && (
-          <div className="px-6 py-2 border-b bg-purple-50/50 dark:bg-purple-900/10 shrink-0">
+          <div className="px-6 py-2 border-b bg-accent/30 shrink-0">
             <div className="flex items-center gap-2 text-xs">
-              <Cpu className="h-3.5 w-3.5 text-purple-600" />
+              <Cpu className="h-3.5 w-3.5 text-primary" />
               <span className="font-medium">{t('normalize.improvementsFound', 'Найдены улучшения нормализации')}</span>
               <Badge variant="secondary" className="text-xs">{aiQuestions.length}</Badge>
             </div>
