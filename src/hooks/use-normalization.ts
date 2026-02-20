@@ -61,6 +61,9 @@ export interface DryRunResult {
   error?: string;
   code?: string;
   recommended_limit?: number;
+  // AI skip reason: set by backend when AI suggestions are skipped
+  ai_skip_reason?: string;
+  ai_disabled?: boolean;
 }
 
 export type ApplyState = 'IDLE' | 'STARTING' | 'PENDING' | 'RUNNING' | 'DONE' | 'ERROR' | 'POLL_EXCEEDED';

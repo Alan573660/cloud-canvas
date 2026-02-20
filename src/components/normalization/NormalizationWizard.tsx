@@ -157,11 +157,13 @@ function catalogRowToCanonical(row: CatalogRow): CanonicalProduct {
 function mapQuestionType(backendType?: string): AIQuestionType {
   const t = (backendType || '').toUpperCase();
   if (t.includes('WIDTH')) return 'width';
-  if (t.includes('PROFILE')) return 'profile';
-  if (t.includes('CATEGORY') || t.includes('CAT')) return 'category';
-  if (t.includes('COLOR')) return 'color';
-  if (t.includes('COATING')) return 'coating';
   if (t.includes('THICK')) return 'thickness';
+  if (t.includes('PROFILE')) return 'profile';
+  if (t.includes('CATEGORY') || t.includes('CAT') || t.includes('KIND')) return 'category';
+  if (t.includes('COATING') || t.includes('COAT')) return 'coating';
+  if (t.includes('COLOR') || t.includes('COLOUR') || t.includes('RAL') || t.includes('RR')) return 'color';
+  // Log unknown types for debugging instead of silently falling back
+  console.warn('[mapQuestionType] Unknown question type from backend:', backendType, '— treating as "color"');
   return 'color';
 }
 
@@ -320,18 +322,54 @@ function AIChatPanel({
 
     try {
       const { supabase } = await import('@/integrations/supabase/client');
-      const { data } = await supabase.functions.invoke('import-normalize', {
-        body: {
-          op: 'chat',
-          organization_id: organizationId,
-          import_job_id: importJobId || 'current',
-          message: msg,
-        },
+      const payload = {
+        op: 'chat',
+        organization_id: organizationId,
+        import_job_id: importJobId || 'current',
+        message: msg,
+        // context passed from parent if available (activeGroup)
+      };
+      console.log('[AIChatPanel] -> invoke import-normalize/chat', payload);
+
+      const { data, error: invokeError } = await supabase.functions.invoke('import-normalize', {
+        body: payload,
       });
-      const reply = (data as { reply?: string; answer?: string })?.reply || (data as { reply?: string; answer?: string })?.answer || 'Нет ответа';
+
+      console.log('[AIChatPanel] <- response:', data, 'invokeError:', invokeError);
+
+      if (invokeError) throw new Error(invokeError.message);
+
+      const result = data as {
+        ok?: boolean;
+        reply?: string;
+        answer?: string;
+        message?: string;
+        error?: string;
+        code?: string;
+        ai_skip_reason?: string;
+        ai_disabled?: boolean;
+      };
+
+      // Handle { ok: false, error: ... } with HTTP 200
+      if (result?.ok === false) {
+        let errMsg = result.error || 'Ошибка ИИ';
+        if (result.code === 'TIMEOUT') errMsg = 'ИИ не ответил вовремя. Попробуйте ещё раз.';
+        if (result.ai_disabled) errMsg = `ИИ отключён. Причина: ${result.ai_skip_reason || 'не указана'}`;
+        setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${errMsg}` }]);
+        return;
+      }
+
+      // Show ai_skip_reason as info if present even on ok:true
+      if (result?.ai_skip_reason) {
+        console.info('[AIChatPanel] ai_skip_reason:', result.ai_skip_reason);
+      }
+
+      const reply = result?.reply || result?.answer || result?.message || 'Нет ответа от ИИ';
       setMessages(prev => [...prev, { role: 'ai', text: reply }]);
-    } catch {
-      setMessages(prev => [...prev, { role: 'ai', text: 'Ошибка подключения к ИИ' }]);
+    } catch (err) {
+      console.error('[AIChatPanel] sendMessage error:', err);
+      const errMsg = err instanceof Error ? err.message : 'Ошибка подключения к ИИ';
+      setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${errMsg}` }]);
     } finally {
       setLoading(false);
       setTimeout(() => scrollRef.current?.scrollTo({ top: 9999, behavior: 'smooth' }), 100);
@@ -493,13 +531,35 @@ export function NormalizationWizard({
 
   const norm = useNormalization({ organizationId, importJobId: effectiveJobId });
 
-  // Auto-load preview when dialog opens
+  // Auto-load: on open, run dashboard + preview_rows, then auto-scan
+  const autoStartedRef = useRef(false);
   useEffect(() => {
-    if (open && organizationId && norm.catalogItems.length === 0 && !norm.catalogLoading && !norm.dryRunResult) {
-      norm.fetchCatalogItems(500);
+    if (!open || !organizationId) return;
+    if (autoStartedRef.current) return;
+    autoStartedRef.current = true;
+
+    console.log('[NormalizationWizard] Opening, auto-loading dashboard + preview_rows...');
+
+    // 1. Load dashboard KPIs
+    norm.fetchDashboard(effectiveJobId);
+
+    // 2. Load preview rows (BigQuery data) for immediate display
+    norm.fetchCatalogItems(500);
+
+    // 3. If we have an import job, also auto-run dry_run to get questions
+    if (effectiveJobId) {
+      console.log('[NormalizationWizard] Auto-triggering dry_run for job:', effectiveJobId);
+      norm.executeDryRun({ aiSuggest: true, limit: 2000, onlyWhereNull: false });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, organizationId]);
+
+  // Reset auto-start flag when dialog closes
+  useEffect(() => {
+    if (!open) {
+      autoStartedRef.current = false;
+    }
+  }, [open]);
 
   // Build items from dry_run patches or preview_rows
   const items = useMemo(() => {
@@ -951,6 +1011,20 @@ export function NormalizationWizard({
                         <CheckCircle2 className="h-8 w-8 mx-auto mb-3 text-primary" />
                         <p className="text-xs font-semibold">Все вопросы решены!</p>
                         <p className="text-xs text-muted-foreground mt-1">Нажмите «Применить исправления»</p>
+                      </div>
+                    )}
+
+                    {/* ai_skip_reason banner — show if backend reported AI was skipped */}
+                    {norm.dryRunResult && (norm.dryRunResult as unknown as { ai_skip_reason?: string; ai_disabled?: boolean }).ai_skip_reason && (
+                      <div className="flex items-start gap-2 text-xs text-muted-foreground border border-border rounded-md p-2 bg-muted/30">
+                        <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-warning" />
+                        <div>
+                          <span className="font-medium text-foreground">ИИ-анализ пропущен</span>
+                          <br />
+                          Причина: <code className="text-[10px]">{(norm.dryRunResult as unknown as { ai_skip_reason?: string }).ai_skip_reason}</code>
+                          <br />
+                          <span className="opacity-70">Используются только детерминированные правила.</span>
+                        </div>
                       </div>
                     )}
 
