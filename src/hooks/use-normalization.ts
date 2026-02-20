@@ -84,6 +84,65 @@ export interface QualityMetrics {
   [key: string]: number;
 }
 
+// ─── Dashboard types from /api/enrich/dashboard ──────────────
+
+export interface DashboardProgress {
+  total: number;
+  ready: number;
+  needs_attention: number;
+  ready_pct: number;
+}
+
+export interface DashboardQuestionCard {
+  type: string;
+  label: string;
+  count: number;
+  examples?: string[];
+  priority?: number;
+}
+
+export interface DashboardResult {
+  ok: boolean;
+  organization_id?: string;
+  import_job_id?: string;
+  progress?: DashboardProgress;
+  question_cards?: DashboardQuestionCard[];
+  questions?: BackendQuestion[];
+  tree?: Array<{
+    sheet_kind: string;
+    count: number;
+    profiles?: Array<{ profile: string; count: number }>;
+  }>;
+  error?: string;
+}
+
+// ─── Tree types from /api/enrich/tree ────────────────────────
+
+export interface TreeNode {
+  cat_tree: string;
+  cat_name: string;
+  parts: string[];
+  count: number;
+}
+
+export interface TreeResult {
+  ok: boolean;
+  organization_id?: string;
+  nodes?: TreeNode[];
+  error?: string;
+}
+
+// ─── Confirm types ───────────────────────────────────────────
+
+export interface ConfirmResult {
+  ok: boolean;
+  type?: string;
+  next_action?: string;
+  affected_clusters?: string[];
+  stats?: { updates: number; elapsed_ms: number };
+  error?: string;
+}
+
 export interface ConfirmedSettings {
   widths_selected?: Record<string, { work_mm: number; full_mm: number }>;
   profile_aliases?: Record<string, string>;
@@ -145,6 +204,17 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   // Stats state
   const [statsLoading, setStatsLoading] = useState(false);
   const [serverStats, setServerStats] = useState<QualityMetrics | null>(null);
+
+  // Dashboard state
+  const [dashboardLoading, setDashboardLoading] = useState(false);
+  const [dashboardResult, setDashboardResult] = useState<DashboardResult | null>(null);
+
+  // Tree state
+  const [treeLoading, setTreeLoading] = useState(false);
+  const [treeResult, setTreeResult] = useState<TreeResult | null>(null);
+
+  // Confirm state
+  const [confirmingType, setConfirmingType] = useState<string | null>(null);
 
   // Settings save
   const [savingSettings, setSavingSettings] = useState(false);
@@ -285,7 +355,96 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     }
   }, [organizationId, importJobId]);
 
+  // ─── Fetch Dashboard ──────────────────────────────────────
+
+  const fetchDashboard = useCallback(async (jobId?: string) => {
+    setDashboardLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('import-normalize', {
+        body: {
+          op: 'dashboard',
+          organization_id: organizationId,
+          import_job_id: jobId || importJobId || 'current',
+        },
+      });
+
+      if (error) throw new Error(error.message);
+
+      const result = data as DashboardResult;
+      if (!result?.ok) throw new Error(parseEdgeFunctionError(null, result));
+
+      setDashboardResult(result);
+      return result;
+    } catch (err) {
+      const msg = parseEdgeFunctionError(err);
+      toast({ title: 'Ошибка загрузки дашборда', description: msg, variant: 'destructive' });
+      return null;
+    } finally {
+      setDashboardLoading(false);
+    }
+  }, [organizationId, importJobId]);
+
+  // ─── Fetch Tree ───────────────────────────────────────────
+
+  const fetchTree = useCallback(async () => {
+    setTreeLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('import-normalize', {
+        body: {
+          op: 'tree',
+          organization_id: organizationId,
+        },
+      });
+
+      if (error) throw new Error(error.message);
+
+      const result = data as TreeResult;
+      if (!result?.ok) throw new Error(parseEdgeFunctionError(null, result));
+
+      setTreeResult(result);
+      return result;
+    } catch (err) {
+      const msg = parseEdgeFunctionError(err);
+      toast({ title: 'Ошибка загрузки дерева', description: msg, variant: 'destructive' });
+      return null;
+    } finally {
+      setTreeLoading(false);
+    }
+  }, [organizationId]);
+
+  // ─── Confirm Question ─────────────────────────────────────
+
+  const confirmQuestion = useCallback(async (type: string, payload: Record<string, unknown>, jobId?: string) => {
+    setConfirmingType(type);
+    try {
+      const { data, error } = await supabase.functions.invoke('import-normalize', {
+        body: {
+          op: 'confirm',
+          organization_id: organizationId,
+          import_job_id: jobId || importJobId || 'current',
+          type,
+          payload,
+        },
+      });
+
+      if (error) throw new Error(error.message);
+
+      const result = data as ConfirmResult;
+      if (!result?.ok) throw new Error(parseEdgeFunctionError(null, result));
+
+      toast({ title: 'Правило сохранено', description: `${type}: затронуто ${result.affected_clusters?.length || 0} кластеров` });
+      return result;
+    } catch (err) {
+      const msg = parseEdgeFunctionError(err);
+      toast({ title: 'Ошибка подтверждения', description: msg, variant: 'destructive' });
+      return null;
+    } finally {
+      setConfirmingType(null);
+    }
+  }, [organizationId, importJobId]);
+
   // ─── Apply ────────────────────────────────────────────────
+
 
   const stopPolling = useCallback(() => {
     if (pollingRef.current) {
@@ -550,6 +709,8 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setApplyReport(null);
     setApplyError(null);
     setServerStats(null);
+    setDashboardResult(null);
+    setTreeResult(null);
     setCatalogItems([]);
     setCatalogTotal(0);
     answerLocksRef.current.clear();
@@ -583,6 +744,20 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     serverStats,
     fetchStats,
 
+    // Dashboard
+    dashboardLoading,
+    dashboardResult,
+    fetchDashboard,
+
+    // Tree
+    treeLoading,
+    treeResult,
+    fetchTree,
+
+    // Confirm question
+    confirmingType,
+    confirmQuestion,
+
     // Settings
     savingSettings,
     saveConfirmedSettings,
@@ -595,3 +770,4 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     reset,
   };
 }
+

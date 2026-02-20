@@ -95,7 +95,26 @@ interface StatsRequest {
   import_job_id?: string;
 }
 
-type NormalizeRequest = DryRunRequest | ApplyRequest | ApplyStatusRequest | PreviewRowsRequest | ChatRequest | AnswerQuestionRequest | StatsRequest;
+interface DashboardRequest {
+  op: 'dashboard';
+  organization_id: string;
+  import_job_id?: string;
+}
+
+interface TreeRequest {
+  op: 'tree';
+  organization_id: string;
+}
+
+interface ConfirmRequest {
+  op: 'confirm';
+  organization_id: string;
+  import_job_id: string;
+  type: string;
+  payload: Record<string, unknown>;
+}
+
+type NormalizeRequest = DryRunRequest | ApplyRequest | ApplyStatusRequest | PreviewRowsRequest | ChatRequest | AnswerQuestionRequest | StatsRequest | DashboardRequest | TreeRequest | ConfirmRequest;
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -542,6 +561,122 @@ Deno.serve(async (req) => {
         const d = result.data as Record<string, unknown>;
         return new Response(
           JSON.stringify({ ok: false, error: d.error || d.detail || 'Stats failed' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // =========================================
+    // Handle dashboard — KPI metrics + question cards
+    // =========================================
+    if (op === 'dashboard') {
+      const dashBody = body as DashboardRequest;
+      const dashPayload = {
+        organization_id,
+        import_job_id: dashBody.import_job_id || 'current',
+      };
+
+      console.log(`[import-normalize] dashboard: org=${organization_id}`);
+
+      const result = await callEnricher(`${enricherUrl}/api/enrich/dashboard`, 'POST', dashPayload, 30000);
+
+      if (result.timeout) {
+        return new Response(
+          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Dashboard request timed out.' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      if (result.data === null) {
+        return enricherErrorResponse(result.status, result.rawText, 'Dashboard returned non-JSON response');
+      }
+      if (!result.ok) {
+        const d = result.data as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({ ok: false, error: d.error || d.detail || 'Dashboard failed' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // =========================================
+    // Handle tree — category tree navigation
+    // =========================================
+    if (op === 'tree') {
+      const treeEndpoint = `${enricherUrl}/api/enrich/tree?organization_id=${encodeURIComponent(organization_id)}`;
+
+      console.log(`[import-normalize] tree: org=${organization_id}`);
+
+      const result = await callEnricher(treeEndpoint, 'GET', undefined, 20000);
+
+      if (result.timeout) {
+        return new Response(
+          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Tree request timed out.' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      if (result.data === null) {
+        return enricherErrorResponse(result.status, result.rawText, 'Tree returned non-JSON response');
+      }
+      if (!result.ok) {
+        const d = result.data as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({ ok: false, error: d.error || d.detail || 'Tree failed' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // =========================================
+    // Handle confirm — apply confirmed settings by type
+    // =========================================
+    if (op === 'confirm') {
+      const confirmBody = body as ConfirmRequest;
+      if (!confirmBody.type || !confirmBody.payload) {
+        return new Response(
+          JSON.stringify({ ok: false, error: 'Missing type or payload for confirm' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const confirmPayload = {
+        organization_id,
+        import_job_id: confirmBody.import_job_id || 'current',
+        type: confirmBody.type,
+        payload: confirmBody.payload,
+      };
+
+      console.log(`[import-normalize] confirm: type=${confirmBody.type}, org=${organization_id}`);
+
+      const result = await callEnricher(`${enricherUrl}/api/enrich/confirm`, 'POST', confirmPayload, 30000);
+
+      if (result.timeout) {
+        return new Response(
+          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Confirm request timed out.' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      if (result.data === null) {
+        return enricherErrorResponse(result.status, result.rawText, 'Confirm returned non-JSON response');
+      }
+      if (!result.ok) {
+        const d = result.data as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({ ok: false, error: d.error || d.detail || 'Confirm failed' }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
