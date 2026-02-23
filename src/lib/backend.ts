@@ -13,12 +13,14 @@ export const STORAGE_BUCKET = 'imports' as const;
 
 // Edge Functions gateway endpoints
 export const ImportGatewayApi = {
+  parse: 'import-parse',
   validate: 'import-validate',
   publish: 'import-publish',
+  normalize: 'import-normalize',
 } as const;
 
 // Supported file formats for import
-export type FileFormat = 'csv' | 'xlsx' | 'pdf' | 'jsonl' | 'parquet';
+export type FileFormat = 'csv' | 'xlsx' | 'xls' | 'pdf' | 'jsonl' | 'parquet';
 
 /**
  * Get file format from file extension
@@ -27,6 +29,7 @@ export function getFileFormat(fileName: string): FileFormat | null {
   const lower = fileName.toLowerCase();
   if (lower.endsWith('.csv')) return 'csv';
   if (lower.endsWith('.xlsx')) return 'xlsx';
+  if (lower.endsWith('.xls')) return 'xls';
   if (lower.endsWith('.pdf')) return 'pdf';
   if (lower.endsWith('.jsonl')) return 'jsonl';
   if (lower.endsWith('.parquet')) return 'parquet';
@@ -37,7 +40,7 @@ export function getFileFormat(fileName: string): FileFormat | null {
  * Check if format is currently supported by the worker
  */
 export function isFormatSupported(fmt: FileFormat): boolean {
-  return fmt === 'csv' || fmt === 'xlsx' || fmt === 'pdf'; // остальные позже
+  return fmt === 'csv' || fmt === 'xlsx' || fmt === 'xls' || fmt === 'pdf';
 }
 
 /**
