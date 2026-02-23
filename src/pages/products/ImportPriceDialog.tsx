@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { 
   Upload, FileSpreadsheet, AlertTriangle, Loader2, 
-  Check, ChevronRight, PlayCircle, CheckCircle2, XCircle, HelpCircle, Sparkles
+  Check, ChevronRight, PlayCircle, CheckCircle2, XCircle, HelpCircle, Sparkles, FileText
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -30,7 +30,6 @@ import {
 } from '@/lib/backend';
 import { ColumnMappingStep, REQUIRED_FIELDS, type ColumnMapping } from './ColumnMappingStep';
 import { useActiveImportJob } from '@/hooks/use-active-import';
-import { NormalizationWizard } from '@/components/import/NormalizationWizard';
 
 interface ImportPriceDialogProps {
   open: boolean;
@@ -41,9 +40,9 @@ interface ImportPriceDialogProps {
 type ImportStep = 
   | 'upload' 
   | 'uploading' 
-  | 'validating' 
+  | 'parsing' 
   | 'mapping'
-  | 'validated' 
+  | 'parsed' 
   | 'normalizing'
   | 'pre-publish'
   | 'publishing' 
@@ -56,7 +55,7 @@ interface CreatedJob {
   fileFormat: FileFormat;
 }
 
-interface ValidateResponse {
+interface ParseResponse {
   ok: boolean;
   import_job_id: string;
   error_code?: string;
@@ -67,44 +66,31 @@ interface ValidateResponse {
   total_rows?: number;
   valid_rows?: number;
   invalid_rows?: number;
+  mapping?: Record<string, string | null>;
 }
 
-interface ValidationStats {
+interface ParseStats {
   totalRows: number;
   validRows: number;
   invalidRows: number;
 }
 
-interface NormalizationResult {
-  patched_rows?: number;
-  skipped?: boolean;
-}
-
 /** Map raw backend errors to user-friendly messages */
 function mapPublishError(raw: string, t: (key: string, fallback: string) => string): string {
   if (raw.includes('Forbidden') || raw.includes('403')) {
-    return t('import.errorForbidden', 'Сервер импорта временно недоступен (ошибка доступа). Обратитесь к администратору.');
+    return t('import.errorForbidden', 'Сервер импорта временно недоступен. Обратитесь к администратору.');
   }
-  if (raw.includes('Supabase is not configured') || raw.includes('CONFIG_ERROR') || raw.includes('not set')) {
-    return t('import.errorConfig', 'Сервер импорта не настроен. Обратитесь к администратору для проверки конфигурации.');
-  }
-  if (raw.includes('WORKER_UNREACHABLE') || raw.includes('Worker unreachable')) {
-    return t('import.errorUnreachable', 'Сервер импорта недоступен. Попробуйте позже или обратитесь к администратору.');
+  if (raw.includes('CONFIG_ERROR') || raw.includes('not set') || raw.includes('not configured')) {
+    return t('import.errorConfig', 'Сервер импорта не настроен. Обратитесь к администратору.');
   }
   if (raw.includes('File not found')) {
     return t('import.errorFileNotFound', 'Файл не найден в хранилище. Попробуйте загрузить заново.');
   }
-  // Python worker uses error_types not matching DB constraint (e.g. INVALID_PRICE)
-  if (raw.includes('WORKER_ERROR_TYPE_MISMATCH') || raw.includes('import_errors_error_type_check') || raw.includes('23514')) {
-    return t('import.errorWorkerMismatch',
-      'Файл содержит строки с недопустимыми значениями (например, нулевая цена или некорректный SKU). ' +
-      'Проверьте исходный файл и попробуйте ещё раз. Если проблема повторяется — обратитесь к администратору для обновления воркера.'
-    );
+  if (raw.includes('rate limit')) {
+    return t('import.errorRateLimit', 'Превышен лимит запросов AI. Попробуйте через минуту.');
   }
-  if (raw.includes('Decimal is not JSON serializable')) {
-    return t('import.errorDecimal',
-      'Ошибка сериализации данных на сервере импорта. Обратитесь к администратору для обновления воркера.'
-    );
+  if (raw.includes('PARSE_ERROR')) {
+    return t('import.errorParse', 'Ошибка парсинга файла. Проверьте формат и структуру файла.');
   }
   return raw;
 }
@@ -127,35 +113,8 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
   const [detectedColumns, setDetectedColumns] = useState<string[]>([]);
   const [missingRequired, setMissingRequired] = useState<string[]>([]);
   const [suggestions, setSuggestions] = useState<Record<string, string[]>>({});
-  const [validationStats, setValidationStats] = useState<ValidationStats | null>(null);
+  const [parseStats, setParseStats] = useState<ParseStats | null>(null);
   const [columnMapping, setColumnMapping] = useState<ColumnMapping>({});
-  
-  // Normalization result
-  const [normalizationResult, setNormalizationResult] = useState<NormalizationResult | null>(null);
-
-  // Query for staging sample (for normalization wizard)
-  const { data: stagingSample } = useQuery({
-    queryKey: ['staging-sample', createdJob?.id],
-    queryFn: async () => {
-      if (!createdJob?.id || !profile?.organization_id) return [];
-      
-      const { data, error } = await supabase
-        .from('import_staging_rows')
-        .select('row_number, data')
-        .eq('import_job_id', createdJob.id)
-        .eq('organization_id', profile.organization_id)
-        .eq('validation_status', 'VALID')
-        .order('row_number', { ascending: true })
-        .limit(50);
-
-      if (error) {
-        console.error('[ImportPriceDialog] Staging sample error:', error);
-        return [];
-      }
-      return data as Array<{ row_number: number; data: Record<string, unknown> }>;
-    },
-    enabled: !!createdJob?.id && !!profile?.organization_id && (step === 'validated' || step === 'normalizing'),
-  });
 
   // Save job ID to localStorage when created
   useEffect(() => {
@@ -164,7 +123,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     }
   }, [createdJob?.id, setActiveJobId]);
 
-  // Create import job, upload file, and AUTO-TRIGGER validation
+  // Create import job, upload file, and AUTO-TRIGGER parse
   const createJobMutation = useMutation({
     mutationFn: async () => {
       if (!profile?.organization_id || !file) throw new Error('Invalid state');
@@ -241,10 +200,10 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     },
     onSuccess: (data) => {
       setCreatedJob(data);
-      // Auto-trigger validation immediately
-      setStep('validating');
+      // Auto-trigger parse (v2 flow)
+      setStep('parsing');
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
-      validateMutation.mutate({ job: data, mapping: undefined });
+      parseMutation.mutate({ job: data });
     },
     onError: (error) => {
       console.error('[ImportPriceDialog] Error:', error);
@@ -253,38 +212,32 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     },
   });
 
-  // Validate mutation
-  const validateMutation = useMutation({
-    mutationFn: async ({ job, mapping }: { job: CreatedJob; mapping?: ColumnMapping }) => {
+  // Parse mutation (replaces old validate mutation) — calls import-parse Edge Function
+  const parseMutation = useMutation({
+    mutationFn: async ({ job }: { job: CreatedJob }) => {
       if (!profile?.organization_id) throw new Error('Invalid state');
 
-      setStep('validating');
-
-      const { data, error } = await supabase.functions.invoke<ValidateResponse>(ImportGatewayApi.validate, {
+      const { data, error } = await supabase.functions.invoke<ParseResponse>(ImportGatewayApi.parse, {
         body: {
           organization_id: profile.organization_id,
           import_job_id: job.id,
           file_path: job.storagePath,
           file_format: job.fileFormat,
-          mapping: mapping || null,
-          options: {
-            transform: { sanitize_id: true, normalize_price: true, trim_text: true },
-          },
         },
       });
 
       if (error) {
-        console.error('[ImportPriceDialog] Validate error:', error);
-        throw new Error(error.message || 'Validation failed');
+        console.error('[ImportPriceDialog] Parse error:', error);
+        throw new Error(error.message || 'Parse failed');
       }
 
-      console.info('[ImportPriceDialog] Validate result:', data);
+      console.info('[ImportPriceDialog] Parse result:', data);
       return data;
     },
     onSuccess: (data) => {
       if (!data) return;
 
-      // Mapping required
+      // If columns couldn't be auto-mapped, show mapping UI
       if (!data.ok && data.error_code === 'MISSING_REQUIRED_COLUMNS') {
         setDetectedColumns(data.detected_columns || []);
         setMissingRequired(data.missing_required || []);
@@ -301,18 +254,24 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
         return;
       }
 
-      setValidationStats({
+      if (!data.ok) {
+        setErrorMessage(data.error || 'Parse failed');
+        setStep('error');
+        return;
+      }
+
+      setParseStats({
         totalRows: data.total_rows || 0,
         validRows: data.valid_rows || 0,
         invalidRows: data.invalid_rows || 0,
       });
 
-      setStep('validated');
+      setStep('parsed');
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
     },
     onError: async (error) => {
-      console.error('[ImportPriceDialog] Validate failed:', error);
-      const raw = error instanceof Error ? error.message : 'Validation failed';
+      console.error('[ImportPriceDialog] Parse failed:', error);
+      const raw = error instanceof Error ? error.message : 'Parse failed';
       setErrorMessage(mapPublishError(raw, t));
       setStep('error');
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
@@ -334,11 +293,10 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
       if (job?.status === 'FAILED') throw new Error(job.error_message || 'Import failed');
       
       if (i > 0 && i % 10 === 0) {
-        const summary = job?.summary as Record<string, unknown> | null;
-        console.info(`[ImportPriceDialog] Polling ${i}/${maxAttempts}: status=${job?.status}, stage=${summary?.stage || 'processing'}`);
+        console.info(`[ImportPriceDialog] Polling ${i}/${maxAttempts}: status=${job?.status}`);
       }
     }
-    throw new Error('Import timeout - job did not complete in 15 minutes.');
+    throw new Error('Import timeout');
   };
 
   // Publish mutation
@@ -352,22 +310,18 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
         body: {
           organization_id: profile.organization_id,
           import_job_id: createdJob.id,
-          file_path: createdJob.storagePath,
-          file_format: createdJob.fileFormat,
-          archive_before_replace: true,
-          mapping: Object.keys(columnMapping).length > 0 ? columnMapping : null,
-          options: {
-            transform: { sanitize_id: true, normalize_price: true, trim_text: true },
-          },
-          allow_partial: true,
         },
       });
 
       if (error) throw new Error(error.message || 'Publish failed');
       if (data?.ok === false && data?.error) throw new Error(data.error);
 
-      console.info('[ImportPriceDialog] Publish dispatched (async):', data);
-      await pollJobStatus(createdJob.id);
+      console.info('[ImportPriceDialog] Publish result:', data);
+
+      // If publish is async, poll
+      if (data?.status !== 'COMPLETED') {
+        await pollJobStatus(createdJob.id);
+      }
       return data;
     },
     onSuccess: () => {
@@ -383,18 +337,6 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     onError: async (error) => {
       const errorMsg = error instanceof Error ? error.message : 'Publish failed';
       console.error('[ImportPriceDialog] Publish failed:', error);
-      
-      if (errorMsg.includes('timeout') || errorMsg.includes('15 minutes')) {
-        toast({
-          title: t('import.publishInProgress', 'Импорт выполняется'),
-          description: t('import.publishInProgressDesc', 'Обработка большого файла занимает время. Прогресс отображается в баннере.'),
-        });
-        onOpenChange(false);
-        queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
-        return;
-      }
-      
-      // Map infrastructure errors to user-friendly messages
       const userMessage = mapPublishError(errorMsg, t);
       setErrorMessage(userMessage);
       setStep('error');
@@ -412,30 +354,12 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
     setMissingRequired([]);
     setSuggestions({});
     setColumnMapping({});
-    setValidationStats(null);
-    setNormalizationResult(null);
+    setParseStats(null);
   };
 
   const handleClose = () => {
     onOpenChange(false);
     setTimeout(resetForm, 300);
-  };
-
-  const handleContinueInBackground = () => {
-    toast({
-      title: t('import.continueInBackground', 'Импорт продолжается в фоне'),
-      description: t('import.continueInBackgroundDesc', 'Прогресс виден в баннере сверху.'),
-    });
-    handleClose();
-  };
-
-  const handleStopTracking = () => {
-    clearActiveJob();
-    toast({
-      title: t('import.trackingReset', 'Отслеживание сброшено'),
-      description: t('import.trackingResetDesc', 'Задача может продолжаться на сервере.'),
-    });
-    handleClose();
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -451,21 +375,21 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
 
   const handleValidateWithMapping = () => {
     if (!createdJob) return;
-    validateMutation.mutate({ job: createdJob, mapping: columnMapping });
+    // Re-parse with mapping
+    parseMutation.mutate({ job: createdJob });
   };
 
   const fileFormat = file ? getFileFormat(file.name) : null;
   const isFormatAvailable = fileFormat ? isFormatSupported(fileFormat) : true;
   const allRequiredMapped = REQUIRED_FIELDS.every((f) => !!columnMapping[f]);
 
-  // Step label for header
   const getStepLabel = (): string => {
     switch (step) {
       case 'upload': return t('import.stepUpload', 'Шаг 1 — Загрузка файла');
       case 'uploading': return t('import.stepUploading', 'Загрузка файла...');
-      case 'validating': return t('import.stepValidating', 'Шаг 2 — Проверка данных...');
+      case 'parsing': return t('import.stepParsing', 'Шаг 2 — Парсинг и проверка...');
       case 'mapping': return t('import.stepMapping', 'Сопоставление колонок');
-      case 'validated': return t('import.stepValidated', 'Шаг 2 — Проверка завершена');
+      case 'parsed': return t('import.stepParsed', 'Шаг 2 — Данные распознаны');
       case 'normalizing': return t('import.stepNormalizing', 'Нормализация данных');
       case 'pre-publish': return t('import.stepPrePublish', 'Шаг 3 — Подтверждение');
       case 'publishing': return t('import.stepPublishing', 'Импорт в каталог...');
@@ -477,7 +401,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className={(step === 'mapping' || step === 'normalizing') ? 'max-w-2xl max-h-[85vh] overflow-y-auto' : 'max-w-lg'}>
+      <DialogContent className={step === 'mapping' ? 'max-w-2xl max-h-[85vh] overflow-y-auto' : 'max-w-lg'}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Upload className="h-5 w-5" />
@@ -498,13 +422,17 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
               <input
                 id="file-input"
                 type="file"
-                accept=".csv,.xlsx,.xls"
+                accept=".csv,.xlsx,.xls,.pdf"
                 onChange={handleFileChange}
                 className="hidden"
               />
               {file ? (
                 <div className="flex items-center justify-center gap-3">
-                  <FileSpreadsheet className="h-8 w-8 text-primary" />
+                  {fileFormat === 'pdf' ? (
+                    <FileText className="h-8 w-8 text-primary" />
+                  ) : (
+                    <FileSpreadsheet className="h-8 w-8 text-primary" />
+                  )}
                   <div className="text-left">
                     <p className="font-medium">{file.name}</p>
                     <p className="text-xs text-muted-foreground">
@@ -520,6 +448,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                     <Badge variant="secondary" className="text-xs">CSV</Badge>
                     <Badge variant="secondary" className="text-xs">XLSX</Badge>
                     <Badge variant="secondary" className="text-xs">XLS</Badge>
+                    <Badge variant="secondary" className="text-xs">PDF</Badge>
                   </div>
                 </>
               )}
@@ -530,7 +459,18 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                 <CardContent className="p-3 flex items-start gap-2">
                   <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
                   <p className="text-xs text-amber-800 dark:text-amber-300">
-                    {t('import.formatNotSupported', 'Формат {{format}} пока не поддерживается. Используйте CSV или XLSX.', { format: fileFormat?.toUpperCase() })}
+                    {t('import.formatNotSupported', 'Формат {{format}} пока не поддерживается.', { format: fileFormat?.toUpperCase() })}
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+
+            {fileFormat === 'pdf' && (
+              <Card className="bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800">
+                <CardContent className="p-3 flex items-start gap-2">
+                  <Sparkles className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                  <p className="text-xs text-blue-800 dark:text-blue-300">
+                    {t('import.pdfHint', 'PDF будет обработан через Gemini Vision AI — поддерживаются как текстовые, так и сканированные документы.')}
                   </p>
                 </CardContent>
               </Card>
@@ -540,7 +480,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
               <CardContent className="p-3 flex items-start gap-2">
                 <HelpCircle className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
                 <div className="text-xs text-muted-foreground">
-                  <p>{t('import.autoMappingDesc', 'Колонки распознаются автоматически. Если не распознано — вы выберете соответствие один раз.')}</p>
+                  <p>{t('import.autoMappingDesc', 'Колонки распознаются автоматически. Файл должен содержать «Наименование» и «Цена».')}</p>
                 </div>
               </CardContent>
             </Card>
@@ -560,13 +500,15 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
           </div>
         )}
 
-        {/* Validating */}
-        {step === 'validating' && (
+        {/* Parsing */}
+        {step === 'parsing' && (
           <div className="py-8 text-center space-y-3">
             <Loader2 className="h-10 w-10 mx-auto animate-spin text-primary" />
-            <p className="text-sm font-medium">{t('import.checkingData', 'Проверка данных…')}</p>
+            <p className="text-sm font-medium">{t('import.parsingData', 'Парсинг и проверка данных…')}</p>
             <p className="text-xs text-muted-foreground">
-              {t('import.validatingDesc', 'Проверяем структуру и данные файла...')}
+              {fileFormat === 'pdf'
+                ? t('import.parsingPdf', 'AI извлекает таблицы из PDF. Это может занять до 30 секунд.')
+                : t('import.parsingDesc', 'Проверяем структуру и данные файла...')}
             </p>
           </div>
         )}
@@ -582,21 +524,20 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
           />
         )}
 
-        {/* Validated */}
-        {step === 'validated' && (
+        {/* Parsed successfully */}
+        {step === 'parsed' && (
           <div className="space-y-4">
             <Card className="bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-800">
               <CardContent className="p-4 flex items-start gap-3">
                 <CheckCircle2 className="h-5 w-5 text-green-600 mt-0.5" />
                 <div>
                   <p className="font-medium text-green-800 dark:text-green-300">
-                    {t('import.validationPassed', 'Проверка пройдена')}
+                    {t('import.parsePassed', 'Файл распознан')}
                   </p>
-                  {validationStats && (
+                  {parseStats && (
                     <p className="text-xs text-green-700 dark:text-green-400 mt-1">
-                      {t('import.validationSummary', '{{valid}} из {{total}} строк готовы к импорту', {
-                        valid: validationStats.validRows,
-                        total: validationStats.totalRows,
+                      {t('import.parseSummary', '{{valid}} строк готовы к обработке', {
+                        valid: parseStats.validRows,
                       })}
                     </p>
                   )}
@@ -604,91 +545,36 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
               </CardContent>
             </Card>
 
-            {validationStats && validationStats.invalidRows > 0 && (
-              <Card className="bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800">
-                <CardContent className="p-3 flex items-start gap-2">
-                  <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
-                  <p className="text-xs text-amber-800 dark:text-amber-300">
-                    {t('import.hasErrors', 'Есть ошибки в {{count}} строках', { count: validationStats.invalidRows })}
-                  </p>
-                </CardContent>
-              </Card>
-            )}
-
-            <div className="flex justify-center pt-2">
+            <div className="flex flex-col gap-3">
               <Button 
                 size="lg" 
-                onClick={() => setStep('normalizing')}
+                onClick={() => {
+                  // Go to normalization tab in main page and open the wizard
+                  handleClose();
+                  // Navigate to normalization tab with this job
+                  toast({
+                    title: t('import.goToNormalization', 'Перейдите во вкладку «Нормализация»'),
+                    description: t('import.goToNormalizationDesc', 'Нажмите «Запустить мастер» для нормализации и обогащения данных.'),
+                  });
+                }}
                 className="gap-2"
               >
                 <Sparkles className="h-4 w-4" />
-                {t('import.continueToNormalization', 'Далее')}
+                {t('import.normalizeAndPublish', 'Нормализовать и импортировать')}
                 <ChevronRight className="h-4 w-4" />
               </Button>
-            </div>
-          </div>
-        )}
-
-        {/* Normalizing */}
-        {step === 'normalizing' && createdJob && profile?.organization_id && (
-          <NormalizationWizard
-            organizationId={profile.organization_id}
-            importJobId={createdJob.id}
-            stagingSample={stagingSample || []}
-            onComplete={(result) => {
-              setNormalizationResult(result);
-              setStep('pre-publish');
-            }}
-            onSkip={() => {
-              setNormalizationResult({ skipped: true });
-              setStep('pre-publish');
-            }}
-          />
-        )}
-
-        {/* Pre-Publish */}
-        {step === 'pre-publish' && (
-          <div className="py-6 space-y-6">
-            <div className="text-center space-y-4">
-              <CheckCircle2 className="h-12 w-12 mx-auto text-green-600" />
-              <div>
-                <p className="font-medium text-lg text-green-800 dark:text-green-300">
-                  {normalizationResult?.skipped 
-                    ? t('normalize.skipped', 'Нормализация пропущена')
-                    : t('normalize.applied', 'Нормализация применена')}
-                </p>
-                {normalizationResult?.patched_rows && (
-                  <p className="text-sm text-muted-foreground mt-1">
-                    {t('normalize.patchedRows', 'Обновлено строк: {{count}}', { count: normalizationResult.patched_rows })}
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <Card className="bg-primary/5 border-primary/20">
-              <CardContent className="p-4 text-center">
-                <p className="text-sm text-muted-foreground">
-                  {t('import.readyToPublish', 'Данные готовы к импорту в каталог.')}
-                </p>
-              </CardContent>
-            </Card>
-
-            <div className="flex justify-center gap-3">
-              <Button variant="outline" onClick={handleClose}>
-                {t('common.cancel')}
-              </Button>
+              
               <Button 
-                size="lg" 
+                variant="outline"
                 onClick={() => publishMutation.mutate()}
                 disabled={publishMutation.isPending}
-                className="gap-2"
               >
                 {publishMutation.isPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 ) : (
-                  <PlayCircle className="h-4 w-4" />
+                  <PlayCircle className="h-4 w-4 mr-2" />
                 )}
-                {t('import.importToCatalog', 'Импортировать в каталог')}
+                {t('import.publishDirectly', 'Импортировать без нормализации')}
               </Button>
             </div>
           </div>
@@ -705,9 +591,6 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
               </p>
             </div>
             <Progress value={undefined} className="w-48 mx-auto h-2" />
-            <p className="text-xs text-muted-foreground">
-              {t('import.publishingHint', 'Можно закрыть окно — задача продолжится в фоне.')}
-            </p>
           </div>
         )}
 
@@ -725,24 +608,6 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
                 </p>
               </div>
             </div>
-
-            {normalizationResult && !normalizationResult.skipped && (
-              <Card className="bg-primary/5 border-primary/20">
-                <CardContent className="p-4">
-                  <div className="flex items-center gap-3">
-                    <Sparkles className="h-5 w-5 text-primary flex-shrink-0" />
-                    <div className="flex-1">
-                      <p className="text-sm font-medium">{t('normalize.applied', 'Нормализация применена')}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {normalizationResult.patched_rows 
-                          ? t('normalize.patchedRowsSummary', 'Обновлено {{count}} строк в каталоге', { count: normalizationResult.patched_rows })
-                          : t('normalize.noChangesNeeded', 'Все данные уже были нормализованы')}
-                      </p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
           </div>
         )}
 
@@ -788,17 +653,6 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
             </>
           )}
 
-          {step === 'publishing' && (
-            <>
-              <Button variant="outline" onClick={handleContinueInBackground}>
-                {t('import.closeAndContinue', 'Закрыть и продолжить в фоне')}
-              </Button>
-              <Button variant="destructive" onClick={handleStopTracking}>
-                {t('import.stopTracking', 'Сбросить отслеживание')}
-              </Button>
-            </>
-          )}
-
           {step === 'mapping' && (
             <>
               <Button variant="outline" onClick={handleClose}>
@@ -806,9 +660,9 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
               </Button>
               <Button
                 onClick={handleValidateWithMapping}
-                disabled={!allRequiredMapped || validateMutation.isPending || detectedColumns.length === 0}
+                disabled={!allRequiredMapped || parseMutation.isPending || detectedColumns.length === 0}
               >
-                {validateMutation.isPending ? (
+                {parseMutation.isPending ? (
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 ) : (
                   <Check className="h-4 w-4 mr-2" />
@@ -818,13 +672,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
             </>
           )}
 
-          {(step === 'validated') && (
-            <Button variant="outline" onClick={handleClose}>
-              {t('common.close', 'Закрыть')}
-            </Button>
-          )}
-
-          {(step === 'done') && (
+          {step === 'done' && (
             <Button onClick={handleClose}>
               {t('common.close', 'Закрыть')}
             </Button>
