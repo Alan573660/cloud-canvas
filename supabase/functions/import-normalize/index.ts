@@ -1,3 +1,18 @@
+/**
+ * import-normalize — Edge Function for AI-powered normalization.
+ *
+ * Uses Lovable AI Gateway (Gemini) to extract product attributes:
+ * - Profile (С8, С10, НС35, МП-20, etc.)
+ * - Thickness (0.4, 0.45, 0.5 mm)
+ * - Coating (Полиэстер, Пурал, Оцинковка)
+ * - Color/RAL code
+ * - Sheet kind (PROFNASTIL, METALLOCHEREPICA)
+ * - Width (work/full mm)
+ *
+ * Reads staging rows, normalizes via AI, writes results back.
+ * Preserves: settings-merge integration, confirmed rules from bot_settings.
+ */
+
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const corsHeaders = {
@@ -5,116 +20,49 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Safe JSON parser: handles non-JSON responses from enricher gracefully
-async function safeJsonParse(response: Response): Promise<{ data: Record<string, unknown> | null; rawText: string }> {
-  const rawText = await response.text();
-  try {
-    const data = JSON.parse(rawText);
-    return { data, rawText };
-  } catch {
-    return { data: null, rawText };
-  }
-}
+// ─── Types ──────────────────────────────────────────────────
 
-function enricherErrorResponse(status: number, rawText: string, fallbackMsg: string) {
-  const preview = rawText.substring(0, 200);
-  console.error(`[import-normalize] Enricher returned non-JSON (status ${status}): ${preview}`);
-  return new Response(
-    JSON.stringify({
-      ok: false,
-      error: fallbackMsg,
-      detail: `Enricher returned status ${status} with non-JSON body. Preview: ${preview}`,
-    }),
-    { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-  );
-}
-
-interface DryRunRequest {
-  op: 'dry_run';
-  organization_id: string;
-  import_job_id: string;
-  scope?: {
-    only_where_null?: boolean;
-    limit?: number;
-  };
-  ai_suggest?: boolean;
-}
-
-interface ApplyRequest {
-  op: 'apply';
-  organization_id: string;
-  import_job_id: string;
-  run_id: string;
-  profile_hash: string;
-}
-
-interface ApplyStatusRequest {
-  op: 'apply_status';
-  organization_id: string;
-  import_job_id: string;
-  apply_id: string;
-  run_id?: string;
-}
-
-interface PreviewRowsRequest {
-  op: 'preview_rows';
+interface NormalizeRequest {
+  op: 'dry_run' | 'apply' | 'apply_status' | 'stats' | 'dashboard' | 'tree' | 'confirm' | 'answer_question' | 'preview_rows' | 'chat';
   organization_id: string;
   import_job_id?: string;
-  group_type?: 'WIDTH' | 'COLOR' | 'COATING' | 'DECOR' | 'THICKNESS';
-  filter_key?: string;
-  q?: string;
-  limit?: number;
-  offset?: number;
+  [key: string]: unknown;
 }
 
-interface ChatRequest {
-  op: 'chat';
-  organization_id: string;
-  import_job_id?: string;
-  message: string;
-  context?: {
-    group_type: string;
-    group_key: string;
-    affected_count: number;
-    examples: string[];
-  };
+interface NormalizedAttributes {
+  profile: string | null;
+  thickness_mm: number | null;
+  coating: string | null;
+  color_code: string | null;
+  color_system: string | null;
+  sheet_kind: string;
+  width_work_mm: number | null;
+  width_full_mm: number | null;
+  unit: string;
 }
 
-interface AnswerQuestionRequest {
-  op: 'answer_question';
-  organization_id: string;
-  import_job_id?: string;
-  question_type: string;
-  token: string;
-  value: string | number;
-}
+// ─── Profile width reference ────────────────────────────────
 
-interface StatsRequest {
-  op: 'stats';
-  organization_id: string;
-  import_job_id?: string;
-}
-
-interface DashboardRequest {
-  op: 'dashboard';
-  organization_id: string;
-  import_job_id?: string;
-}
-
-interface TreeRequest {
-  op: 'tree';
-  organization_id: string;
-}
-
-interface ConfirmRequest {
-  op: 'confirm';
-  organization_id: string;
-  import_job_id: string;
-  type: string;
-  payload: Record<string, unknown>;
-}
-
-type NormalizeRequest = DryRunRequest | ApplyRequest | ApplyStatusRequest | PreviewRowsRequest | ChatRequest | AnswerQuestionRequest | StatsRequest | DashboardRequest | TreeRequest | ConfirmRequest;
+const PROFILE_WIDTHS: Record<string, { work: number; full: number }> = {
+  'С8': { work: 1150, full: 1200 },
+  'С10': { work: 1100, full: 1150 },
+  'С20': { work: 1100, full: 1150 },
+  'С21': { work: 1000, full: 1051 },
+  'С44': { work: 1000, full: 1047 },
+  'НС35': { work: 1000, full: 1060 },
+  'НС44': { work: 1000, full: 1052 },
+  'Н57': { work: 750, full: 801 },
+  'Н60': { work: 845, full: 902 },
+  'Н75': { work: 750, full: 800 },
+  'Н114': { work: 600, full: 646 },
+  'МП-20': { work: 1100, full: 1150 },
+  'МП-35': { work: 1035, full: 1076 },
+  'Монтеррей': { work: 1100, full: 1180 },
+  'Супермонтеррей': { work: 1100, full: 1180 },
+  'Каскад': { work: 1020, full: 1115 },
+  'Монтекристо': { work: 1100, full: 1200 },
+  'Квинта': { work: 1100, full: 1210 },
+};
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -122,6 +70,7 @@ Deno.serve(async (req) => {
   }
 
   try {
+    // ─── Auth ────────────────────────────────────────────────
     const authHeader = req.headers.get('Authorization');
     if (!authHeader?.startsWith('Bearer ')) {
       return new Response(
@@ -131,23 +80,11 @@ Deno.serve(async (req) => {
     }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseAnon = Deno.env.get('SUPABASE_ANON_KEY')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
+    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
 
-    const enricherUrl = Deno.env.get('CATALOG_ENRICHER_URL');
-    const enricherSecret = Deno.env.get('ENRICH_SHARED_SECRET');
-
-    if (!enricherUrl) {
-      return new Response(
-        JSON.stringify({ ok: false, error: 'Enricher not configured' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // Diagnostic: log enricher base URL on every call
-    console.log(`[import-normalize] enricher_base_url= ${enricherUrl}`);
-
-    const userClient = createClient(supabaseUrl, supabaseAnon, {
+    const userClient = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });
 
@@ -162,17 +99,18 @@ Deno.serve(async (req) => {
     const userId = userData.user.id;
     const body: NormalizeRequest = await req.json();
     const { op, organization_id } = body;
-    const import_job_id = (body as { import_job_id?: string }).import_job_id;
+    const import_job_id = body.import_job_id as string | undefined;
 
     if (!op || !organization_id) {
       return new Response(
-        JSON.stringify({ ok: false, error: 'Missing required fields: op, organization_id' }),
+        JSON.stringify({ ok: false, error: 'Missing op or organization_id' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     const adminClient = createClient(supabaseUrl, supabaseServiceKey);
 
+    // Verify org membership
     const { data: profile, error: profileError } = await adminClient
       .from('profiles')
       .select('id, role')
@@ -187,517 +125,722 @@ Deno.serve(async (req) => {
       );
     }
 
-    const opsRequiringJob = ['dry_run', 'apply', 'apply_status'];
-    if (opsRequiringJob.includes(op) && import_job_id && import_job_id !== 'current') {
-      const { data: job, error: jobError } = await adminClient
-        .from('import_jobs')
-        .select('id, status')
-        .eq('id', import_job_id)
-        .eq('organization_id', organization_id)
-        .single();
+    console.log(`[import-normalize] Op: ${op}, Org: ${organization_id}, Job: ${import_job_id || 'none'}`);
 
-      if (jobError || !job) {
-        return new Response(
-          JSON.stringify({ ok: false, error: 'Import job not found' }),
-          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-      console.log(`[import-normalize] Op: ${op}, Job: ${import_job_id}, Status: ${job.status}`);
-    } else {
-      console.log(`[import-normalize] Op: ${op}, Org: ${organization_id}`);
-    }
+    // ─── Load confirmed rules from bot_settings ──────────────
+    const { data: botSettings } = await adminClient
+      .from('bot_settings')
+      .select('settings_json')
+      .eq('organization_id', organization_id)
+      .single();
 
-    const enricherHeaders: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (enricherSecret) {
-      enricherHeaders['X-Internal-Secret'] = enricherSecret;
-    }
+    const settingsJson = (botSettings?.settings_json as Record<string, unknown>) || {};
+    const pricingRules = (settingsJson.pricing as Record<string, unknown>) || {};
+    const confirmedWidths = (pricingRules.widths_selected as Record<string, { work_mm: number; full_mm: number }>) || {};
+    const profileAliases = (pricingRules.profile_aliases as Record<string, string>) || {};
+    const coatingAliases = (pricingRules.coatings as Record<string, string>) || {};
+    const colorRalAliases = ((pricingRules.colors as Record<string, unknown>)?.ral_aliases as Record<string, string>) || {};
 
-    // ── Helper to call enricher safely ──
-    async function callEnricher(endpoint: string, method: 'GET' | 'POST', payload?: unknown, timeoutMs = 55000) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-      console.log(`[import-normalize] -> ${method} ${endpoint}`);
-
-      try {
-        const fetchOpts: RequestInit = {
-          method,
-          headers: enricherHeaders,
-          signal: controller.signal,
-        };
-        if (method === 'POST' && payload !== undefined) {
-          fetchOpts.body = JSON.stringify(payload);
-        }
-
-        const response = await fetch(endpoint, fetchOpts);
-        const { data, rawText } = await safeJsonParse(response);
-
-        // Diagnostic: log status and body preview on non-2xx
-        if (!response.ok) {
-          console.error(`[import-normalize] <- ${response.status} ${rawText.substring(0, 300)}`);
-        } else {
-          console.log(`[import-normalize] <- ${response.status} OK`);
-        }
-
-        if (data === null) {
-          return { ok: false as const, status: response.status, rawText, data: null };
-        }
-        return { ok: response.ok, status: response.status, rawText, data };
-      } catch (fetchError: unknown) {
-        const name = (fetchError as { name?: string } | null)?.name;
-        if (name === 'AbortError') {
-          console.error(`[import-normalize] <- TIMEOUT after ${timeoutMs}ms`);
-          return { ok: false as const, status: 0, rawText: '', data: null, timeout: true };
-        }
-        throw fetchError;
-      } finally {
-        clearTimeout(timeoutId);
-      }
-    }
-
-    // =========================================
-    // Handle apply_status
-    // =========================================
-    if (op === 'apply_status') {
-      const statusBody = body as ApplyStatusRequest;
-      const applyId = statusBody.apply_id || statusBody.run_id;
-      if (!applyId) {
-        return new Response(
-          JSON.stringify({ ok: false, error: 'Missing apply_id or run_id' }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      const statusEndpoint = `${enricherUrl}/api/enrich/apply_status?import_job_id=${encodeURIComponent(import_job_id || 'current')}&apply_id=${encodeURIComponent(applyId)}&organization_id=${encodeURIComponent(organization_id)}`;
-      console.log(`[import-normalize] Polling apply status: ${applyId}`);
-
-      const result = await callEnricher(statusEndpoint, 'GET', undefined, 15000);
-
-      if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Status check timed out.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-      if (result.data === null) {
-        return enricherErrorResponse(result.status, result.rawText, 'Status check returned non-JSON');
-      }
-      if (!result.ok) {
-        return new Response(
-          JSON.stringify({ ok: false, error: (result.data as Record<string, unknown>).error || 'Status check failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      return new Response(
-        JSON.stringify(result.data),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // =========================================
-    // Handle dry_run
-    // =========================================
+    // =========================================================
+    // DRY_RUN — Analyze staging rows, extract attributes via AI
+    // =========================================================
     if (op === 'dry_run') {
-      const dryRunBody = body as DryRunRequest;
-      const requestedScope = dryRunBody.scope || {};
-      const enricherPayload = {
-        organization_id,
-        import_job_id,
-        scope: {
-          only_where_null: requestedScope.only_where_null ?? true,
-          limit: Math.min(requestedScope.limit ?? 2000, 3000),
-        },
-        ai_suggest: dryRunBody.ai_suggest ?? false,
-      };
+      const jobId = import_job_id || 'current';
+      const limit = Math.min((body.scope as Record<string, number>)?.limit || 2000, 5000);
+      const aiSuggest = body.ai_suggest !== false;
 
-      console.log(`[import-normalize] Calling dry_run, ai_suggest:`, enricherPayload.ai_suggest);
+      // Load staging rows
+      let query = adminClient
+        .from('import_staging_rows')
+        .select('id, row_number, data')
+        .eq('organization_id', organization_id)
+        .order('row_number', { ascending: true })
+        .limit(limit);
 
-      const result = await callEnricher(`${enricherUrl}/api/enrich/dry_run`, 'POST', enricherPayload);
-
-      if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Enricher request timed out (55s). Retry with smaller limit.', recommended_limit: 250 }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+      if (jobId !== 'current') {
+        query = query.eq('import_job_id', jobId);
       }
-      if (result.data === null) {
-        return enricherErrorResponse(result.status, result.rawText, 'Enricher dry_run returned non-JSON response');
-      }
-      if (!result.ok) {
-        const d = result.data as Record<string, unknown>;
+
+      const { data: rows, error: rowsError } = await query;
+      if (rowsError) {
         return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Enricher request failed' }),
+          JSON.stringify({ ok: false, error: 'Failed to load staging rows' }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
-      console.log('[import-normalize] dry_run OK, questions:', (result.data as Record<string, unknown[]>).questions?.length || 0);
+      if (!rows || rows.length === 0) {
+        return new Response(
+          JSON.stringify({ ok: true, stats: { rows_scanned: 0, candidates: 0, patches_ready: 0 }, patches_sample: [], questions: [] }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      console.log(`[import-normalize] Dry run: ${rows.length} rows loaded`);
+
+      // Extract titles for AI analysis
+      const titles = rows.map(r => {
+        const d = r.data as Record<string, unknown>;
+        return String(d.title || d['Наименование'] || d['Номенклатура'] || d.name || '');
+      }).filter(t => t.length > 0);
+
+      let aiPatches: Record<string, NormalizedAttributes> = {};
+
+      if (aiSuggest && lovableApiKey && titles.length > 0) {
+        try {
+          aiPatches = await normalizeWithAI(titles, lovableApiKey, confirmedWidths, profileAliases, coatingAliases, colorRalAliases);
+          console.log(`[import-normalize] AI returned ${Object.keys(aiPatches).length} patches`);
+        } catch (aiErr) {
+          console.error('[import-normalize] AI error:', aiErr instanceof Error ? aiErr.message : aiErr);
+        }
+      }
+
+      // Build patches
+      const patches = rows.map(r => {
+        const d = r.data as Record<string, unknown>;
+        const title = String(d.title || d['Наименование'] || d['Номенклатура'] || d.name || '');
+        const ai = aiPatches[title] || {};
+
+        return {
+          id: r.id,
+          title,
+          profile: ai.profile || d.profile || null,
+          thickness_mm: ai.thickness_mm || d.thickness_mm || null,
+          coating: ai.coating || d.coating || null,
+          color_code: ai.color_code || d.color_code || null,
+          color_system: ai.color_system || d.color_system || null,
+          width_work_mm: ai.width_work_mm || d.width_work_mm || null,
+          width_full_mm: ai.width_full_mm || d.width_full_mm || null,
+          price_rub_m2: parseFloat(String(d.price_rub_m2 || d['Цена'] || d.price || '0')) || 0,
+          unit: ai.unit || d.unit || 'm2',
+          sheet_kind: ai.sheet_kind || d.sheet_kind || 'OTHER',
+          notes: d.notes || null,
+        };
+      });
+
+      const readyCount = patches.filter(p => p.profile && p.thickness_mm && p.coating).length;
+
       return new Response(
-        JSON.stringify(result.data),
+        JSON.stringify({
+          ok: true,
+          run_id: `run_${Date.now()}`,
+          stats: {
+            rows_scanned: rows.length,
+            candidates: titles.length,
+            patches_ready: readyCount,
+          },
+          patches_sample: patches.slice(0, 100),
+          questions: [], // Questions will come from AI analysis gaps
+        }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // =========================================
-    // Handle apply — async first (apply_start), then sync fallback
-    // =========================================
+    // =========================================================
+    // APPLY — Write normalized data back to staging rows
+    // =========================================================
     if (op === 'apply') {
-      const applyBody = body as ApplyRequest;
-      if (!applyBody.run_id || !applyBody.profile_hash) {
+      const runId = body.run_id as string;
+      if (!runId) {
         return new Response(
-          JSON.stringify({ ok: false, error: 'Missing run_id or profile_hash for apply' }),
+          JSON.stringify({ ok: false, error: 'Missing run_id' }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
-      const applyPayload = {
-        organization_id,
-        import_job_id,
-        run_id: applyBody.run_id,
-        profile_hash: applyBody.profile_hash,
-      };
+      // Re-run normalization and write to staging
+      const jobId = import_job_id || 'current';
+      let query = adminClient
+        .from('import_staging_rows')
+        .select('id, row_number, data')
+        .eq('organization_id', organization_id)
+        .order('row_number', { ascending: true })
+        .limit(50000);
 
-      // Try async start first: POST /api/enrich/apply_start (underscore, not /apply/start)
-      const startResult = await callEnricher(`${enricherUrl}/api/enrich/apply_start`, 'POST', applyPayload, 10000);
+      if (jobId !== 'current') {
+        query = query.eq('import_job_id', jobId);
+      }
 
-      if (startResult.ok && startResult.data) {
-        const d = startResult.data as Record<string, unknown>;
-        console.log('[import-normalize] Async apply started, apply_id:', d.apply_id);
+      const { data: rows, error: rowsError } = await query;
+      if (rowsError || !rows) {
         return new Response(
-          JSON.stringify({ ok: true, apply_id: d.apply_id, status: d.status || 'PENDING' }),
+          JSON.stringify({ ok: false, error: 'Failed to load rows for apply' }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
-      // Log why async failed
-      if (startResult.data === null) {
-        console.log(`[import-normalize] apply_start unavailable (status ${startResult.status}, non-JSON), falling back to sync`);
-      } else {
-        console.log(`[import-normalize] apply_start failed (status ${startResult.status}): ${JSON.stringify(startResult.data).substring(0, 200)}, falling back to sync`);
+      // Apply confirmed rules (deterministic, no AI needed)
+      let updated = 0;
+      for (const row of rows) {
+        const d = row.data as Record<string, unknown>;
+        const title = String(d.title || d['Наименование'] || d['Номенклатура'] || d.name || '');
+
+        const attrs = extractAttributesDeterministic(title, confirmedWidths, profileAliases, coatingAliases, colorRalAliases);
+
+        const updatedData = { ...d, ...attrs };
+
+        await adminClient
+          .from('import_staging_rows')
+          .update({ data: updatedData })
+          .eq('id', row.id);
+
+        updated++;
       }
 
-      // Fallback to sync apply
-      const syncResult = await callEnricher(`${enricherUrl}/api/enrich/apply`, 'POST', applyPayload);
+      console.log(`[import-normalize] Apply: updated ${updated} rows`);
 
-      if (syncResult.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Apply timed out. The operation may still be running on the server. Try checking status later.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-      if (syncResult.data === null) {
-        return enricherErrorResponse(syncResult.status, syncResult.rawText, 'Apply returned non-JSON response');
-      }
-      if (!syncResult.ok) {
-        const d = syncResult.data as Record<string, unknown>;
-        return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Apply failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      console.log('[import-normalize] Sync apply OK');
       return new Response(
-        JSON.stringify(syncResult.data),
+        JSON.stringify({
+          ok: true,
+          apply_id: runId,
+          status: 'DONE',
+          report: { updated },
+        }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // =========================================
-    // Handle preview_rows
-    // =========================================
-    if (op === 'preview_rows') {
-      const previewBody = body as PreviewRowsRequest;
-      const previewPayload = {
-        organization_id,
-        import_job_id: previewBody.import_job_id || 'current',
-        group_type: previewBody.group_type,
-        filter_key: previewBody.filter_key,
-        q: previewBody.q,
-        limit: Math.min(previewBody.limit ?? 500, 2000),
-        offset: previewBody.offset ?? 0,
-      };
-
-      const result = await callEnricher(`${enricherUrl}/api/enrich/preview_rows`, 'POST', previewPayload, 30000);
-
-      if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Preview request timed out.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-      if (result.data === null) {
-        return enricherErrorResponse(result.status, result.rawText, 'Preview returned non-JSON response');
-      }
-      if (!result.ok) {
-        const d = result.data as Record<string, unknown>;
-        return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Preview failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      return new Response(
-        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // =========================================
-    // Handle chat
-    // =========================================
-    if (op === 'chat') {
-      const chatBody = body as ChatRequest;
-      if (!chatBody.message) {
-        return new Response(
-          JSON.stringify({ ok: false, error: 'Missing message' }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      const chatPayload = {
-        organization_id,
-        import_job_id: chatBody.import_job_id || 'current',
-        message: chatBody.message,
-        context: chatBody.context || null,
-      };
-
-      const result = await callEnricher(`${enricherUrl}/api/enrich/chat`, 'POST', chatPayload, 45000);
-
-      if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'AI request timed out.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-      if (result.data === null) {
-        return enricherErrorResponse(result.status, result.rawText, 'Chat returned non-JSON response');
-      }
-      if (!result.ok) {
-        const d = result.data as Record<string, unknown>;
-        return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Chat failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      return new Response(
-        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // =========================================
-    // Handle answer_question — user answers an AI question, then re-run is needed
-    // =========================================
-    if (op === 'answer_question') {
-      const aqBody = body as AnswerQuestionRequest;
-      if (!aqBody.question_type || !aqBody.token) {
-        return new Response(
-          JSON.stringify({ ok: false, error: 'Missing question_type or token' }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      const aqPayload = {
-        organization_id,
-        import_job_id: aqBody.import_job_id || 'current',
-        question_type: aqBody.question_type,
-        token: aqBody.token,
-        value: aqBody.value,
-      };
-
-      const result = await callEnricher(`${enricherUrl}/api/enrich/answer_question`, 'POST', aqPayload, 30000);
-
-      if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Answer submission timed out.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-      if (result.data === null) {
-        return enricherErrorResponse(result.status, result.rawText, 'Answer returned non-JSON response');
-      }
-      if (!result.ok) {
-        const d = result.data as Record<string, unknown>;
-        return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Answer submission failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      return new Response(
-        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // =========================================
-    // Handle stats
-    // =========================================
+    // =========================================================
+    // STATS — Quality metrics
+    // =========================================================
     if (op === 'stats') {
-      const statsPayload = {
-        organization_id,
-        import_job_id: import_job_id || 'current',
-      };
+      const jobId = import_job_id || 'current';
+      let query = adminClient
+        .from('import_staging_rows')
+        .select('data')
+        .eq('organization_id', organization_id)
+        .limit(50000);
 
-      console.log(`[import-normalize] stats: org=${organization_id}`);
-
-      const result = await callEnricher(`${enricherUrl}/api/enrich/stats`, 'POST', statsPayload, 30000);
-
-      if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Stats request timed out.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+      if (jobId !== 'current') {
+        query = query.eq('import_job_id', jobId);
       }
-      if (result.data === null) {
-        return enricherErrorResponse(result.status, result.rawText, 'Stats returned non-JSON response');
-      }
-      if (!result.ok) {
-        const d = result.data as Record<string, unknown>;
-        return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Stats failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+
+      const { data: rows } = await query;
+      const total = rows?.length || 0;
+      let profile_filled = 0, coating_filled = 0, color_code_filled = 0;
+      let width_work_filled = 0, width_full_filled = 0, color_system_filled = 0;
+      let kind_non_other = 0;
+
+      for (const r of rows || []) {
+        const d = r.data as Record<string, unknown>;
+        if (d.profile) profile_filled++;
+        if (d.coating) coating_filled++;
+        if (d.color_code) color_code_filled++;
+        if (d.width_work_mm) width_work_filled++;
+        if (d.width_full_mm) width_full_filled++;
+        if (d.color_system) color_system_filled++;
+        if (d.sheet_kind && d.sheet_kind !== 'OTHER') kind_non_other++;
       }
 
       return new Response(
-        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
+        JSON.stringify({
+          ok: true,
+          metrics: { total, profile_filled, coating_filled, color_code_filled, width_work_filled, width_full_filled, color_system_filled, kind_non_other },
+        }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // =========================================
-    // Handle dashboard — KPI metrics + question cards
-    // =========================================
+    // =========================================================
+    // DASHBOARD
+    // =========================================================
     if (op === 'dashboard') {
-      const dashBody = body as DashboardRequest;
-      const dashPayload = {
-        organization_id,
-        import_job_id: dashBody.import_job_id || 'current',
-      };
+      const jobId = import_job_id || 'current';
+      let query = adminClient
+        .from('import_staging_rows')
+        .select('data')
+        .eq('organization_id', organization_id)
+        .limit(50000);
 
-      console.log(`[import-normalize] dashboard: org=${organization_id}`);
+      if (jobId !== 'current') {
+        query = query.eq('import_job_id', jobId);
+      }
 
-      const result = await callEnricher(`${enricherUrl}/api/enrich/dashboard`, 'POST', dashPayload, 30000);
-
-      if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Dashboard request timed out.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-      if (result.data === null) {
-        return enricherErrorResponse(result.status, result.rawText, 'Dashboard returned non-JSON response');
-      }
-      if (!result.ok) {
-        const d = result.data as Record<string, unknown>;
-        return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Dashboard failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
+      const { data: rows } = await query;
+      const total = rows?.length || 0;
+      const ready = (rows || []).filter(r => {
+        const d = r.data as Record<string, unknown>;
+        return d.profile && d.thickness_mm && d.coating;
+      }).length;
 
       return new Response(
-        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
+        JSON.stringify({
+          ok: true,
+          organization_id,
+          import_job_id: jobId,
+          progress: {
+            total,
+            ready,
+            needs_attention: total - ready,
+            ready_pct: total > 0 ? Math.round((ready / total) * 100) : 0,
+          },
+        }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // =========================================
-    // Handle tree — category tree navigation
-    // =========================================
-    if (op === 'tree') {
-      const treeEndpoint = `${enricherUrl}/api/enrich/tree?organization_id=${encodeURIComponent(organization_id)}`;
-
-      console.log(`[import-normalize] tree: org=${organization_id}`);
-
-      const result = await callEnricher(treeEndpoint, 'GET', undefined, 20000);
-
-      if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Tree request timed out.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-      if (result.data === null) {
-        return enricherErrorResponse(result.status, result.rawText, 'Tree returned non-JSON response');
-      }
-      if (!result.ok) {
-        const d = result.data as Record<string, unknown>;
-        return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Tree failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
+    // =========================================================
+    // APPLY_STATUS — Since apply is now synchronous, always DONE
+    // =========================================================
+    if (op === 'apply_status') {
       return new Response(
-        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
+        JSON.stringify({ ok: true, state: 'DONE', progress: 100 }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // =========================================
-    // Handle confirm — apply confirmed settings by type
-    // =========================================
+    // =========================================================
+    // CONFIRM — Save a normalization rule via settings-merge
+    // =========================================================
     if (op === 'confirm') {
-      const confirmBody = body as ConfirmRequest;
-      if (!confirmBody.type || !confirmBody.payload) {
+      const type = body.type as string;
+      const payload = body.payload as Record<string, unknown>;
+
+      if (!type || !payload) {
         return new Response(
           JSON.stringify({ ok: false, error: 'Missing type or payload for confirm' }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
-      const confirmPayload = {
-        organization_id,
-        import_job_id: confirmBody.import_job_id || 'current',
-        type: confirmBody.type,
-        payload: confirmBody.payload,
-      };
+      // Build pricing patch based on type
+      const pricingPatch: Record<string, unknown> = {};
 
-      console.log(`[import-normalize] confirm: type=${confirmBody.type}, org=${organization_id}`);
-
-      const result = await callEnricher(`${enricherUrl}/api/enrich/confirm`, 'POST', confirmPayload, 30000);
-
-      if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Confirm request timed out.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+      switch (type) {
+        case 'WIDTH_MASTER':
+          pricingPatch.widths_selected = payload;
+          break;
+        case 'PROFILE_ALIAS':
+          pricingPatch.profile_aliases = payload;
+          break;
+        case 'COATING_MAP':
+          pricingPatch.coatings = payload;
+          break;
+        case 'COLOR_RAL':
+          if (!pricingPatch.colors) pricingPatch.colors = {};
+          (pricingPatch.colors as Record<string, unknown>).ral_aliases = payload;
+          break;
+        default:
+          pricingPatch[type.toLowerCase()] = payload;
       }
-      if (result.data === null) {
-        return enricherErrorResponse(result.status, result.rawText, 'Confirm returned non-JSON response');
+
+      // Deep merge into bot_settings.settings_json.pricing
+      const currentPricing = { ...pricingRules };
+      for (const [k, v] of Object.entries(pricingPatch)) {
+        if (typeof v === 'object' && v !== null && typeof currentPricing[k] === 'object') {
+          currentPricing[k] = { ...(currentPricing[k] as Record<string, unknown>), ...(v as Record<string, unknown>) };
+        } else {
+          currentPricing[k] = v;
+        }
       }
-      if (!result.ok) {
-        const d = result.data as Record<string, unknown>;
+
+      const { error: updateErr } = await adminClient
+        .from('bot_settings')
+        .update({
+          settings_json: { ...settingsJson, pricing: currentPricing },
+          updated_at: new Date().toISOString(),
+        })
+        .eq('organization_id', organization_id);
+
+      if (updateErr) {
         return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Confirm failed' }),
+          JSON.stringify({ ok: false, error: 'Failed to save rule' }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
       return new Response(
-        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
+        JSON.stringify({ ok: true, type, next_action: 'dry_run', affected_clusters: [] }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // Unknown op
+    // =========================================================
+    // ANSWER_QUESTION — Apply a single answer
+    // =========================================================
+    if (op === 'answer_question') {
+      const qType = body.question_type as string;
+      const token = body.token as string;
+      const value = body.value;
+
+      // Save as confirmed rule
+      const patchKey = qType === 'WIDTH' ? 'widths_selected' :
+                       qType === 'COATING' ? 'coatings' :
+                       qType === 'COLOR' ? 'colors' :
+                       qType === 'PROFILE' ? 'profile_aliases' : qType.toLowerCase();
+
+      const patch: Record<string, unknown> = {};
+      if (qType === 'COLOR') {
+        patch.colors = { ral_aliases: { [token]: value } };
+      } else {
+        patch[patchKey] = { [token]: value };
+      }
+
+      const updatedPricing = { ...pricingRules };
+      for (const [k, v] of Object.entries(patch)) {
+        if (typeof v === 'object' && v !== null && typeof updatedPricing[k] === 'object') {
+          updatedPricing[k] = { ...(updatedPricing[k] as Record<string, unknown>), ...(v as Record<string, unknown>) };
+        } else {
+          updatedPricing[k] = v;
+        }
+      }
+
+      await adminClient
+        .from('bot_settings')
+        .update({
+          settings_json: { ...settingsJson, pricing: updatedPricing },
+          updated_at: new Date().toISOString(),
+        })
+        .eq('organization_id', organization_id);
+
+      return new Response(
+        JSON.stringify({ ok: true, type: qType, applied: true }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // =========================================================
+    // TREE — Category tree
+    // =========================================================
+    if (op === 'tree') {
+      const { data: rows } = await adminClient
+        .from('import_staging_rows')
+        .select('data')
+        .eq('organization_id', organization_id)
+        .limit(50000);
+
+      const kindCounts: Record<string, number> = {};
+      for (const r of rows || []) {
+        const d = r.data as Record<string, unknown>;
+        const kind = String(d.sheet_kind || 'OTHER');
+        kindCounts[kind] = (kindCounts[kind] || 0) + 1;
+      }
+
+      const nodes = Object.entries(kindCounts).map(([kind, count]) => ({
+        cat_tree: kind,
+        cat_name: kind,
+        parts: [kind],
+        count,
+      }));
+
+      return new Response(
+        JSON.stringify({ ok: true, organization_id, nodes }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // =========================================================
+    // PREVIEW_ROWS
+    // =========================================================
+    if (op === 'preview_rows') {
+      const limit = Math.min((body.limit as number) || 500, 2000);
+      const offset = (body.offset as number) || 0;
+
+      const { data: rows } = await adminClient
+        .from('import_staging_rows')
+        .select('id, row_number, data')
+        .eq('organization_id', organization_id)
+        .order('row_number', { ascending: true })
+        .range(offset, offset + limit - 1);
+
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          rows: (rows || []).map(r => ({ id: r.id, row_number: r.row_number, ...r.data as Record<string, unknown> })),
+          total: rows?.length || 0,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // =========================================================
+    // CHAT — AI assistant for normalization questions
+    // =========================================================
+    if (op === 'chat') {
+      const message = body.message as string;
+      if (!message || !lovableApiKey) {
+        return new Response(
+          JSON.stringify({ ok: false, error: 'Missing message or AI not configured' }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${lovableApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'google/gemini-3-flash-preview',
+          messages: [
+            {
+              role: 'system',
+              content: `Ты — эксперт по нормализации каталогов кровельных материалов. Отвечай кратко и по делу.
+Ты помогаешь пользователю разобраться с атрибутами товаров: профиль, толщина, покрытие, цвет RAL, ширины.
+Не выдумывай данных — если не уверен, скажи.`,
+            },
+            { role: 'user', content: message },
+          ],
+          temperature: 0.3,
+          max_tokens: 1000,
+        }),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        return new Response(
+          JSON.stringify({ ok: false, error: `AI error: ${response.status}` }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const result = await response.json();
+      const reply = result.choices?.[0]?.message?.content || '';
+
+      return new Response(
+        JSON.stringify({ ok: true, reply }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     return new Response(
       JSON.stringify({ ok: false, error: `Unknown op: ${op}` }),
       { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error('[import-normalize] Unhandled error:', message);
+
+  } catch (err) {
+    console.error('[import-normalize] Error:', err);
+    const msg = err instanceof Error ? err.message : String(err);
     return new Response(
-      JSON.stringify({ ok: false, error: message }),
+      JSON.stringify({ ok: false, error: msg }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });
+
+// ─── AI Normalization ───────────────────────────────────────
+
+async function normalizeWithAI(
+  titles: string[],
+  apiKey: string,
+  confirmedWidths: Record<string, { work_mm: number; full_mm: number }>,
+  profileAliases: Record<string, string>,
+  coatingAliases: Record<string, string>,
+  colorAliases: Record<string, string>,
+): Promise<Record<string, NormalizedAttributes>> {
+  // Process in batches of 50 titles
+  const BATCH = 50;
+  const allPatches: Record<string, NormalizedAttributes> = {};
+
+  for (let i = 0; i < titles.length; i += BATCH) {
+    const batch = titles.slice(i, i + BATCH);
+    const uniqueTitles = [...new Set(batch)];
+
+    const prompt = `Проанализируй названия товаров (кровельные материалы) и извлеки атрибуты.
+
+Известные алиасы профилей: ${JSON.stringify(profileAliases)}
+Известные алиасы покрытий: ${JSON.stringify(coatingAliases)}
+Известные алиасы цветов: ${JSON.stringify(colorAliases)}
+
+Верни JSON массив объектов:
+[{
+  "title": "исходное название",
+  "profile": "С8" | "С10" | "НС35" | "МП-20" | null,
+  "thickness_mm": 0.5 | null,
+  "coating": "Полиэстер" | "Пурал" | "Оцинковка" | null,
+  "color_code": "3005" | "6005" | null,
+  "color_system": "RAL" | "RR" | null,
+  "sheet_kind": "PROFNASTIL" | "METALLOCHEREPICA" | "DOBOR" | "SANDWICH" | "OTHER",
+  "unit": "m2" | "sht"
+}]
+
+Названия:
+${uniqueTitles.map((t, idx) => `${idx + 1}. ${t}`).join('\n')}
+
+ВАЖНО: Верни ТОЛЬКО JSON массив, без комментариев.`;
+
+    try {
+      const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'google/gemini-3-flash-preview',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0,
+          max_tokens: 50000,
+        }),
+      });
+
+      if (!response.ok) {
+        console.error(`[import-normalize] AI batch error: ${response.status}`);
+        continue;
+      }
+
+      const result = await response.json();
+      let content = result.choices?.[0]?.message?.content || '';
+
+      // Extract JSON
+      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (jsonMatch) content = jsonMatch[1];
+
+      const parsed = JSON.parse(content.trim());
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          const widths = getWidths(item.profile, confirmedWidths);
+          allPatches[item.title] = {
+            profile: item.profile || null,
+            thickness_mm: item.thickness_mm || null,
+            coating: item.coating || null,
+            color_code: item.color_code || null,
+            color_system: item.color_system || null,
+            sheet_kind: item.sheet_kind || 'OTHER',
+            width_work_mm: widths?.work || null,
+            width_full_mm: widths?.full || null,
+            unit: item.unit || 'm2',
+          };
+        }
+      }
+    } catch (parseErr) {
+      console.error(`[import-normalize] AI parse error batch ${i}:`, parseErr);
+    }
+  }
+
+  return allPatches;
+}
+
+// ─── Deterministic attribute extraction ─────────────────────
+
+function extractAttributesDeterministic(
+  title: string,
+  confirmedWidths: Record<string, { work_mm: number; full_mm: number }>,
+  profileAliases: Record<string, string>,
+  coatingAliases: Record<string, string>,
+  colorAliases: Record<string, string>,
+): Partial<NormalizedAttributes> {
+  const attrs: Partial<NormalizedAttributes> = {};
+  const upper = title.toUpperCase();
+
+  // Profile extraction
+  const profilePatterns = [
+    /\b(С-?8|C-?8)\b/i,
+    /\b(С-?10|C-?10)\b/i,
+    /\b(С-?20|C-?20)\b/i,
+    /\b(С-?21|C-?21)\b/i,
+    /\b(С-?44|C-?44)\b/i,
+    /\b(НС-?35|HC-?35)\b/i,
+    /\b(НС-?44|HC-?44)\b/i,
+    /\b(Н-?57|H-?57)\b/i,
+    /\b(Н-?60|H-?60)\b/i,
+    /\b(Н-?75|H-?75)\b/i,
+    /\b(Н-?114|H-?114)\b/i,
+    /\b(МП-?20|MP-?20)\b/i,
+    /\b(МП-?35|MP-?35)\b/i,
+    /Монтеррей/i,
+    /Супермонтеррей/i,
+    /Каскад/i,
+    /Монтекристо/i,
+    /Квинта/i,
+  ];
+
+  const profileNames = ['С8', 'С10', 'С20', 'С21', 'С44', 'НС35', 'НС44', 'Н57', 'Н60', 'Н75', 'Н114', 'МП-20', 'МП-35', 'Монтеррей', 'Супермонтеррей', 'Каскад', 'Монтекристо', 'Квинта'];
+
+  for (let i = 0; i < profilePatterns.length; i++) {
+    if (profilePatterns[i].test(title)) {
+      attrs.profile = profileNames[i];
+      break;
+    }
+  }
+
+  // Apply profile aliases
+  if (!attrs.profile) {
+    for (const [alias, canonical] of Object.entries(profileAliases)) {
+      if (upper.includes(alias.toUpperCase())) {
+        attrs.profile = canonical;
+        break;
+      }
+    }
+  }
+
+  // Thickness
+  const thicknessMatch = title.match(/(\d[.,]\d{1,2})\s*мм|толщ[а-я]*\s*(\d[.,]\d{1,2})/i);
+  if (thicknessMatch) {
+    attrs.thickness_mm = parseFloat((thicknessMatch[1] || thicknessMatch[2]).replace(',', '.'));
+  }
+
+  // Coating
+  if (/полиэстер|PE\b/i.test(title)) attrs.coating = 'Полиэстер';
+  else if (/пурал|pural/i.test(title)) attrs.coating = 'Пурал';
+  else if (/оцинк|цинк|zn\b/i.test(title)) attrs.coating = 'Оцинковка';
+  else if (/матов|matt/i.test(title)) attrs.coating = 'Матовый полиэстер';
+  else if (/принтеч|printech/i.test(title)) attrs.coating = 'Printech';
+
+  // Apply coating aliases
+  if (!attrs.coating) {
+    for (const [alias, canonical] of Object.entries(coatingAliases)) {
+      if (upper.includes(alias.toUpperCase())) {
+        attrs.coating = canonical;
+        break;
+      }
+    }
+  }
+
+  // RAL color
+  const ralMatch = title.match(/RAL\s*(\d{4})/i);
+  if (ralMatch) {
+    attrs.color_code = ralMatch[1];
+    attrs.color_system = 'RAL';
+  }
+
+  // Apply color aliases
+  if (!attrs.color_code) {
+    for (const [alias, ral] of Object.entries(colorAliases)) {
+      if (upper.includes(alias.toUpperCase())) {
+        attrs.color_code = ral;
+        attrs.color_system = 'RAL';
+        break;
+      }
+    }
+  }
+
+  // Sheet kind
+  if (attrs.profile) {
+    const p = attrs.profile;
+    if (/Монтеррей|Супермонтеррей|Каскад|Монтекристо|Квинта/i.test(p)) {
+      attrs.sheet_kind = 'METALLOCHEREPICA';
+    } else {
+      attrs.sheet_kind = 'PROFNASTIL';
+    }
+  }
+
+  // Widths
+  const widths = getWidths(attrs.profile || null, confirmedWidths);
+  if (widths) {
+    attrs.width_work_mm = widths.work;
+    attrs.width_full_mm = widths.full;
+  }
+
+  return attrs;
+}
+
+function getWidths(
+  profile: string | null,
+  confirmedWidths: Record<string, { work_mm: number; full_mm: number }>
+): { work: number; full: number } | null {
+  if (!profile) return null;
+
+  // Check confirmed widths first
+  if (confirmedWidths[profile]) {
+    return { work: confirmedWidths[profile].work_mm, full: confirmedWidths[profile].full_mm };
+  }
+
+  // Fallback to reference table
+  if (PROFILE_WIDTHS[profile]) {
+    return PROFILE_WIDTHS[profile];
+  }
+
+  return null;
+}
