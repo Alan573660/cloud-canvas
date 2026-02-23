@@ -554,7 +554,7 @@ Deno.serve(async (req) => {
     }
 
     // =========================================================
-    // CHAT — AI assistant for normalization questions
+    // CHAT — AI assistant with real data modification capabilities
     // =========================================================
     if (op === 'chat') {
       const message = body.message as string;
@@ -565,6 +565,50 @@ Deno.serve(async (req) => {
         );
       }
 
+      // Load sample data for context
+      const jobId = import_job_id || 'current';
+      let sampleQuery = adminClient
+        .from('import_staging_rows')
+        .select('id, data')
+        .eq('organization_id', organization_id)
+        .limit(20);
+      if (jobId !== 'current') sampleQuery = sampleQuery.eq('import_job_id', jobId);
+      const { data: sampleRows } = await sampleQuery;
+
+      const sampleTitles = (sampleRows || []).map(r => {
+        const d = r.data as Record<string, unknown>;
+        return String(d.title || d['Наименование'] || d['Номенклатура'] || '');
+      }).filter(t => t.length > 0).slice(0, 10);
+
+      // Build system prompt with real context
+      const systemPrompt = `Ты — ИИ-ассистент по нормализации каталога кровельных материалов.
+
+ТЕКУЩИЕ ПРАВИЛА ОРГАНИЗАЦИИ:
+- Алиасы профилей: ${JSON.stringify(profileAliases)}
+- Алиасы покрытий: ${JSON.stringify(coatingAliases)}
+- Алиасы цветов: ${JSON.stringify(colorRalAliases)}
+- Ширины: ${JSON.stringify(confirmedWidths)}
+
+ПРИМЕРЫ ТОВАРОВ В ПРАЙСЕ:
+${sampleTitles.map((t, i) => `${i + 1}. ${t}`).join('\n')}
+
+ВОЗМОЖНОСТИ:
+1. Ответы на вопросы о данных в прайсе
+2. Массовые обновления атрибутов через команды
+3. Создание и обновление правил нормализации (алиасы)
+
+Если пользователь просит изменить данные, верни JSON:
+\`\`\`json
+{"action":"update_rule","type":"COATING"|"COLOR"|"PROFILE"|"WIDTH","token":"MattPE","value":"Матовый полиэстер"}
+\`\`\`
+
+Если пользователь просит установить скидку, верни JSON:
+\`\`\`json
+{"action":"info","message":"Скидки настраиваются во вкладке «Скидки» каталога"}
+\`\`\`
+
+Если просто вопрос — отвечай текстом кратко и по делу.`;
+
       const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -574,29 +618,70 @@ Deno.serve(async (req) => {
         body: JSON.stringify({
           model: 'google/gemini-3-flash-preview',
           messages: [
-            {
-              role: 'system',
-              content: `Ты — эксперт по нормализации каталогов кровельных материалов. Отвечай кратко и по делу.
-Ты помогаешь пользователю разобраться с атрибутами товаров: профиль, толщина, покрытие, цвет RAL, ширины.
-Не выдумывай данных — если не уверен, скажи.`,
-            },
+            { role: 'system', content: systemPrompt },
             { role: 'user', content: message },
           ],
-          temperature: 0.3,
-          max_tokens: 1000,
+          temperature: 0.2,
+          max_tokens: 2000,
         }),
       });
 
       if (!response.ok) {
-        const errText = await response.text();
         return new Response(
           JSON.stringify({ ok: false, error: `AI error: ${response.status}` }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
-      const result = await response.json();
-      const reply = result.choices?.[0]?.message?.content || '';
+      const aiResult = await response.json();
+      const reply = aiResult.choices?.[0]?.message?.content || '';
+
+      // Try to parse action commands from AI response
+      const jsonMatch = reply.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+      if (jsonMatch) {
+        try {
+          const cmd = JSON.parse(jsonMatch[1]);
+          if (cmd.action === 'update_rule' && cmd.type && cmd.token && cmd.value) {
+            // Apply the rule automatically
+            const patchKey = cmd.type === 'COATING' ? 'coatings' :
+                            cmd.type === 'COLOR' ? 'colors' :
+                            cmd.type === 'PROFILE' ? 'profile_aliases' :
+                            cmd.type === 'WIDTH' ? 'widths_selected' : cmd.type.toLowerCase();
+
+            const updatedPricing = { ...pricingRules };
+            if (cmd.type === 'COLOR') {
+              const colors = (updatedPricing.colors as Record<string, unknown>) || {};
+              const ralAliases = (colors.ral_aliases as Record<string, string>) || {};
+              ralAliases[cmd.token] = cmd.value;
+              updatedPricing.colors = { ...colors, ral_aliases: ralAliases };
+            } else {
+              const existing = (updatedPricing[patchKey] as Record<string, unknown>) || {};
+              existing[cmd.token] = cmd.value;
+              updatedPricing[patchKey] = existing;
+            }
+
+            await adminClient
+              .from('bot_settings')
+              .update({
+                settings_json: { ...settingsJson, pricing: updatedPricing },
+                updated_at: new Date().toISOString(),
+              })
+              .eq('organization_id', organization_id);
+
+            const cleanReply = reply.replace(/```(?:json)?\s*\{[\s\S]*?\}\s*```/g, '').trim();
+            return new Response(
+              JSON.stringify({
+                ok: true,
+                reply: `✅ Правило сохранено: ${cmd.token} → ${cmd.value}\n\n${cleanReply || 'Выполните повторное сканирование для применения.'}`,
+                rule_applied: { type: cmd.type, token: cmd.token, value: cmd.value },
+              }),
+              { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+        } catch {
+          // Not a valid command JSON, return reply as-is
+        }
+      }
 
       return new Response(
         JSON.stringify({ ok: true, reply }),

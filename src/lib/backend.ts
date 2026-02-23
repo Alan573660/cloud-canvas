@@ -11,10 +11,9 @@
 // Supabase Storage bucket for imports (must be created in Supabase Dashboard)
 export const STORAGE_BUCKET = 'imports' as const;
 
-// Edge Functions gateway endpoints
+// Edge Functions gateway endpoints (v2: Edge-Only architecture)
 export const ImportGatewayApi = {
   parse: 'import-parse',
-  validate: 'import-validate',
   publish: 'import-publish',
   normalize: 'import-normalize',
 } as const;

@@ -9,6 +9,7 @@ import {
   Dialog,
   DialogContent,
 } from '@/components/ui/dialog';
+import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -396,11 +397,13 @@ const CHAT_EXAMPLES = [
 function AIChatPanel({
   organizationId,
   importJobId,
+  onRuleApplied,
 }: {
   organizationId: string;
   importJobId?: string;
+  onRuleApplied?: () => void;
 }) {
-  const [messages, setMessages] = useState<Array<{ role: 'user' | 'ai'; text: string; isError?: boolean }>>([]);
+  const [messages, setMessages] = useState<Array<{ role: 'user' | 'ai'; text: string; isError?: boolean; ruleApplied?: { type: string; token: string; value: string } }>>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [showExamples, setShowExamples] = useState(true);
@@ -438,29 +441,33 @@ function AIChatPanel({
         code?: string;
         ai_skip_reason?: string;
         ai_disabled?: boolean;
+        rule_applied?: { type: string; token: string; value: string };
       };
 
       if (result?.ok === false) {
         let errMsg = result.error || 'Ошибка ИИ';
         if (result.code === 'TIMEOUT') errMsg = '⏱ ИИ не ответил вовремя. Попробуйте ещё раз.';
         if (result.ai_disabled) errMsg = `ИИ отключён: ${result.ai_skip_reason || 'неизвестная причина'}`;
-        console.error('[AIChatPanel] AI error response:', result);
         setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${errMsg}`, isError: true }]);
         return;
       }
 
       const reply = result?.reply || result?.answer || result?.message || '';
 
-      // Detect "Could not parse command" or empty reply — give user-friendly guidance
       if (!reply || reply.toLowerCase().includes('could not parse') || reply.toLowerCase().includes('не удалось')) {
         setMessages(prev => [...prev, {
           role: 'ai',
-          text: '💡 Примеры команд:\n\n• «Установи покрытие MattPE → Матовый полиэстер»\n• «Установи покрытие Plastisol → Пластизол»\n• «Установи цвет RAL9003 → белый»\n• «Установи цвет RR32 → тёмно-коричневый»\n• «Какие товары с неизвестным профилем?»',
+          text: '💡 Примеры команд:\n\n• «Установи покрытие MattPE → Матовый полиэстер»\n• «Установи покрытие Plastisol → Пластизол»\n• «Установи цвет RAL9003 → белый»\n• «Какие товары с неизвестным профилем?»',
         }]);
         return;
       }
 
-      setMessages(prev => [...prev, { role: 'ai', text: reply }]);
+      setMessages(prev => [...prev, { role: 'ai', text: reply, ruleApplied: result?.rule_applied }]);
+      
+      // If a rule was applied, trigger rescan
+      if (result?.rule_applied && onRuleApplied) {
+        onRuleApplied();
+      }
     } catch (err) {
       console.error('[AIChatPanel] sendMessage error:', err);
       const errMsg = err instanceof Error ? err.message : 'Ошибка подключения к ИИ';
@@ -472,22 +479,21 @@ function AIChatPanel({
       setLoading(false);
       setTimeout(() => scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     }
-  }, [input, loading, organizationId, importJobId]);
+  }, [input, loading, organizationId, importJobId, onRuleApplied]);
 
   return (
     <div className="flex flex-col h-full">
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-3 space-y-2">
-          {/* Welcome / examples */}
           {showExamples && messages.length === 0 && (
             <div className="space-y-2">
               <div className="text-center py-3 text-muted-foreground">
                 <MessageSquare className="h-7 w-7 mx-auto mb-2 opacity-30" />
                 <p className="text-xs font-medium">ИИ-чат для нормализации</p>
-                <p className="text-[10px] mt-0.5 opacity-70">Отдавайте команды или задайте вопрос</p>
+                <p className="text-[10px] mt-0.5 opacity-70">Отдавайте команды — AI применит правила автоматически</p>
               </div>
               <div className="space-y-1">
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Примеры команд</p>
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Быстрые команды</p>
                 {CHAT_EXAMPLES.map((ex, i) => (
                   <button
                     key={i}
@@ -511,6 +517,14 @@ function AIChatPanel({
                     : 'bg-muted text-foreground'
               }`}>
                 {m.text}
+                {m.ruleApplied && (
+                  <div className="mt-1.5 pt-1.5 border-t border-border/50">
+                    <Badge variant="secondary" className="text-[10px]">
+                      <CheckCircle2 className="h-2.5 w-2.5 mr-1" />
+                      {m.ruleApplied.type}: {m.ruleApplied.token} → {m.ruleApplied.value}
+                    </Badge>
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -530,7 +544,7 @@ function AIChatPanel({
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-          placeholder="Спросить ИИ… (Enter — отправить)"
+          placeholder="Команда или вопрос… (Enter — отправить)"
           className="text-xs resize-none min-h-0 py-1.5"
           rows={2}
         />
@@ -1188,7 +1202,11 @@ export function NormalizationWizard({
 
               {/* CHAT TAB */}
               <TabsContent value="chat" className="flex-1 min-h-0 m-0 flex flex-col">
-                <AIChatPanel organizationId={organizationId} importJobId={effectiveJobId} />
+                <AIChatPanel
+                  organizationId={organizationId}
+                  importJobId={effectiveJobId}
+                  onRuleApplied={handleRunScan}
+                />
               </TabsContent>
 
               {/* RULES TAB */}
