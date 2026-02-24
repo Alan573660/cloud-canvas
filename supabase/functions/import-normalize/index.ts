@@ -270,6 +270,7 @@ Deno.serve(async (req) => {
         throw dryErr;
       } finally {
         clearTimeout(timer);
+      }
     }
 
     // =========================================================
