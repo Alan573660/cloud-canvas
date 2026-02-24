@@ -382,7 +382,120 @@ function QuestionAnswerForm({
   );
 }
 
-// ─── Right Panel: AI Chat ─────────────────────────────────────
+// ─── Inline Question Form (always visible, no click-to-open) ──
+
+function InlineQuestionForm({
+  question,
+  onAnswer,
+  loading,
+}: {
+  question: AIQuestion;
+  onAnswer: (value: string | number) => void;
+  loading: boolean;
+}) {
+  const isWidth = question.type === 'width';
+  const [fullMm, setFullMm] = useState('');
+  const [workMm, setWorkMm] = useState('');
+  const [value, setValue] = useState('');
+  const [answered, setAnswered] = useState(false);
+
+  const cfg = Q_TYPE_CONFIG[question.type?.toUpperCase() + '_MAP'] || Q_TYPE_CONFIG[question.type?.toUpperCase() + '_MASTER'] || Q_TYPE_CONFIG[question.type?.toUpperCase() + '_SET'] || { icon: AlertTriangle, label: question.type, color: 'bg-muted border-border text-foreground' };
+  const Icon = cfg.icon;
+
+  const handleSubmit = (overrideVal?: string) => {
+    let finalValue = overrideVal || '';
+    if (!overrideVal) {
+      if (isWidth) {
+        if (!fullMm) return;
+        finalValue = workMm ? `${fullMm}:${workMm}` : fullMm;
+      } else {
+        finalValue = value;
+      }
+    }
+    if (finalValue) {
+      setAnswered(true);
+      onAnswer(finalValue);
+    }
+  };
+
+  if (answered) {
+    return (
+      <div className="px-3 py-2 rounded-lg border border-primary/20 bg-primary/5 flex items-center gap-2">
+        <CheckCircle2 className="h-3.5 w-3.5 text-primary shrink-0" />
+        <span className="text-xs text-primary font-medium">{question.token || question.type}: ответ отправлен</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`rounded-lg border p-3 space-y-2 ${cfg.color}`}>
+      {/* Header */}
+      <div className="flex items-center gap-2">
+        <Icon className="h-3.5 w-3.5 shrink-0" />
+        <span className="text-xs font-semibold flex-1 truncate">
+          {question.ask || question.token || question.type}
+        </span>
+        {question.affected_count > 0 && (
+          <Badge variant="outline" className="text-[10px] h-4 px-1.5 shrink-0">{question.affected_count} товаров</Badge>
+        )}
+      </div>
+
+      {/* Examples */}
+      {question.examples.length > 0 && (
+        <p className="text-[10px] text-muted-foreground truncate">
+          Примеры: {question.examples.slice(0, 3).join(' · ')}
+        </p>
+      )}
+
+      {/* Suggestion chips */}
+      {question.suggestions.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {question.suggestions.map((s, si) => (
+            <button
+              key={si}
+              onClick={() => handleSubmit(s)}
+              disabled={loading}
+              className="text-xs px-2 py-1 rounded border border-border bg-background hover:bg-primary hover:text-primary-foreground hover:border-primary transition-colors disabled:opacity-50"
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Input */}
+      {isWidth ? (
+        <div className="flex items-end gap-1.5">
+          <div className="flex-1">
+            <label className="text-[10px] text-muted-foreground">Полная, мм *</label>
+            <Input value={fullMm} onChange={e => setFullMm(e.target.value.replace(/\D/g, ''))} placeholder="1200" className="h-7 text-xs" inputMode="numeric" disabled={loading} />
+          </div>
+          <div className="flex-1">
+            <label className="text-[10px] text-muted-foreground">Рабочая, мм</label>
+            <Input value={workMm} onChange={e => setWorkMm(e.target.value.replace(/\D/g, ''))} placeholder="необяз." className="h-7 text-xs" inputMode="numeric" disabled={loading} />
+          </div>
+          <Button size="sm" onClick={() => handleSubmit()} disabled={!fullMm || loading} className="h-7 w-7 p-0 shrink-0">
+            {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+          </Button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-1.5">
+          <Input
+            value={value}
+            onChange={e => setValue(e.target.value)}
+            placeholder="Введите значение…"
+            className="h-7 text-xs flex-1"
+            disabled={loading}
+            onKeyDown={e => { if (e.key === 'Enter' && value.trim()) handleSubmit(); }}
+          />
+          <Button size="sm" onClick={() => handleSubmit()} disabled={!value.trim() || loading} className="h-7 w-7 p-0 shrink-0">
+            {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Примеры команд для AI-чата
 const CHAT_EXAMPLES = [
@@ -701,9 +814,23 @@ export function NormalizationWizard({
     return [];
   }, [norm.dryRunResult, norm.catalogItems]);
 
-  // AI questions from dry_run
+  // AI questions from dry_run — only for roofing categories
   const aiQuestions = useMemo(() => {
-    return (norm.dryRunResult?.questions || []).map(backendQuestionToAI);
+    const allQuestions = (norm.dryRunResult?.questions || []).map(backendQuestionToAI);
+    // Filter: only keep questions whose profile maps to PROFNASTIL or METALLOCHEREPICA
+    return allQuestions.filter(q => {
+      const profile = q.cluster_path?.profile || q.token || '';
+      // Skip questions about items without a roofing profile
+      if (!profile || profile === '(без профиля)' || profile.startsWith('q-')) return false;
+      // Keep if profile matches roofing patterns
+      if (RE_PROFNASTIL_PROFILE.test(profile)) return true;
+      if (RE_METALLOCHEREPICA_TITLE.test(profile)) return true;
+      // Keep width/thickness/coating questions that have a real profile token
+      if (q.type === 'width' || q.type === 'thickness' || q.type === 'coating' || q.type === 'color') {
+        return profile.length > 0 && profile !== 'OTHER';
+      }
+      return true;
+    });
   }, [norm.dryRunResult]);
 
   // Dashboard question cards
@@ -1175,47 +1302,24 @@ export function NormalizationWizard({
                       </div>
                     )}
 
-                    {/* Block-level questions expanded inline */}
-                    {questionCards.length > 0 && !activeQuestionForm && (
-                      <>
-                        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mt-4">
-                          Все вопросы
-                        </div>
-                        <div className="space-y-2">
-                          {aiQuestions.map((q, i) => {
-                            const cfg = Q_TYPE_CONFIG[q.type?.toUpperCase() + '_MAP'] || Q_TYPE_CONFIG[q.type?.toUpperCase() + '_MASTER'] || { icon: AlertTriangle, label: q.type, color: '' };
-                            const Icon = cfg.icon;
-                            return (
-                              <button
-                                key={i}
-                                onClick={() => setActiveQuestionForm(q)}
-                                className="w-full text-left px-3 py-2 rounded-lg border hover:bg-muted/50 hover:border-primary/30 transition-colors"
-                              >
-                                <div className="flex items-center gap-2">
-                                  <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                                  <span className="text-xs font-medium truncate flex-1">
-                                    {q.ask || q.token || `Вопрос ${i + 1}`}
-                                  </span>
-                                  {q.affected_count > 0 && (
-                                    <Badge variant="outline" className="text-[10px] h-4 px-1.5 shrink-0">{q.affected_count} товаров</Badge>
-                                  )}
-                                </div>
-                                {q.examples.length > 0 && (
-                                  <p className="text-[10px] text-muted-foreground truncate mt-1 pl-5">{q.examples.slice(0, 2).join(' · ')}</p>
-                                )}
-                                {q.suggestions.length > 0 && (
-                                  <div className="flex flex-wrap gap-1 mt-1.5 pl-5">
-                                    {q.suggestions.slice(0, 3).map((s, si) => (
-                                      <span key={si} className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">{s}</span>
-                                    ))}
-                                  </div>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </>
-                    )}
+                     {/* Inline question forms — each with chips + free text */}
+                     {aiQuestions.length > 0 && (
+                       <>
+                         <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mt-4">
+                           Все вопросы нормализации ({aiQuestions.length})
+                         </div>
+                         <div className="space-y-3">
+                           {aiQuestions.map((q, i) => (
+                             <InlineQuestionForm
+                               key={`${q.token}-${q.type}-${i}`}
+                               question={q}
+                               onAnswer={(value) => handleAnswerFromCluster(q.token || `q-${i}`, value)}
+                               loading={norm.answeringQuestion}
+                             />
+                           ))}
+                         </div>
+                       </>
+                     )}
                   </div>
                 </ScrollArea>
               </TabsContent>

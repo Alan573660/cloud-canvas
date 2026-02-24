@@ -7,7 +7,7 @@
  * - Возможность выбора и маркировки "мусорных" товаров
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -338,6 +338,8 @@ export function ClusterDetailPanel({
 }: ClusterDetailPanelProps) {
   const { t } = useTranslation();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const PAGE_SIZE = 100;
+  const [currentPage, setCurrentPage] = useState(0);
 
   const filteredItems = useMemo(() => {
     if (!clusterPath) return items;
@@ -353,6 +355,16 @@ export function ClusterDetailPanel({
   const itemsWithValidation = useMemo(() => {
     return filteredItems.map(item => ({ item, validation: validateProduct(item) }));
   }, [filteredItems]);
+
+  // Pagination
+  const totalPages = Math.ceil(itemsWithValidation.length / PAGE_SIZE);
+  const pagedItems = useMemo(() => {
+    const start = currentPage * PAGE_SIZE;
+    return itemsWithValidation.slice(start, start + PAGE_SIZE);
+  }, [itemsWithValidation, currentPage]);
+
+  // Reset page when cluster changes
+  useEffect(() => { setCurrentPage(0); }, [clusterPath]);
 
   const readyCount = itemsWithValidation.filter(i => i.validation.status === 'ready').length;
   const needsAttentionCount = itemsWithValidation.filter(i => i.validation.status === 'needs_attention').length;
@@ -497,14 +509,14 @@ export function ClusterDetailPanel({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {itemsWithValidation.length === 0 ? (
+            {pagedItems.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={11} className="h-32 text-center text-muted-foreground">
                   {t('common.noData', 'Нет данных')}
                 </TableCell>
               </TableRow>
             ) : (
-              itemsWithValidation.map(({ item, validation }) => {
+              pagedItems.map(({ item, validation }) => {
                 const isSkipped = skippedIds.has(item.id);
                 const isSelected = selectedIds.has(item.id);
                 return (
@@ -569,6 +581,42 @@ export function ClusterDetailPanel({
           </TableBody>
         </Table>
       </ScrollArea>
+
+      {/* Pagination controls */}
+      {totalPages > 1 && (
+        <div className="shrink-0 px-3 py-2 border-t flex items-center justify-between text-xs">
+          <span className="text-muted-foreground">
+            {currentPage * PAGE_SIZE + 1}–{Math.min((currentPage + 1) * PAGE_SIZE, itemsWithValidation.length)} из {itemsWithValidation.length}
+          </span>
+          <div className="flex items-center gap-1">
+            <Button size="sm" variant="outline" className="h-6 text-xs px-2" disabled={currentPage === 0} onClick={() => setCurrentPage(p => p - 1)}>
+              ←
+            </Button>
+            {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+              let page = i;
+              if (totalPages > 7) {
+                if (currentPage < 4) page = i;
+                else if (currentPage > totalPages - 4) page = totalPages - 7 + i;
+                else page = currentPage - 3 + i;
+              }
+              return (
+                <Button
+                  key={page}
+                  size="sm"
+                  variant={page === currentPage ? 'default' : 'outline'}
+                  className="h-6 w-6 text-xs p-0"
+                  onClick={() => setCurrentPage(page)}
+                >
+                  {page + 1}
+                </Button>
+              );
+            })}
+            <Button size="sm" variant="outline" className="h-6 text-xs px-2" disabled={currentPage >= totalPages - 1} onClick={() => setCurrentPage(p => p + 1)}>
+              →
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
