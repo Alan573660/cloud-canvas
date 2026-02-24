@@ -125,7 +125,15 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log(`[import-normalize] Op: ${op}, Org: ${organization_id}, Job: ${import_job_id || 'none'}`);
+    console.log(`[import-normalize] Op: ${op}, Org: ${organization_id}, Job: ${import_job_id || 'current'}`);
+
+    // Quick ops that don't need bot_settings
+    if (op === 'apply_status') {
+      return new Response(
+        JSON.stringify({ ok: true, state: 'DONE', progress: 100 }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
     // ─── Load confirmed rules from bot_settings ──────────────
     const { data: botSettings } = await adminClient
@@ -146,8 +154,13 @@ Deno.serve(async (req) => {
     // =========================================================
     if (op === 'dry_run') {
       const jobId = import_job_id || 'current';
-      const limit = Math.min((body.scope as Record<string, number>)?.limit || 2000, 5000);
+      const limit = Math.min((body.scope as Record<string, number>)?.limit || 500, 2000);
       const aiSuggest = body.ai_suggest !== false;
+
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 48000); // 48s safety margin
+
+      try {
 
       // Load staging rows
       let query = adminClient
@@ -184,36 +197,48 @@ Deno.serve(async (req) => {
         return String(d.title || d['Наименование'] || d['Номенклатура'] || d.name || '');
       }).filter(t => t.length > 0);
 
+      // Deduplicate titles before sending to AI
+      const uniqueTitles = [...new Set(titles)];
       let aiPatches: Record<string, NormalizedAttributes> = {};
 
-      if (aiSuggest && lovableApiKey && titles.length > 0) {
+      if (aiSuggest && lovableApiKey && uniqueTitles.length > 0) {
         try {
-          aiPatches = await normalizeWithAI(titles, lovableApiKey, confirmedWidths, profileAliases, coatingAliases, colorRalAliases);
+          aiPatches = await normalizeWithAI(uniqueTitles, lovableApiKey, confirmedWidths, profileAliases, coatingAliases, colorRalAliases, ac.signal);
           console.log(`[import-normalize] AI returned ${Object.keys(aiPatches).length} patches`);
         } catch (aiErr) {
-          console.error('[import-normalize] AI error:', aiErr instanceof Error ? aiErr.message : aiErr);
+          if ((aiErr as Error).name === 'AbortError') {
+            console.warn('[import-normalize] AI timed out, returning deterministic results only');
+          } else {
+            console.error('[import-normalize] AI error:', aiErr instanceof Error ? aiErr.message : aiErr);
+          }
         }
       }
 
-      // Build patches
+      // Also apply deterministic extraction for all titles
+      const deterministicPatches: Record<string, Partial<NormalizedAttributes>> = {};
+      for (const t of uniqueTitles) {
+        deterministicPatches[t] = extractAttributesDeterministic(t, confirmedWidths, profileAliases, coatingAliases, colorRalAliases);
+      }
+      // Build patches — merge deterministic + AI (AI takes priority)
       const patches = rows.map(r => {
         const d = r.data as Record<string, unknown>;
         const title = String(d.title || d['Наименование'] || d['Номенклатура'] || d.name || '');
+        const det = deterministicPatches[title] || {};
         const ai = aiPatches[title] || {};
 
         return {
           id: r.id,
           title,
-          profile: ai.profile || d.profile || null,
-          thickness_mm: ai.thickness_mm || d.thickness_mm || null,
-          coating: ai.coating || d.coating || null,
-          color_code: ai.color_code || d.color_code || null,
-          color_system: ai.color_system || d.color_system || null,
-          width_work_mm: ai.width_work_mm || d.width_work_mm || null,
-          width_full_mm: ai.width_full_mm || d.width_full_mm || null,
+          profile: ai.profile || det.profile || d.profile || null,
+          thickness_mm: ai.thickness_mm || det.thickness_mm || d.thickness_mm || null,
+          coating: ai.coating || det.coating || d.coating || null,
+          color_code: ai.color_code || det.color_code || d.color_code || null,
+          color_system: ai.color_system || det.color_system || d.color_system || null,
+          width_work_mm: ai.width_work_mm || det.width_work_mm || d.width_work_mm || null,
+          width_full_mm: ai.width_full_mm || det.width_full_mm || d.width_full_mm || null,
           price_rub_m2: parseFloat(String(d.price_rub_m2 || d['Цена'] || d.price || '0')) || 0,
-          unit: ai.unit || d.unit || 'm2',
-          sheet_kind: ai.sheet_kind || d.sheet_kind || 'OTHER',
+          unit: ai.unit || det.unit || d.unit || 'm2',
+          sheet_kind: ai.sheet_kind || det.sheet_kind || d.sheet_kind || 'OTHER',
           notes: d.notes || null,
         };
       });
@@ -226,7 +251,26 @@ Deno.serve(async (req) => {
           run_id: `run_${Date.now()}`,
           stats: {
             rows_scanned: rows.length,
-            candidates: titles.length,
+            candidates: uniqueTitles.length,
+            patches_ready: readyCount,
+          },
+          patches_sample: patches.slice(0, 100),
+          questions: [],
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+
+      } catch (dryErr) {
+        if ((dryErr as Error).name === 'AbortError') {
+          return new Response(
+            JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Normalization timed out. Try with fewer rows.' }),
+            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+        throw dryErr;
+      } finally {
+        clearTimeout(timer);
+      }
             patches_ready: readyCount,
           },
           patches_sample: patches.slice(0, 100),
@@ -255,7 +299,7 @@ Deno.serve(async (req) => {
         .select('id, row_number, data')
         .eq('organization_id', organization_id)
         .order('row_number', { ascending: true })
-        .limit(50000);
+        .limit(2000);
 
       if (jobId !== 'current') {
         query = query.eq('import_job_id', jobId);
@@ -309,7 +353,7 @@ Deno.serve(async (req) => {
         .from('import_staging_rows')
         .select('data')
         .eq('organization_id', organization_id)
-        .limit(50000);
+        .limit(2000);
 
       if (jobId !== 'current') {
         query = query.eq('import_job_id', jobId);
@@ -350,7 +394,7 @@ Deno.serve(async (req) => {
         .from('import_staging_rows')
         .select('data')
         .eq('organization_id', organization_id)
-        .limit(50000);
+        .limit(2000);
 
       if (jobId !== 'current') {
         query = query.eq('import_job_id', jobId);
@@ -379,15 +423,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    // =========================================================
-    // APPLY_STATUS — Since apply is now synchronous, always DONE
-    // =========================================================
-    if (op === 'apply_status') {
-      return new Response(
-        JSON.stringify({ ok: true, state: 'DONE', progress: 100 }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
+    // apply_status handled early above
 
     // =========================================================
     // CONFIRM — Save a normalization rule via settings-merge
@@ -507,7 +543,7 @@ Deno.serve(async (req) => {
         .from('import_staging_rows')
         .select('data')
         .eq('organization_id', organization_id)
-        .limit(50000);
+        .limit(2000);
 
       const kindCounts: Record<string, number> = {};
       for (const r of rows || []) {
@@ -713,37 +749,26 @@ async function normalizeWithAI(
   profileAliases: Record<string, string>,
   coatingAliases: Record<string, string>,
   colorAliases: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<Record<string, NormalizedAttributes>> {
-  // Process in batches of 50 titles
-  const BATCH = 50;
+  // Process in batches of 30 titles (smaller = faster per call)
+  const BATCH = 30;
   const allPatches: Record<string, NormalizedAttributes> = {};
 
   for (let i = 0; i < titles.length; i += BATCH) {
+    if (signal?.aborted) break;
+
     const batch = titles.slice(i, i + BATCH);
-    const uniqueTitles = [...new Set(batch)];
 
-    const prompt = `Проанализируй названия товаров (кровельные материалы) и извлеки атрибуты.
+    const prompt = `Извлеки атрибуты из названий кровельных товаров. Верни JSON массив:
+[{"title":"...","profile":"С8"|null,"thickness_mm":0.5|null,"coating":"Полиэстер"|null,"color_code":"3005"|null,"color_system":"RAL"|null,"sheet_kind":"PROFNASTIL"|"METALLOCHEREPICA"|"OTHER","unit":"m2"|"sht"}]
 
-Известные алиасы профилей: ${JSON.stringify(profileAliases)}
-Известные алиасы покрытий: ${JSON.stringify(coatingAliases)}
-Известные алиасы цветов: ${JSON.stringify(colorAliases)}
-
-Верни JSON массив объектов:
-[{
-  "title": "исходное название",
-  "profile": "С8" | "С10" | "НС35" | "МП-20" | null,
-  "thickness_mm": 0.5 | null,
-  "coating": "Полиэстер" | "Пурал" | "Оцинковка" | null,
-  "color_code": "3005" | "6005" | null,
-  "color_system": "RAL" | "RR" | null,
-  "sheet_kind": "PROFNASTIL" | "METALLOCHEREPICA" | "DOBOR" | "SANDWICH" | "OTHER",
-  "unit": "m2" | "sht"
-}]
+Алиасы: профили=${JSON.stringify(profileAliases)}, покрытия=${JSON.stringify(coatingAliases)}
 
 Названия:
-${uniqueTitles.map((t, idx) => `${idx + 1}. ${t}`).join('\n')}
+${batch.map((t, idx) => `${idx + 1}. ${t}`).join('\n')}
 
-ВАЖНО: Верни ТОЛЬКО JSON массив, без комментариев.`;
+Верни ТОЛЬКО JSON массив.`;
 
     try {
       const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
@@ -752,11 +777,12 @@ ${uniqueTitles.map((t, idx) => `${idx + 1}. ${t}`).join('\n')}
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
+        signal,
         body: JSON.stringify({
           model: 'google/gemini-3-flash-preview',
           messages: [{ role: 'user', content: prompt }],
           temperature: 0,
-          max_tokens: 50000,
+          max_tokens: 4000,
         }),
       });
 
