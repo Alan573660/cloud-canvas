@@ -62,6 +62,15 @@ const PROFILE_WIDTHS: Record<string, { work: number; full: number }> = {
   'Каскад': { work: 1020, full: 1115 },
   'Монтекристо': { work: 1100, full: 1200 },
   'Квинта': { work: 1100, full: 1210 },
+  'Андалузия': { work: 1116, full: 1200 },
+  'Классик': { work: 1100, full: 1190 },
+  'Банга': { work: 1100, full: 1195 },
+  'Венеция': { work: 1100, full: 1190 },
+  'Модерн': { work: 1100, full: 1190 },
+  'Камея': { work: 1100, full: 1180 },
+  'Арарат': { work: 1100, full: 1190 },
+  'Джокер': { work: 1100, full: 1170 },
+  'Испания': { work: 1100, full: 1150 },
 };
 
 Deno.serve(async (req) => {
@@ -245,6 +254,9 @@ Deno.serve(async (req) => {
 
       const readyCount = patches.filter(p => p.profile && p.thickness_mm && p.coating).length;
 
+      // ── Generate questions for missing attributes ──
+      const questions = generateQuestions(patches, confirmedWidths, profileAliases, coatingAliases, colorRalAliases);
+
       return new Response(
         JSON.stringify({
           ok: true,
@@ -254,8 +266,8 @@ Deno.serve(async (req) => {
             candidates: uniqueTitles.length,
             patches_ready: readyCount,
           },
-          patches_sample: patches.slice(0, 100),
-          questions: [],
+          patches_sample: patches.slice(0, 200),
+          questions,
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
@@ -848,9 +860,18 @@ function extractAttributesDeterministic(
     /Каскад/i,
     /Монтекристо/i,
     /Квинта/i,
+    /Андалузия/i,
+    /Классик/i,
+    /Банга/i,
+    /Венеция/i,
+    /Модерн/i,
+    /Камея/i,
+    /Арарат/i,
+    /Джокер/i,
+    /Испания/i,
   ];
 
-  const profileNames = ['С8', 'С10', 'С20', 'С21', 'С44', 'НС35', 'НС44', 'Н57', 'Н60', 'Н75', 'Н114', 'МП-20', 'МП-35', 'Монтеррей', 'Супермонтеррей', 'Каскад', 'Монтекристо', 'Квинта'];
+  const profileNames = ['С8', 'С10', 'С20', 'С21', 'С44', 'НС35', 'НС44', 'Н57', 'Н60', 'Н75', 'Н114', 'МП-20', 'МП-35', 'Монтеррей', 'Супермонтеррей', 'Каскад', 'Монтекристо', 'Квинта', 'Андалузия', 'Классик', 'Банга', 'Венеция', 'Модерн', 'Камея', 'Арарат', 'Джокер', 'Испания'];
 
   for (let i = 0; i < profilePatterns.length; i++) {
     if (profilePatterns[i].test(title)) {
@@ -913,7 +934,7 @@ function extractAttributesDeterministic(
   // Sheet kind
   if (attrs.profile) {
     const p = attrs.profile;
-    if (/Монтеррей|Супермонтеррей|Каскад|Монтекристо|Квинта/i.test(p)) {
+    if (/Монтеррей|Супермонтеррей|Каскад|Монтекристо|Квинта|Андалузия|Классик|Банга|Венеция|Модерн|Камея|Арарат|Джокер|Испания/i.test(p)) {
       attrs.sheet_kind = 'METALLOCHEREPICA';
     } else {
       attrs.sheet_kind = 'PROFNASTIL';
@@ -944,7 +965,228 @@ function getWidths(
   // Fallback to reference table
   if (PROFILE_WIDTHS[profile]) {
     return PROFILE_WIDTHS[profile];
+}
+
+// ─── Question Generation ────────────────────────────────────
+
+interface PatchRow {
+  id: string;
+  title: string;
+  profile?: string | null;
+  thickness_mm?: number | null;
+  coating?: string | null;
+  color_code?: string | null;
+  color_system?: string | null;
+  width_work_mm?: number | null;
+  width_full_mm?: number | null;
+  sheet_kind?: string | null;
+  [key: string]: unknown;
+}
+
+function generateQuestions(
+  patches: PatchRow[],
+  confirmedWidths: Record<string, { work_mm: number; full_mm: number }>,
+  profileAliases: Record<string, string>,
+  coatingAliases: Record<string, string>,
+  colorAliases: Record<string, string>,
+) {
+  const questions: Array<{
+    type: string;
+    token: string;
+    profile?: string;
+    examples: string[];
+    affected_count: number;
+    suggested?: string;
+    suggested_variants?: string[];
+    ask: string;
+    confidence: number;
+  }> = [];
+
+  // ── WIDTH questions: profiles with items but no widths ──
+  const profilesWithoutWidth = new Map<string, { count: number; examples: string[] }>();
+  for (const p of patches) {
+    const profile = p.profile;
+    if (!profile) continue;
+    if (p.width_work_mm && p.width_full_mm) continue;
+    // Already in confirmed or reference
+    if (confirmedWidths[profile] || PROFILE_WIDTHS[profile]) continue;
+    
+    if (!profilesWithoutWidth.has(profile)) {
+      profilesWithoutWidth.set(profile, { count: 0, examples: [] });
+    }
+    const entry = profilesWithoutWidth.get(profile)!;
+    entry.count++;
+    if (entry.examples.length < 3) entry.examples.push(p.title);
   }
+  
+  for (const [profile, info] of profilesWithoutWidth) {
+    questions.push({
+      type: 'WIDTH_MASTER',
+      token: profile,
+      profile,
+      examples: info.examples,
+      affected_count: info.count,
+      ask: `Укажите рабочую и полную ширину для профиля «${profile}» (мм)`,
+      confidence: 0.3,
+    });
+  }
+
+  // ── COATING questions: items with no coating ──
+  const unknownCoatings = new Map<string, { count: number; examples: string[] }>();
+  for (const p of patches) {
+    if (p.coating) continue;
+    // Try to find a coating-like token in the title
+    const title = p.title || '';
+    // Look for potential coating tokens (words that could be coatings)
+    const tokens = title.match(/\b(PE|ПЭ|Satin|Сатин|Matt|Матт|Pural|Пурал|Plastisol|Пластизол|PVDF|Velur|Велюр|Стальной шёлк|Agneta|Viking|Purman|Викинг|Atlas|Атлас|Drap|Драп)\b/gi);
+    if (tokens && tokens.length > 0) {
+      const token = tokens[0];
+      if (!unknownCoatings.has(token)) {
+        unknownCoatings.set(token, { count: 0, examples: [] });
+      }
+      const entry = unknownCoatings.get(token)!;
+      entry.count++;
+      if (entry.examples.length < 3) entry.examples.push(title);
+    }
+  }
+
+  // Also group items without coating by profile for broader questions
+  const noCoatingByProfile = new Map<string, { count: number; examples: string[] }>();
+  for (const p of patches) {
+    if (p.coating) continue;
+    const key = p.profile || '(без профиля)';
+    if (!noCoatingByProfile.has(key)) {
+      noCoatingByProfile.set(key, { count: 0, examples: [] });
+    }
+    const entry = noCoatingByProfile.get(key)!;
+    entry.count++;
+    if (entry.examples.length < 3) entry.examples.push(p.title || '');
+  }
+
+  for (const [token, info] of unknownCoatings) {
+    if (coatingAliases[token]) continue;
+    questions.push({
+      type: 'COATING_MAP',
+      token,
+      examples: info.examples,
+      affected_count: info.count,
+      suggested_variants: ['Полиэстер', 'Матовый полиэстер', 'Пурал', 'Оцинковка', 'Пластизол'],
+      ask: `Какое покрытие означает «${token}»?`,
+      confidence: 0.4,
+    });
+  }
+
+  // If many items have no coating at all, add a general question
+  for (const [profile, info] of noCoatingByProfile) {
+    if (info.count < 3) continue;
+    // Skip if we already have specific coating questions for this profile
+    const hasSpecific = [...unknownCoatings.values()].some(v => v.examples.some(e => e.includes(profile)));
+    if (hasSpecific) continue;
+    questions.push({
+      type: 'COATING_MAP',
+      token: `[${profile}]`,
+      profile,
+      examples: info.examples,
+      affected_count: info.count,
+      suggested_variants: ['Полиэстер', 'Матовый полиэстер', 'Пурал', 'Оцинковка'],
+      ask: `Какое покрытие у товаров профиля «${profile}» без указанного покрытия?`,
+      confidence: 0.2,
+    });
+  }
+
+  // ── COLOR questions: items with no color ──
+  const unknownColors = new Map<string, { count: number; examples: string[] }>();
+  for (const p of patches) {
+    if (p.color_code) continue;
+    if (p.coating?.toLowerCase().includes('оцинк') || p.coating?.toLowerCase().includes('цинк')) continue;
+    const title = p.title || '';
+    // Look for potential color tokens (RR codes, named colors)
+    const colorTokens = title.match(/\b(RR\s*\d{2}|шоколад|зелёный|зеленый|красн|синий|белый|серый|вишн|бордо|графит|антрацит|слонов|бежев|тёмн|коричнев|чёрн|чернозем|терракот)\w*/gi);
+    if (colorTokens && colorTokens.length > 0) {
+      const token = colorTokens[0].trim();
+      if (colorAliases[token]) continue;
+      if (!unknownColors.has(token)) {
+        unknownColors.set(token, { count: 0, examples: [] });
+      }
+      const entry = unknownColors.get(token)!;
+      entry.count++;
+      if (entry.examples.length < 3) entry.examples.push(title);
+    }
+  }
+
+  for (const [token, info] of unknownColors) {
+    questions.push({
+      type: 'COLOR_MAP',
+      token,
+      examples: info.examples,
+      affected_count: info.count,
+      ask: `Какой RAL-код соответствует цвету «${token}»?`,
+      confidence: 0.4,
+    });
+  }
+
+  // ── THICKNESS questions: items without thickness ──
+  const noThicknessProfiles = new Map<string, { count: number; examples: string[] }>();
+  for (const p of patches) {
+    if (p.thickness_mm) continue;
+    const key = p.profile || '(без профиля)';
+    if (!noThicknessProfiles.has(key)) {
+      noThicknessProfiles.set(key, { count: 0, examples: [] });
+    }
+    const entry = noThicknessProfiles.get(key)!;
+    entry.count++;
+    if (entry.examples.length < 3) entry.examples.push(p.title || '');
+  }
+
+  for (const [profile, info] of noThicknessProfiles) {
+    if (info.count < 2) continue;
+    questions.push({
+      type: 'THICKNESS_SET',
+      token: profile,
+      profile,
+      examples: info.examples,
+      affected_count: info.count,
+      suggested_variants: ['0.4', '0.45', '0.5', '0.55', '0.6', '0.7'],
+      ask: `Какая толщина (мм) у товаров «${profile}»?`,
+      confidence: 0.3,
+    });
+  }
+
+  // ── PROFILE questions: items with no recognized profile ──
+  const noProfile = patches.filter(p => !p.profile);
+  if (noProfile.length > 0) {
+    // Group by unique title patterns
+    const titlePatterns = new Map<string, { count: number; examples: string[] }>();
+    for (const p of noProfile) {
+      const title = p.title || '';
+      // Extract the first significant word as a pattern key
+      const firstWord = title.split(/[\s,;/]+/).find(w => w.length > 2 && !/^\d/.test(w) && !/^(шт|м2|мм|руб)$/i.test(w)) || title.slice(0, 30);
+      if (!titlePatterns.has(firstWord)) {
+        titlePatterns.set(firstWord, { count: 0, examples: [] });
+      }
+      const entry = titlePatterns.get(firstWord)!;
+      entry.count++;
+      if (entry.examples.length < 3) entry.examples.push(title);
+    }
+
+    for (const [token, info] of titlePatterns) {
+      if (info.count < 2) continue;
+      questions.push({
+        type: 'PROFILE_MAP',
+        token,
+        examples: info.examples,
+        affected_count: info.count,
+        ask: `К какому профилю относятся товары «${token}…»?`,
+        confidence: 0.2,
+      });
+    }
+  }
+
+  // Sort: most affected first
+  questions.sort((a, b) => b.affected_count - a.affected_count);
+
+  return questions;
+}
 
   return null;
 }
