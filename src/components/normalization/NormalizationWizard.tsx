@@ -659,6 +659,7 @@ export function NormalizationWizard({
   const [activeQuestionForm, setActiveQuestionForm] = useState<AIQuestion | null>(null);
   const [confirmApplyOpen, setConfirmApplyOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
 
   const norm = useNormalization({ organizationId, importJobId: effectiveJobId });
 
@@ -805,6 +806,17 @@ export function NormalizationWizard({
     setSelectedCluster(path);
   }, []);
 
+  const handleMarkJunk = useCallback((ids: string[], action: 'skip' | 'unskip') => {
+    setSkippedIds(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => action === 'skip' ? next.add(id) : next.delete(id));
+      return next;
+    });
+    if (action === 'skip') {
+      toast({ title: `${ids.length} товаров пропущено`, description: 'Они исключены из вопросов и публикации' });
+    }
+  }, []);
+
   const handleToggleNode = useCallback((nodeId: string) => {
     setExpandedNodes(prev => {
       const next = new Set(prev);
@@ -910,12 +922,12 @@ export function NormalizationWizard({
                 Сканировать
               </Button>
 
-              {/* Apply with confirmation */}
+               {/* Apply with confirmation */}
               {!confirmApplyOpen ? (
                 <Button
                   size="sm"
                   onClick={() => setConfirmApplyOpen(true)}
-                  disabled={patchesReady === 0 || isApplying}
+                  disabled={isApplying}
                   className="h-7 text-xs"
                 >
                   {isApplying
@@ -1063,6 +1075,8 @@ export function NormalizationWizard({
                     aiQuestions={aiQuestions}
                     onAnswerQuestion={handleAnswerFromCluster}
                     answeringQuestion={norm.answeringQuestion}
+                    skippedIds={skippedIds}
+                    onMarkJunk={handleMarkJunk}
                   />
                 </div>
               </div>
@@ -1076,6 +1090,8 @@ export function NormalizationWizard({
                   onAnswerQuestion={handleAnswerFromCluster}
                   answeringQuestion={norm.answeringQuestion}
                   simpleMode
+                  skippedIds={skippedIds}
+                  onMarkJunk={handleMarkJunk}
                 />
               </div>
             )}
@@ -1159,40 +1175,44 @@ export function NormalizationWizard({
                       </div>
                     )}
 
-                    {/* Individual questions list */}
-                    {aiQuestions.length > 0 && !activeQuestionForm && (
+                    {/* Block-level questions expanded inline */}
+                    {questionCards.length > 0 && !activeQuestionForm && (
                       <>
                         <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mt-4">
-                          Детали вопросов
+                          Все вопросы
                         </div>
-                        <div className="space-y-1">
-                          {aiQuestions.slice(0, 20).map((q, i) => {
+                        <div className="space-y-2">
+                          {aiQuestions.map((q, i) => {
                             const cfg = Q_TYPE_CONFIG[q.type?.toUpperCase() + '_MAP'] || Q_TYPE_CONFIG[q.type?.toUpperCase() + '_MASTER'] || { icon: AlertTriangle, label: q.type, color: '' };
                             const Icon = cfg.icon;
                             return (
                               <button
                                 key={i}
                                 onClick={() => setActiveQuestionForm(q)}
-                                className="w-full text-left px-2 py-1.5 rounded border hover:bg-muted transition-colors"
+                                className="w-full text-left px-3 py-2 rounded-lg border hover:bg-muted/50 hover:border-primary/30 transition-colors"
                               >
                                 <div className="flex items-center gap-2">
-                                  <Icon className="h-3 w-3 text-muted-foreground shrink-0" />
-                                  <span className="text-xs font-medium truncate">{q.token || `вопрос ${i + 1}`}</span>
+                                  <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                                  <span className="text-xs font-medium truncate flex-1">
+                                    {q.ask || q.token || `Вопрос ${i + 1}`}
+                                  </span>
                                   {q.affected_count > 0 && (
-                                    <Badge variant="outline" className="text-[10px] h-4 px-1 ml-auto shrink-0">{q.affected_count}</Badge>
+                                    <Badge variant="outline" className="text-[10px] h-4 px-1.5 shrink-0">{q.affected_count} товаров</Badge>
                                   )}
                                 </div>
                                 {q.examples.length > 0 && (
-                                  <p className="text-[10px] text-muted-foreground truncate mt-0.5 pl-5">{q.examples[0]}</p>
+                                  <p className="text-[10px] text-muted-foreground truncate mt-1 pl-5">{q.examples.slice(0, 2).join(' · ')}</p>
+                                )}
+                                {q.suggestions.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 mt-1.5 pl-5">
+                                    {q.suggestions.slice(0, 3).map((s, si) => (
+                                      <span key={si} className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">{s}</span>
+                                    ))}
+                                  </div>
                                 )}
                               </button>
                             );
                           })}
-                          {aiQuestions.length > 20 && (
-                            <p className="text-xs text-muted-foreground text-center py-2">
-                              + ещё {aiQuestions.length - 20} вопросов
-                            </p>
-                          )}
                         </div>
                       </>
                     )}

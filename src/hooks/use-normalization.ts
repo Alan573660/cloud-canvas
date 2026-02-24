@@ -512,10 +512,30 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   }, [organizationId, importJobId, stopPolling]);
 
   const executeApply = useCallback(async () => {
+    // Auto-run analysis if not done yet
     if (!runId || !profileHash) {
-      toast({ title: 'Ошибка', description: 'Сначала выполните анализ', variant: 'destructive' });
+      toast({ title: 'Запускаем анализ…', description: 'Анализ будет выполнен автоматически перед применением' });
+      const result = await executeDryRun({ aiSuggest: true, limit: 2000 });
+      if (!result?.run_id) {
+        toast({ title: 'Ошибка', description: 'Не удалось выполнить анализ. Попробуйте нажать «Сканировать».', variant: 'destructive' });
+        return;
+      }
+      // Now proceed with fresh runId/profileHash from state — but we need to use them directly
+      // since setState is async. Use the result values directly.
+      const freshRunId = result.run_id;
+      const freshHash = result.profile_hash;
+      if (!freshRunId || !freshHash) {
+        toast({ title: 'Ошибка', description: 'Анализ не вернул необходимые данные.', variant: 'destructive' });
+        return;
+      }
+      // Call apply with fresh values
+      await doApply(freshRunId, freshHash);
       return;
     }
+    await doApply(runId, profileHash);
+  }, [runId, profileHash, executeDryRun]);
+
+  const doApply = useCallback(async (currentRunId: string, currentProfileHash: string) => {
 
     setApplyState('STARTING');
     setApplyError(null);
@@ -525,11 +545,11 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     try {
       const { data, error } = await supabase.functions.invoke('import-normalize', {
         body: {
-          op: 'apply',
+           op: 'apply',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
-          run_id: runId,
-          profile_hash: profileHash,
+          run_id: currentRunId,
+          profile_hash: currentProfileHash,
         },
       });
 
@@ -584,7 +604,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
         pollCountRef.current = 0;
 
         pollingRef.current = setInterval(() => {
-          pollApplyStatus(newApplyId, runId);
+          pollApplyStatus(newApplyId, currentRunId);
         }, POLL_INTERVAL_MS);
       } else if (result?.ok !== false && result?.patched_rows !== undefined) {
         // Sync mode — done immediately
@@ -603,7 +623,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       setApplyError(msg);
       toast({ title: 'Ошибка применения', description: msg, variant: 'destructive' });
     }
-  }, [runId, profileHash, organizationId, importJobId, pollApplyStatus, executeDryRun]);
+  }, [organizationId, importJobId, pollApplyStatus, executeDryRun]);
 
   // ─── Answer Question (with double-click protection) ────────
 

@@ -4,6 +4,7 @@
  * Показывает:
  * - AI-вопросы с формами для WIDTH/PROFILE/CATEGORY/COLOR/COATING/THICKNESS
  * - Таблицу товаров с отображением цвета + цинка
+ * - Возможность выбора и маркировки "мусорных" товаров
  */
 
 import { useState, useMemo } from 'react';
@@ -17,9 +18,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/utils';
 import {
-  CheckCircle2, AlertCircle, Sparkles, HelpCircle, Send, Loader2
+  CheckCircle2, AlertCircle, Sparkles, HelpCircle, Send, Loader2, Trash2, Ban
 } from 'lucide-react';
 import type { CanonicalProduct, ClusterPath, AIQuestion, AIQuestionType } from './types';
 import { validateProduct } from './types';
@@ -32,6 +34,8 @@ interface ClusterDetailPanelProps {
   onAnswerQuestion?: (questionId: string, value: string | number) => void;
   answeringQuestion?: boolean;
   simpleMode?: boolean;
+  skippedIds?: Set<string>;
+  onMarkJunk?: (ids: string[], action: 'skip' | 'unskip') => void;
 }
 
 // =========================================
@@ -330,8 +334,10 @@ function ClusterHeader({
 // =========================================
 export function ClusterDetailPanel({
   items, clusterPath, loading, aiQuestions = [], onAnswerQuestion, answeringQuestion, simpleMode,
+  skippedIds = new Set(), onMarkJunk,
 }: ClusterDetailPanelProps) {
   const { t } = useTranslation();
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const filteredItems = useMemo(() => {
     if (!clusterPath) return items;
@@ -434,22 +440,60 @@ export function ClusterDetailPanel({
         </div>
       )}
 
+      {/* Selection Action Bar */}
+      {selectedIds.size > 0 && onMarkJunk && (
+        <div className="px-3 py-2 border-b bg-muted/50 flex items-center gap-2 shrink-0">
+          <span className="text-xs font-medium">{selectedIds.size} выбрано</span>
+          <Button size="sm" variant="outline" className="h-6 text-xs gap-1"
+            onClick={() => { onMarkJunk(Array.from(selectedIds), 'skip'); setSelectedIds(new Set()); }}>
+            <Ban className="h-3 w-3" /> Пропустить
+          </Button>
+          <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => setSelectedIds(new Set())}>
+            Снять выделение
+          </Button>
+        </div>
+      )}
+
+      {/* Skipped items count */}
+      {skippedIds.size > 0 && (
+        <div className="px-3 py-1.5 border-b bg-muted/30 flex items-center justify-between text-xs">
+          <span className="text-muted-foreground">
+            <Ban className="h-3 w-3 inline mr-1" />
+            Пропущено: {skippedIds.size} товаров
+          </span>
+          {onMarkJunk && (
+            <Button size="sm" variant="ghost" className="h-5 text-[10px] px-2"
+              onClick={() => onMarkJunk(Array.from(skippedIds), 'unskip')}>
+              Восстановить все
+            </Button>
+          )}
+        </div>
+      )}
+
       {/* Items Table */}
       <ScrollArea className="flex-1">
         <Table>
           <TableHeader className="sticky top-0 bg-background z-10">
             <TableRow>
-              <TableHead className="w-[40px]"></TableHead>
+              <TableHead className="w-[36px]">
+                <Checkbox
+                  checked={filteredItems.length > 0 && selectedIds.size === filteredItems.length}
+                  onCheckedChange={(checked) => {
+                    if (checked) setSelectedIds(new Set(filteredItems.map(i => i.id)));
+                    else setSelectedIds(new Set());
+                  }}
+                />
+              </TableHead>
+              <TableHead className="w-[30px]"></TableHead>
               <TableHead className="w-[100px]">ID</TableHead>
-              <TableHead className="min-w-[150px]">{t('normalize.title', 'Название')}</TableHead>
+              <TableHead className="min-w-[150px]">{t('normalize.title', 'Нормализация прайса')}</TableHead>
               <TableHead className="w-[80px]">{t('normalize.profile', 'Профиль')}</TableHead>
-              <TableHead className="w-[70px]">{t('normalize.thickness', 'Толщ.')}</TableHead>
+              <TableHead className="w-[70px]">{t('normalize.thickness', 'Толщина')}</TableHead>
               <TableHead className="w-[100px]">{t('normalize.coating', 'Покрытие')}</TableHead>
               <TableHead className="w-[120px]">{t('normalize.colorRal', 'Цвет / Zn')}</TableHead>
-              <TableHead className="w-[80px]">{t('normalize.workWidth', 'Раб. шир.')}</TableHead>
-              <TableHead className="w-[80px]">{t('normalize.fullWidth', 'Полн. шир.')}</TableHead>
+              <TableHead className="w-[80px]">{t('normalize.workWidth', 'Рабочая')}</TableHead>
+              <TableHead className="w-[80px]">{t('normalize.fullWidth', 'Полная')}</TableHead>
               <TableHead className="w-[80px]">{t('normalize.price', 'Цена')}</TableHead>
-              <TableHead className="w-[50px]">{t('normalize.unit', 'Ед.')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -460,50 +504,67 @@ export function ClusterDetailPanel({
                 </TableCell>
               </TableRow>
             ) : (
-              itemsWithValidation.map(({ item, validation }) => (
-                <TableRow
-                  key={item.id}
-                  className={cn(validation.status === 'needs_attention' && "bg-destructive/5")}
-                >
-                  <TableCell>
-                    {validation.status === 'ready' ? (
-                      <CheckCircle2 className="h-4 w-4 text-green-600" />
-                    ) : (
-                      <AlertCircle className="h-4 w-4 text-destructive" />
+              itemsWithValidation.map(({ item, validation }) => {
+                const isSkipped = skippedIds.has(item.id);
+                const isSelected = selectedIds.has(item.id);
+                return (
+                  <TableRow
+                    key={item.id}
+                    className={cn(
+                      validation.status === 'needs_attention' && !isSkipped && "bg-destructive/5",
+                      isSkipped && "opacity-40 bg-muted/30",
+                      isSelected && "bg-primary/5"
                     )}
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">{item.id.slice(0, 8)}...</TableCell>
-                  <TableCell className="max-w-[150px] truncate text-sm" title={item.title}>
-                    {item.title || '—'}
-                  </TableCell>
-                  <TableCell>
-                    <FieldCell value={item.profile} fieldName="profile" missingFields={validation.missing_fields} />
-                  </TableCell>
-                  <TableCell>
-                    <FieldCell value={item.thickness_mm ? `${item.thickness_mm}` : undefined} fieldName="thickness_mm" missingFields={validation.missing_fields} />
-                  </TableCell>
-                  <TableCell>
-                    <FieldCell value={item.coating} fieldName="coating" missingFields={validation.missing_fields} />
-                  </TableCell>
-                  <TableCell>
-                    <ColorCell item={item} />
-                  </TableCell>
-                  <TableCell>
-                    <FieldCell value={item.work_width_mm} fieldName="work_width_mm" missingFields={validation.missing_fields} />
-                  </TableCell>
-                  <TableCell>
-                    <FieldCell value={item.full_width_mm} fieldName="full_width_mm" missingFields={validation.missing_fields} />
-                  </TableCell>
-                  <TableCell>
-                    <FieldCell value={item.price} fieldName="price" missingFields={validation.missing_fields} />
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className="text-xs">
-                      {item.unit === 'm2' ? 'м²' : 'шт'}
-                    </Badge>
-                  </TableCell>
-                </TableRow>
-              ))
+                  >
+                    <TableCell>
+                      <Checkbox
+                        checked={isSelected}
+                        onCheckedChange={(checked) => {
+                          setSelectedIds(prev => {
+                            const next = new Set(prev);
+                            if (checked) next.add(item.id); else next.delete(item.id);
+                            return next;
+                          });
+                        }}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      {isSkipped ? (
+                        <Ban className="h-3.5 w-3.5 text-muted-foreground" />
+                      ) : validation.status === 'ready' ? (
+                        <CheckCircle2 className="h-4 w-4 text-green-600" />
+                      ) : (
+                        <AlertCircle className="h-4 w-4 text-destructive" />
+                      )}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{item.id.slice(0, 8)}...</TableCell>
+                    <TableCell className="max-w-[150px] truncate text-sm" title={item.title}>
+                      {item.title || '—'}
+                    </TableCell>
+                    <TableCell>
+                      <FieldCell value={item.profile} fieldName="profile" missingFields={validation.missing_fields} />
+                    </TableCell>
+                    <TableCell>
+                      <FieldCell value={item.thickness_mm ? `${item.thickness_mm}` : undefined} fieldName="thickness_mm" missingFields={validation.missing_fields} />
+                    </TableCell>
+                    <TableCell>
+                      <FieldCell value={item.coating} fieldName="coating" missingFields={validation.missing_fields} />
+                    </TableCell>
+                    <TableCell>
+                      <ColorCell item={item} />
+                    </TableCell>
+                    <TableCell>
+                      <FieldCell value={item.work_width_mm} fieldName="work_width_mm" missingFields={validation.missing_fields} />
+                    </TableCell>
+                    <TableCell>
+                      <FieldCell value={item.full_width_mm} fieldName="full_width_mm" missingFields={validation.missing_fields} />
+                    </TableCell>
+                    <TableCell>
+                      <FieldCell value={item.price} fieldName="price" missingFields={validation.missing_fields} />
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>
