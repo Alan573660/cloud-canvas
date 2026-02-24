@@ -1,257 +1,322 @@
-/**
- * import-publish — Edge Function for publishing parsed data to BigQuery.
- *
- * Strategy: DELETE all org rows from BigQuery → INSERT new rows from staging.
- * Also cleans up old staging data after successful publish.
- *
- * No Cloud Run dependency — direct BigQuery REST API via GCP SA key.
- */
-
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { loadServiceAccount, bqDeleteOrganization, bqInsertRows } from '../_shared/bigquery.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Cloud Run Import Worker URL (from secrets)
+const IMPORT_WORKER_URL = Deno.env.get('IMPORT_WORKER_URL');
+const IMPORT_SHARED_SECRET = Deno.env.get('IMPORT_SHARED_SECRET');
+
+// Column mapping types
+interface ColumnMapping {
+  [targetField: string]: string; // targetField -> sourceColumn
+}
+
 interface PublishRequest {
   organization_id: string;
   import_job_id: string;
+  file_path: string; // Path in Supabase Storage
+  file_format: 'csv' | 'xlsx' | 'jsonl' | 'parquet';
   archive_before_replace?: boolean;
+  mapping?: ColumnMapping | null; // Column mapping from validate step
+  allow_partial?: boolean; // Import valid rows even if some have errors
+  options?: {
+    strict_roofing_only_m2?: boolean; // Only import м² items
+    excluded_row_numbers?: number[]; // Row numbers to exclude
+    transform?: {
+      sanitize_id?: boolean;
+      normalize_price?: boolean;
+      trim_text?: boolean;
+    };
+  } | null;
 }
 
 Deno.serve(async (req) => {
+  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    // ─── Auth ────────────────────────────────────────────────
+    // Verify auth
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
+    if (!authHeader) {
+      console.error('[import-publish] No authorization header');
       return new Response(
         JSON.stringify({ ok: false, error: 'Unauthorized', error_code: 'UNAUTHORIZED' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
+    // Initialize Supabase clients
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
 
-    const userClient = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader } },
+    // Client with user's token for auth verification
+    const supabaseUser = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } }
     });
 
-    const { data: { user }, error: authError } = await userClient.auth.getUser();
+    // Verify user is authenticated
+    const { data: { user }, error: authError } = await supabaseUser.auth.getUser();
     if (authError || !user) {
+      console.error('[import-publish] Auth error:', authError);
       return new Response(
-        JSON.stringify({ ok: false, error: 'Unauthorized', error_code: 'UNAUTHORIZED' }),
+        JSON.stringify({ ok: false, error: 'Unauthorized', error_code: 'UNAUTHORIZED', details: authError?.message }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
+    // Parse request body
     const body: PublishRequest = await req.json();
-    console.log('[import-publish] Request:', {
-      user_id: user.id,
+    console.log('[import-publish] Request:', { 
+      user_id: user.id, 
       organization_id: body.organization_id,
       import_job_id: body.import_job_id,
+      file_format: body.file_format,
+      archive_before_replace: body.archive_before_replace,
+      has_mapping: !!body.mapping
     });
 
-    if (!body.organization_id || !body.import_job_id) {
+    // Validate required fields
+    if (!body.organization_id || !body.import_job_id || !body.file_path || !body.file_format) {
       return new Response(
         JSON.stringify({ ok: false, error: 'Missing required fields', error_code: 'MISSING_FIELDS' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    const adminClient = createClient(supabaseUrl, supabaseServiceKey);
+    // Service role client for admin operations
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
-    // ─── Role check (owner/admin only) ───────────────────────
-    const { data: profile, error: profileError } = await userClient
+    // Verify user belongs to this organization and has appropriate role
+    const { data: profile, error: profileError } = await supabaseUser
       .from('profiles')
       .select('organization_id, role')
       .eq('user_id', user.id)
       .single();
 
-    if (profileError || !profile || profile.organization_id !== body.organization_id) {
+    if (profileError || !profile) {
+      console.error('[import-publish] Profile error:', profileError);
       return new Response(
-        JSON.stringify({ ok: false, error: 'Access denied', error_code: 'ACCESS_DENIED' }),
+        JSON.stringify({ ok: false, error: 'Profile not found', error_code: 'PROFILE_NOT_FOUND' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    if (!['owner', 'admin'].includes(profile.role)) {
+    if (profile.organization_id !== body.organization_id) {
+      console.error('[import-publish] Organization mismatch');
       return new Response(
-        JSON.stringify({ ok: false, error: 'Only admins can publish imports', error_code: 'INSUFFICIENT_PERMISSIONS' }),
+        JSON.stringify({ ok: false, error: 'Access denied to this organization', error_code: 'ACCESS_DENIED' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // ─── Update job to APPLYING ──────────────────────────────
-    await adminClient.from('import_jobs').update({
-      status: 'APPLYING',
-      started_at: new Date().toISOString(),
-    }).eq('id', body.import_job_id).eq('organization_id', body.organization_id);
-
-    // ─── Load staging rows ───────────────────────────────────
-    const { data: stagingRows, error: stagingError } = await adminClient
-      .from('import_staging_rows')
-      .select('row_number, data')
-      .eq('import_job_id', body.import_job_id)
-      .eq('organization_id', body.organization_id)
-      .order('row_number', { ascending: true })
-      .limit(100000);
-
-    if (stagingError) {
-      console.error('[import-publish] Staging read error:', stagingError);
-      await markFailed(adminClient, body.import_job_id, 'Failed to read staging rows', 'STAGING_ERROR');
+    // Check role - only owner, admin can publish
+    const allowedRoles = ['owner', 'admin'];
+    if (!allowedRoles.includes(profile.role)) {
+      console.error('[import-publish] Insufficient role:', profile.role);
       return new Response(
-        JSON.stringify({ ok: false, error: 'Failed to read staging data', error_code: 'STAGING_ERROR' }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ ok: false, error: 'Insufficient permissions. Only admins can publish imports.', error_code: 'INSUFFICIENT_PERMISSIONS' }),
+        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    if (!stagingRows || stagingRows.length === 0) {
-      await markFailed(adminClient, body.import_job_id, 'No staging rows to publish', 'EMPTY_STAGING');
+    // Update import job status to APPLYING
+    const { error: updateError } = await supabaseAdmin
+      .from('import_jobs')
+      .update({ status: 'APPLYING', started_at: new Date().toISOString() })
+      .eq('id', body.import_job_id)
+      .eq('organization_id', body.organization_id);
+
+    if (updateError) {
+      console.error('[import-publish] Failed to update job status:', updateError);
+    }
+
+    // Get signed URL for the file
+    const { data: signedUrlData, error: signedUrlError } = await supabaseAdmin
+      .storage
+      .from('imports')
+      .createSignedUrl(body.file_path, 3600);
+
+    if (signedUrlError || !signedUrlData?.signedUrl) {
+      console.error('[import-publish] Failed to get signed URL:', signedUrlError);
+      
+      await supabaseAdmin
+        .from('import_jobs')
+        .update({ 
+          status: 'FAILED', 
+          error_message: 'File not found in storage',
+          error_code: 'FILE_NOT_FOUND',
+          finished_at: new Date().toISOString()
+        })
+        .eq('id', body.import_job_id);
+
       return new Response(
-        JSON.stringify({ ok: false, error: 'No data to publish', error_code: 'EMPTY_STAGING' }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ ok: false, error: 'File not found in storage', error_code: 'FILE_NOT_FOUND' }),
+        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    console.log(`[import-publish] Loaded ${stagingRows.length} staging rows`);
+    console.log('[import-publish] Got signed URL, calling worker...');
 
-    // ─── Transform staging data to BigQuery rows ─────────────
-    const bqRows = stagingRows.map((sr) => {
-      const d = sr.data as Record<string, unknown>;
-      return {
-        organization_id: body.organization_id,
-        import_job_id: body.import_job_id,
-        row_number: sr.row_number,
-        // Core fields from normalization
-        title: d.title || d['Наименование'] || d['Номенклатура'] || d.name || '',
-        sku: d.sku || d['Артикул'] || d['SKU'] || d.id || null,
-        profile: d.profile || null,
-        thickness_mm: parseFloat(String(d.thickness_mm || '0')) || null,
-        coating: d.coating || null,
-        color_code: d.color_code || null,
-        color_system: d.color_system || null,
-        width_work_mm: parseInt(String(d.width_work_mm || '0'), 10) || null,
-        width_full_mm: parseInt(String(d.width_full_mm || '0'), 10) || null,
-        price_rub_m2: parseFloat(String(d.price_rub_m2 || d['Цена'] || d.price || '0')) || 0,
-        unit: d.unit || 'm2',
-        sheet_kind: d.sheet_kind || 'OTHER',
-        notes: d.notes || null,
-        // Metadata
-        raw_data: JSON.stringify(d),
-        imported_at: new Date().toISOString(),
-      };
+    // Validate secrets
+    if (!IMPORT_WORKER_URL) {
+      console.error('[import-publish] IMPORT_WORKER_URL secret not configured');
+      return new Response(
+        JSON.stringify({ ok: false, error: 'Server configuration error: IMPORT_WORKER_URL not set', error_code: 'CONFIG_ERROR' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (!IMPORT_SHARED_SECRET) {
+      console.error('[import-publish] IMPORT_SHARED_SECRET secret not configured');
+      return new Response(
+        JSON.stringify({ ok: false, error: 'Server configuration error: IMPORT_SHARED_SECRET not set', error_code: 'CONFIG_ERROR' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Build worker payload matching exact contract
+    const workerPayload: Record<string, unknown> = {
+      organization_id: body.organization_id,
+      import_job_id: body.import_job_id,
+      file_url: signedUrlData.signedUrl,
+      file_format: body.file_format,
+      archive_before_replace: body.archive_before_replace ?? true,
+      dry_run: false,
+      // Allow partial publish - import valid rows even if some rows have errors
+      allow_partial: body.allow_partial ?? true,
+    };
+
+    // Add mapping if provided
+    if (body.mapping) {
+      workerPayload.mapping = body.mapping;
+    }
+
+    // Add options (including transform, strict_roofing_only_m2, excluded_row_numbers) if provided
+    if (body.options) {
+      workerPayload.options = body.options;
+    }
+
+    // ASYNC FIRE-AND-FORGET: Call Cloud Run Import Worker
+    // Worker will update import_jobs.status directly when done (COMPLETED/FAILED)
+    // This prevents Edge Function timeout on large files (70k+ rows)
+    console.log('[import-publish] worker_base_url=', IMPORT_WORKER_URL);
+    const workerUrl = `${IMPORT_WORKER_URL}/api/import/publish`;
+    console.log('[import-publish] Calling worker URL:', workerUrl);
+    console.log('[import-publish] Worker payload:', JSON.stringify(workerPayload).slice(0, 500));
+
+    // Valid error_type values allowed by import_errors check constraint
+    const VALID_ERROR_TYPES = new Set([
+      'MISSING_REQUIRED', 'INVALID_TYPE', 'INVALID_VALUE',
+      'NOT_FOUND_REFERENCE', 'DUPLICATE_KEY', 'OUT_OF_RANGE', 'CONFLICT', 'UNKNOWN'
+    ]);
+
+    // Maps worker-specific error types to valid DB enum values
+    function normalizeErrorType(raw: string): string {
+      if (VALID_ERROR_TYPES.has(raw)) return raw;
+      if (raw.includes('PRICE') || raw.includes('AMOUNT')) return 'INVALID_VALUE';
+      if (raw.includes('MISSING') || raw.includes('REQUIRED')) return 'MISSING_REQUIRED';
+      if (raw.includes('TYPE') || raw.includes('FORMAT')) return 'INVALID_TYPE';
+      if (raw.includes('DUPLICATE') || raw.includes('DUP')) return 'DUPLICATE_KEY';
+      if (raw.includes('RANGE')) return 'OUT_OF_RANGE';
+      if (raw.includes('NOT_FOUND') || raw.includes('REFERENCE')) return 'NOT_FOUND_REFERENCE';
+      return 'UNKNOWN';
+    }
+
+    fetch(workerUrl, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-Import-Secret': IMPORT_SHARED_SECRET 
+      },
+      body: JSON.stringify(workerPayload),
+    }).then(async (workerResponse) => {
+      const workerResult = await workerResponse.text();
+      console.log('[import-publish] Worker response status:', workerResponse.status);
+      console.log('[import-publish] Worker response body (first 500 chars):', workerResult.slice(0, 500));
+      
+      // CRITICAL: If worker returns non-200, mark job as FAILED
+      if (!workerResponse.ok) {
+        console.error('[import-publish] Worker returned error:', workerResponse.status, workerResult.slice(0, 200));
+        
+        // Parse error details from worker response
+        let errorMessage = `Worker error: ${workerResponse.status}`;
+        let errorCode = 'WORKER_ERROR';
+        try {
+          const errJson = JSON.parse(workerResult);
+          const rawDetail = errJson.detail || errJson.error || '';
+
+          // Detect import_errors constraint violation: worker is using non-allowed error_type
+          // This happens when Python worker uses INVALID_PRICE, INVALID_SKU, etc.
+          if (rawDetail.includes('import_errors_error_type_check') || rawDetail.includes('23514')) {
+            console.error('[import-publish] Worker used invalid error_type in import_errors (check constraint violation)');
+            errorMessage = 'Ошибка валидации данных: файл содержит строки с невалидными ценами или SKU. ' +
+              'Воркер использует неподдерживаемый тип ошибки. Обновите Python-воркер (normalizeErrorType).';
+            errorCode = 'WORKER_ERROR_TYPE_MISMATCH';
+          } else {
+            errorMessage = rawDetail.slice(0, 400) || errorMessage;
+            errorCode = errJson.error_code || errorCode;
+          }
+        } catch {
+          errorMessage = workerResult.slice(0, 200) || errorMessage;
+        }
+        
+        // Update job to FAILED status
+        await supabaseAdmin
+          .from('import_jobs')
+          .update({
+            status: 'FAILED',
+            error_message: errorMessage,
+            error_code: errorCode,
+            finished_at: new Date().toISOString(),
+          })
+          .eq('id', body.import_job_id);
+        
+        console.log('[import-publish] Job marked as FAILED due to worker error, code:', errorCode);
+      }
+    }).catch(async (err) => {
+      console.error('[import-publish] Worker fetch error:', err);
+      // Attempt to mark job as failed if worker call completely failed
+      await supabaseAdmin
+        .from('import_jobs')
+        .update({
+          status: 'FAILED',
+          error_message: `Worker unreachable: ${err.message}`,
+          error_code: 'WORKER_UNREACHABLE',
+          finished_at: new Date().toISOString(),
+        })
+        .eq('id', body.import_job_id);
+      
+      console.log('[import-publish] Job marked as FAILED due to network error');
     });
 
-    // ─── BigQuery: Delete old + Insert new ───────────────────
-    let sa;
-    try {
-      sa = loadServiceAccount();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('[import-publish] SA load error:', msg);
-      await markFailed(adminClient, body.import_job_id, msg, 'CONFIG_ERROR');
-      return new Response(
-        JSON.stringify({ ok: false, error: msg, error_code: 'CONFIG_ERROR' }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
+    // Export normalizeErrorType for potential reuse
+    console.log('[import-publish] normalizeErrorType loaded, VALID_ERROR_TYPES:', [...VALID_ERROR_TYPES].join(', '));
 
-    try {
-      // Step 1: Delete old data
-      console.log('[import-publish] Deleting old BQ rows for org:', body.organization_id);
-      const deleteResult = await bqDeleteOrganization(sa, body.organization_id);
-      console.log('[import-publish] Deleted:', deleteResult.deleted, 'rows');
+    console.log('[import-publish] Worker call dispatched (async), returning immediately');
 
-      // Step 2: Insert new data
-      console.log('[import-publish] Inserting', bqRows.length, 'rows to BQ');
-      const insertResult = await bqInsertRows(sa, bqRows);
-      console.log('[import-publish] Inserted:', insertResult.inserted, 'errors:', insertResult.errors.length);
-
-      if (insertResult.errors.length > 0) {
-        console.warn('[import-publish] Insert errors:', insertResult.errors.slice(0, 5).join('; '));
-      }
-
-      // Step 3: Clean up staging rows
-      await adminClient
-        .from('import_staging_rows')
-        .delete()
-        .eq('import_job_id', body.import_job_id)
-        .eq('organization_id', body.organization_id);
-
-      // Step 4: Clean up old import_errors for this job
-      await adminClient
-        .from('import_errors')
-        .delete()
-        .eq('import_job_id', body.import_job_id)
-        .eq('organization_id', body.organization_id);
-
-      // Step 5: Update job as COMPLETED
-      await adminClient.from('import_jobs').update({
-        status: 'COMPLETED',
-        inserted_rows: insertResult.inserted,
-        deleted_rows: deleteResult.deleted,
-        invalid_rows: insertResult.errors.length,
-        finished_at: new Date().toISOString(),
-        summary: {
-          bq_deleted: deleteResult.deleted,
-          bq_inserted: insertResult.inserted,
-          bq_errors: insertResult.errors.length,
-          error_samples: insertResult.errors.slice(0, 5),
-        },
-      }).eq('id', body.import_job_id);
-
-      return new Response(
-        JSON.stringify({
-          ok: true,
-          import_job_id: body.import_job_id,
-          status: 'COMPLETED',
-          inserted: insertResult.inserted,
-          deleted: deleteResult.deleted,
-          errors: insertResult.errors.length,
-        }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-
-    } catch (bqError) {
-      const msg = bqError instanceof Error ? bqError.message : String(bqError);
-      console.error('[import-publish] BigQuery error:', msg);
-      await markFailed(adminClient, body.import_job_id, `BigQuery: ${msg.substring(0, 400)}`, 'BQ_ERROR');
-      return new Response(
-        JSON.stringify({ ok: false, error: msg, error_code: 'BQ_ERROR' }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
+    // Return immediately - UI will poll import_jobs.status
+    return new Response(
+      JSON.stringify({ 
+        ok: true, 
+        import_job_id: body.import_job_id,
+        status: 'APPLYING',
+        message: 'Import started. Processing in background. Poll import_jobs for status updates.'
+      }),
+      { status: 202, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
 
   } catch (error) {
     console.error('[import-publish] Unexpected error:', error);
-    const msg = error instanceof Error ? error.message : 'Unknown error';
+    const message = error instanceof Error ? error.message : 'Unknown error';
     return new Response(
-      JSON.stringify({ ok: false, error: msg, error_code: 'INTERNAL_ERROR' }),
+      JSON.stringify({ ok: false, error: 'Internal server error', error_code: 'INTERNAL_ERROR', details: message }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });
-
-// ─── Helpers ─────────────────────────────────────────────────
-
-async function markFailed(
-  client: ReturnType<typeof createClient>,
-  jobId: string,
-  errorMessage: string,
-  errorCode: string
-) {
-  await client.from('import_jobs').update({
-    status: 'FAILED',
-    error_message: errorMessage.substring(0, 500),
-    error_code: errorCode,
-    finished_at: new Date().toISOString(),
-  }).eq('id', jobId);
-}

@@ -9,7 +9,6 @@ import {
   Dialog,
   DialogContent,
 } from '@/components/ui/dialog';
-import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -78,7 +77,7 @@ const CAT_LABELS: Record<string, string> = {
 // Профнастил профили: C8, C10, C20, C21, HC35, NS35, NS57, МП20, НС57, Н60, etc.
 const RE_PROFNASTIL_PROFILE = /^(NS|НС|С|C|Н|H|НС|HC|МП|MP|Н)-?\d/i;
 // Металлочерепица профили: Монтеррей, Каскад, Супермонтеррей, Modern, Adamante, Cascade, etc.
-const RE_METALLOCHEREPICA_TITLE = /металлочерепица|monterrey|монтеррей|cascade|каскад|adamante|адаманте|quadro|квадро|genesis|dimos|luxury|supermonterey|супермонтеррей|modern|vintage|country|андалузия|классик|банга|венеция|камея|арарат|джокер|испания/i;
+const RE_METALLOCHEREPICA_TITLE = /металлочерепица|monterrey|монтеррей|cascade|каскад|adamante|адаманте|quadro|квадро|genesis|dimos|luxury|supermonterey|супермонтеррей|modern|vintage|country/i;
 const RE_PROFNASTIL_TITLE = /профнастил|профлист/i;
 const RE_DOBOR_TITLE = /планка|конёк|конек|ендова|карниз|ветровая|заглушка|шуруп|саморез|кронштейн|крепёж|крепеж|болт|гайка|шайба|доборн/i;
 const RE_SANDWICH_TITLE = /сэндвич|sandwich|панель утеплен/i;
@@ -382,120 +381,7 @@ function QuestionAnswerForm({
   );
 }
 
-// ─── Inline Question Form (always visible, no click-to-open) ──
-
-function InlineQuestionForm({
-  question,
-  onAnswer,
-  loading,
-}: {
-  question: AIQuestion;
-  onAnswer: (value: string | number) => void;
-  loading: boolean;
-}) {
-  const isWidth = question.type === 'width';
-  const [fullMm, setFullMm] = useState('');
-  const [workMm, setWorkMm] = useState('');
-  const [value, setValue] = useState('');
-  const [answered, setAnswered] = useState(false);
-
-  const cfg = Q_TYPE_CONFIG[question.type?.toUpperCase() + '_MAP'] || Q_TYPE_CONFIG[question.type?.toUpperCase() + '_MASTER'] || Q_TYPE_CONFIG[question.type?.toUpperCase() + '_SET'] || { icon: AlertTriangle, label: question.type, color: 'bg-muted border-border text-foreground' };
-  const Icon = cfg.icon;
-
-  const handleSubmit = (overrideVal?: string) => {
-    let finalValue = overrideVal || '';
-    if (!overrideVal) {
-      if (isWidth) {
-        if (!fullMm) return;
-        finalValue = workMm ? `${fullMm}:${workMm}` : fullMm;
-      } else {
-        finalValue = value;
-      }
-    }
-    if (finalValue) {
-      setAnswered(true);
-      onAnswer(finalValue);
-    }
-  };
-
-  if (answered) {
-    return (
-      <div className="px-3 py-2 rounded-lg border border-primary/20 bg-primary/5 flex items-center gap-2">
-        <CheckCircle2 className="h-3.5 w-3.5 text-primary shrink-0" />
-        <span className="text-xs text-primary font-medium">{question.token || question.type}: ответ отправлен</span>
-      </div>
-    );
-  }
-
-  return (
-    <div className={`rounded-lg border p-3 space-y-2 ${cfg.color}`}>
-      {/* Header */}
-      <div className="flex items-center gap-2">
-        <Icon className="h-3.5 w-3.5 shrink-0" />
-        <span className="text-xs font-semibold flex-1 truncate">
-          {question.ask || question.token || question.type}
-        </span>
-        {question.affected_count > 0 && (
-          <Badge variant="outline" className="text-[10px] h-4 px-1.5 shrink-0">{question.affected_count} товаров</Badge>
-        )}
-      </div>
-
-      {/* Examples */}
-      {question.examples.length > 0 && (
-        <p className="text-[10px] text-muted-foreground truncate">
-          Примеры: {question.examples.slice(0, 3).join(' · ')}
-        </p>
-      )}
-
-      {/* Suggestion chips */}
-      {question.suggestions.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {question.suggestions.map((s, si) => (
-            <button
-              key={si}
-              onClick={() => handleSubmit(s)}
-              disabled={loading}
-              className="text-xs px-2 py-1 rounded border border-border bg-background hover:bg-primary hover:text-primary-foreground hover:border-primary transition-colors disabled:opacity-50"
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Input */}
-      {isWidth ? (
-        <div className="flex items-end gap-1.5">
-          <div className="flex-1">
-            <label className="text-[10px] text-muted-foreground">Полная, мм *</label>
-            <Input value={fullMm} onChange={e => setFullMm(e.target.value.replace(/\D/g, ''))} placeholder="1200" className="h-7 text-xs" inputMode="numeric" disabled={loading} />
-          </div>
-          <div className="flex-1">
-            <label className="text-[10px] text-muted-foreground">Рабочая, мм</label>
-            <Input value={workMm} onChange={e => setWorkMm(e.target.value.replace(/\D/g, ''))} placeholder="необяз." className="h-7 text-xs" inputMode="numeric" disabled={loading} />
-          </div>
-          <Button size="sm" onClick={() => handleSubmit()} disabled={!fullMm || loading} className="h-7 w-7 p-0 shrink-0">
-            {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
-          </Button>
-        </div>
-      ) : (
-        <div className="flex items-center gap-1.5">
-          <Input
-            value={value}
-            onChange={e => setValue(e.target.value)}
-            placeholder="Введите значение…"
-            className="h-7 text-xs flex-1"
-            disabled={loading}
-            onKeyDown={e => { if (e.key === 'Enter' && value.trim()) handleSubmit(); }}
-          />
-          <Button size="sm" onClick={() => handleSubmit()} disabled={!value.trim() || loading} className="h-7 w-7 p-0 shrink-0">
-            {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
-          </Button>
-        </div>
-      )}
-    </div>
-  );
-}
+// ─── Right Panel: AI Chat ─────────────────────────────────────
 
 // Примеры команд для AI-чата
 const CHAT_EXAMPLES = [
@@ -510,13 +396,11 @@ const CHAT_EXAMPLES = [
 function AIChatPanel({
   organizationId,
   importJobId,
-  onRuleApplied,
 }: {
   organizationId: string;
   importJobId?: string;
-  onRuleApplied?: () => void;
 }) {
-  const [messages, setMessages] = useState<Array<{ role: 'user' | 'ai'; text: string; isError?: boolean; ruleApplied?: { type: string; token: string; value: string } }>>([]);
+  const [messages, setMessages] = useState<Array<{ role: 'user' | 'ai'; text: string; isError?: boolean }>>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [showExamples, setShowExamples] = useState(true);
@@ -554,33 +438,29 @@ function AIChatPanel({
         code?: string;
         ai_skip_reason?: string;
         ai_disabled?: boolean;
-        rule_applied?: { type: string; token: string; value: string };
       };
 
       if (result?.ok === false) {
         let errMsg = result.error || 'Ошибка ИИ';
         if (result.code === 'TIMEOUT') errMsg = '⏱ ИИ не ответил вовремя. Попробуйте ещё раз.';
         if (result.ai_disabled) errMsg = `ИИ отключён: ${result.ai_skip_reason || 'неизвестная причина'}`;
+        console.error('[AIChatPanel] AI error response:', result);
         setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${errMsg}`, isError: true }]);
         return;
       }
 
       const reply = result?.reply || result?.answer || result?.message || '';
 
+      // Detect "Could not parse command" or empty reply — give user-friendly guidance
       if (!reply || reply.toLowerCase().includes('could not parse') || reply.toLowerCase().includes('не удалось')) {
         setMessages(prev => [...prev, {
           role: 'ai',
-          text: '💡 Примеры команд:\n\n• «Установи покрытие MattPE → Матовый полиэстер»\n• «Установи покрытие Plastisol → Пластизол»\n• «Установи цвет RAL9003 → белый»\n• «Какие товары с неизвестным профилем?»',
+          text: '💡 Примеры команд:\n\n• «Установи покрытие MattPE → Матовый полиэстер»\n• «Установи покрытие Plastisol → Пластизол»\n• «Установи цвет RAL9003 → белый»\n• «Установи цвет RR32 → тёмно-коричневый»\n• «Какие товары с неизвестным профилем?»',
         }]);
         return;
       }
 
-      setMessages(prev => [...prev, { role: 'ai', text: reply, ruleApplied: result?.rule_applied }]);
-      
-      // If a rule was applied, trigger rescan
-      if (result?.rule_applied && onRuleApplied) {
-        onRuleApplied();
-      }
+      setMessages(prev => [...prev, { role: 'ai', text: reply }]);
     } catch (err) {
       console.error('[AIChatPanel] sendMessage error:', err);
       const errMsg = err instanceof Error ? err.message : 'Ошибка подключения к ИИ';
@@ -592,21 +472,22 @@ function AIChatPanel({
       setLoading(false);
       setTimeout(() => scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     }
-  }, [input, loading, organizationId, importJobId, onRuleApplied]);
+  }, [input, loading, organizationId, importJobId]);
 
   return (
     <div className="flex flex-col h-full">
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-3 space-y-2">
+          {/* Welcome / examples */}
           {showExamples && messages.length === 0 && (
             <div className="space-y-2">
               <div className="text-center py-3 text-muted-foreground">
                 <MessageSquare className="h-7 w-7 mx-auto mb-2 opacity-30" />
                 <p className="text-xs font-medium">ИИ-чат для нормализации</p>
-                <p className="text-[10px] mt-0.5 opacity-70">Отдавайте команды — AI применит правила автоматически</p>
+                <p className="text-[10px] mt-0.5 opacity-70">Отдавайте команды или задайте вопрос</p>
               </div>
               <div className="space-y-1">
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Быстрые команды</p>
+                <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Примеры команд</p>
                 {CHAT_EXAMPLES.map((ex, i) => (
                   <button
                     key={i}
@@ -630,14 +511,6 @@ function AIChatPanel({
                     : 'bg-muted text-foreground'
               }`}>
                 {m.text}
-                {m.ruleApplied && (
-                  <div className="mt-1.5 pt-1.5 border-t border-border/50">
-                    <Badge variant="secondary" className="text-[10px]">
-                      <CheckCircle2 className="h-2.5 w-2.5 mr-1" />
-                      {m.ruleApplied.type}: {m.ruleApplied.token} → {m.ruleApplied.value}
-                    </Badge>
-                  </div>
-                )}
               </div>
             </div>
           ))}
@@ -657,7 +530,7 @@ function AIChatPanel({
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-          placeholder="Команда или вопрос… (Enter — отправить)"
+          placeholder="Спросить ИИ… (Enter — отправить)"
           className="text-xs resize-none min-h-0 py-1.5"
           rows={2}
         />
@@ -772,7 +645,6 @@ export function NormalizationWizard({
   const [activeQuestionForm, setActiveQuestionForm] = useState<AIQuestion | null>(null);
   const [confirmApplyOpen, setConfirmApplyOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
 
   const norm = useNormalization({ organizationId, importJobId: effectiveJobId });
 
@@ -814,23 +686,9 @@ export function NormalizationWizard({
     return [];
   }, [norm.dryRunResult, norm.catalogItems]);
 
-  // AI questions from dry_run — only for roofing categories
+  // AI questions from dry_run
   const aiQuestions = useMemo(() => {
-    const allQuestions = (norm.dryRunResult?.questions || []).map(backendQuestionToAI);
-    // Filter: only keep questions whose profile maps to PROFNASTIL or METALLOCHEREPICA
-    return allQuestions.filter(q => {
-      const profile = q.cluster_path?.profile || q.token || '';
-      // Skip questions about items without a roofing profile
-      if (!profile || profile === '(без профиля)' || profile.startsWith('q-')) return false;
-      // Keep if profile matches roofing patterns
-      if (RE_PROFNASTIL_PROFILE.test(profile)) return true;
-      if (RE_METALLOCHEREPICA_TITLE.test(profile)) return true;
-      // Keep width/thickness/coating questions that have a real profile token
-      if (q.type === 'width' || q.type === 'thickness' || q.type === 'coating' || q.type === 'color') {
-        return profile.length > 0 && profile !== 'OTHER';
-      }
-      return true;
-    });
+    return (norm.dryRunResult?.questions || []).map(backendQuestionToAI);
   }, [norm.dryRunResult]);
 
   // Dashboard question cards
@@ -931,17 +789,6 @@ export function NormalizationWizard({
 
   const handleSelectCluster = useCallback((path: ClusterPath) => {
     setSelectedCluster(path);
-  }, []);
-
-  const handleMarkJunk = useCallback((ids: string[], action: 'skip' | 'unskip') => {
-    setSkippedIds(prev => {
-      const next = new Set(prev);
-      ids.forEach(id => action === 'skip' ? next.add(id) : next.delete(id));
-      return next;
-    });
-    if (action === 'skip') {
-      toast({ title: `${ids.length} товаров пропущено`, description: 'Они исключены из вопросов и публикации' });
-    }
   }, []);
 
   const handleToggleNode = useCallback((nodeId: string) => {
@@ -1049,12 +896,12 @@ export function NormalizationWizard({
                 Сканировать
               </Button>
 
-               {/* Apply with confirmation */}
+              {/* Apply with confirmation */}
               {!confirmApplyOpen ? (
                 <Button
                   size="sm"
                   onClick={() => setConfirmApplyOpen(true)}
-                  disabled={isApplying}
+                  disabled={patchesReady === 0 || isApplying}
                   className="h-7 text-xs"
                 >
                   {isApplying
@@ -1202,8 +1049,6 @@ export function NormalizationWizard({
                     aiQuestions={aiQuestions}
                     onAnswerQuestion={handleAnswerFromCluster}
                     answeringQuestion={norm.answeringQuestion}
-                    skippedIds={skippedIds}
-                    onMarkJunk={handleMarkJunk}
                   />
                 </div>
               </div>
@@ -1217,8 +1062,6 @@ export function NormalizationWizard({
                   onAnswerQuestion={handleAnswerFromCluster}
                   answeringQuestion={norm.answeringQuestion}
                   simpleMode
-                  skippedIds={skippedIds}
-                  onMarkJunk={handleMarkJunk}
                 />
               </div>
             )}
@@ -1302,35 +1145,50 @@ export function NormalizationWizard({
                       </div>
                     )}
 
-                     {/* Inline question forms — each with chips + free text */}
-                     {aiQuestions.length > 0 && (
-                       <>
-                         <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mt-4">
-                           Все вопросы нормализации ({aiQuestions.length})
-                         </div>
-                         <div className="space-y-3">
-                           {aiQuestions.map((q, i) => (
-                             <InlineQuestionForm
-                               key={`${q.token}-${q.type}-${i}`}
-                               question={q}
-                               onAnswer={(value) => handleAnswerFromCluster(q.token || `q-${i}`, value)}
-                               loading={norm.answeringQuestion}
-                             />
-                           ))}
-                         </div>
-                       </>
-                     )}
+                    {/* Individual questions list */}
+                    {aiQuestions.length > 0 && !activeQuestionForm && (
+                      <>
+                        <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mt-4">
+                          Детали вопросов
+                        </div>
+                        <div className="space-y-1">
+                          {aiQuestions.slice(0, 20).map((q, i) => {
+                            const cfg = Q_TYPE_CONFIG[q.type?.toUpperCase() + '_MAP'] || Q_TYPE_CONFIG[q.type?.toUpperCase() + '_MASTER'] || { icon: AlertTriangle, label: q.type, color: '' };
+                            const Icon = cfg.icon;
+                            return (
+                              <button
+                                key={i}
+                                onClick={() => setActiveQuestionForm(q)}
+                                className="w-full text-left px-2 py-1.5 rounded border hover:bg-muted transition-colors"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <Icon className="h-3 w-3 text-muted-foreground shrink-0" />
+                                  <span className="text-xs font-medium truncate">{q.token || `вопрос ${i + 1}`}</span>
+                                  {q.affected_count > 0 && (
+                                    <Badge variant="outline" className="text-[10px] h-4 px-1 ml-auto shrink-0">{q.affected_count}</Badge>
+                                  )}
+                                </div>
+                                {q.examples.length > 0 && (
+                                  <p className="text-[10px] text-muted-foreground truncate mt-0.5 pl-5">{q.examples[0]}</p>
+                                )}
+                              </button>
+                            );
+                          })}
+                          {aiQuestions.length > 20 && (
+                            <p className="text-xs text-muted-foreground text-center py-2">
+                              + ещё {aiQuestions.length - 20} вопросов
+                            </p>
+                          )}
+                        </div>
+                      </>
+                    )}
                   </div>
                 </ScrollArea>
               </TabsContent>
 
               {/* CHAT TAB */}
               <TabsContent value="chat" className="flex-1 min-h-0 m-0 flex flex-col">
-                <AIChatPanel
-                  organizationId={organizationId}
-                  importJobId={effectiveJobId}
-                  onRuleApplied={handleRunScan}
-                />
+                <AIChatPanel organizationId={organizationId} importJobId={effectiveJobId} />
               </TabsContent>
 
               {/* RULES TAB */}

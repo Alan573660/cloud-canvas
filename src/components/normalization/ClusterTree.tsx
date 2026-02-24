@@ -1,19 +1,19 @@
 /**
- * ClusterTree v2 — Redesigned hierarchical cluster navigation
+ * ClusterTree - Иерархическое дерево кластеров
  * 
- * Hierarchy: profile → thickness_mm → coating → color_or_ral
- * Clean card-style layout with progress indicators
+ * Иерархия: product_type → profile → thickness_mm → coating → color_or_ral
+ * Кластеры группируют товары для массового редактирования
  */
 
 import { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Progress } from '@/components/ui/progress';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
-  ChevronRight, ChevronDown, Sparkles, AlertCircle, CheckCircle2,
-  Layers, Package
+  ChevronRight, ChevronDown, Sparkles, AlertCircle, CheckCircle2
 } from 'lucide-react';
 import type { ClusterNode, ClusterPath, CanonicalProduct, NormalizationStatus } from './types';
 import { validateProduct } from './types';
@@ -26,126 +26,172 @@ interface ClusterTreeProps {
   onToggleNode: (nodeId: string) => void;
 }
 
-// ─── Build Tree ─────────────────────────────────────────────
-
+// =========================================
+// Build Cluster Tree from Items
+// =========================================
 function buildClusterTree(items: CanonicalProduct[]): ClusterNode[] {
+  // Group by profile
   const profileGroups = new Map<string, CanonicalProduct[]>();
   
   items.forEach(item => {
-    const profile = item.profile || '⚠ Без профиля';
-    if (!profileGroups.has(profile)) profileGroups.set(profile, []);
+    const profile = item.profile || '—';
+    if (!profileGroups.has(profile)) {
+      profileGroups.set(profile, []);
+    }
     profileGroups.get(profile)!.push(item);
   });
   
+  // Build tree nodes
   const nodes: ClusterNode[] = [];
   
   profileGroups.forEach((profileItems, profile) => {
-    // Count ready/attention
-    let ready = 0, attention = 0;
-    profileItems.forEach(item => {
-      if (validateProduct(item).status === 'ready') ready++;
-      else attention++;
-    });
-
-    // Build thickness children
-    const thicknessGroups = new Map<string, CanonicalProduct[]>();
-    profileItems.forEach(item => {
-      const t = item.thickness_mm ? `${item.thickness_mm}` : '⚠';
-      if (!thicknessGroups.has(t)) thicknessGroups.set(t, []);
-      thicknessGroups.get(t)!.push(item);
-    });
-
-    const children: ClusterNode[] = [];
-    thicknessGroups.forEach((tItems, thickness) => {
-      let tReady = 0, tAttention = 0;
-      tItems.forEach(i => {
-        if (validateProduct(i).status === 'ready') tReady++; else tAttention++;
-      });
-
-      // Build coating children under thickness
-      const coatingGroups = new Map<string, CanonicalProduct[]>();
-      tItems.forEach(item => {
-        const c = item.coating || '⚠';
-        if (!coatingGroups.has(c)) coatingGroups.set(c, []);
-        coatingGroups.get(c)!.push(item);
-      });
-
-      const coatingChildren: ClusterNode[] = [];
-      coatingGroups.forEach((cItems, coating) => {
-        let cReady = 0, cAttention = 0;
-        cItems.forEach(i => {
-          if (validateProduct(i).status === 'ready') cReady++; else cAttention++;
-        });
-        coatingChildren.push({
-          id: `coat:${profile}:${thickness}:${coating}`,
-          level: 'coating',
-          value: coating,
-          display_label: coating === '⚠' ? 'Без покрытия' : coating,
-          items_count: cItems.length,
-          ready_count: cReady,
-          needs_attention_count: cAttention,
-        });
-      });
-
-      coatingChildren.sort((a, b) => b.needs_attention_count - a.needs_attention_count || b.items_count - a.items_count);
-
-      children.push({
-        id: `thick:${profile}:${thickness}`,
-        level: 'thickness',
-        value: thickness,
-        display_label: thickness === '⚠' ? 'Без толщины' : `${thickness} мм`,
-        items_count: tItems.length,
-        ready_count: tReady,
-        needs_attention_count: tAttention,
-        children: coatingChildren.length > 1 ? coatingChildren : undefined,
-      });
-    });
-
-    children.sort((a, b) => b.needs_attention_count - a.needs_attention_count || b.items_count - a.items_count);
-
-    nodes.push({
-      id: `prof:${profile}`,
-      level: 'profile',
-      value: profile,
-      display_label: profile,
-      items_count: profileItems.length,
-      ready_count: ready,
-      needs_attention_count: attention,
-      children: children.length > 0 ? children : undefined,
-    });
+    const profileNode = buildProfileNode(profile, profileItems);
+    nodes.push(profileNode);
   });
   
-  // Sort: problems first, then by count
+  // Sort by needs_attention_count DESC, then by items_count DESC
   nodes.sort((a, b) => {
-    if (b.needs_attention_count !== a.needs_attention_count) return b.needs_attention_count - a.needs_attention_count;
+    if (b.needs_attention_count !== a.needs_attention_count) {
+      return b.needs_attention_count - a.needs_attention_count;
+    }
     return b.items_count - a.items_count;
   });
   
   return nodes;
 }
 
-// ─── Compact Progress Bar ───────────────────────────────────
-
-function MiniProgress({ ready, total }: { ready: number; total: number }) {
-  const pct = total > 0 ? (ready / total) * 100 : 0;
-  return (
-    <div className="flex items-center gap-1.5">
-      <div className="w-12 h-1 rounded-full bg-muted overflow-hidden">
-        <div
-          className={cn(
-            "h-full rounded-full transition-all",
-            pct === 100 ? "bg-green-500" : pct > 50 ? "bg-primary" : "bg-destructive"
-          )}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <span className="text-[10px] text-muted-foreground tabular-nums">{ready}/{total}</span>
-    </div>
-  );
+function buildProfileNode(profile: string, items: CanonicalProduct[]): ClusterNode {
+  // Group by thickness
+  const thicknessGroups = new Map<string, CanonicalProduct[]>();
+  
+  items.forEach(item => {
+    const thickness = item.thickness_mm?.toString() || '—';
+    if (!thicknessGroups.has(thickness)) {
+      thicknessGroups.set(thickness, []);
+    }
+    thicknessGroups.get(thickness)!.push(item);
+  });
+  
+  const children: ClusterNode[] = [];
+  let totalReady = 0;
+  let totalNeedsAttention = 0;
+  
+  thicknessGroups.forEach((thicknessItems, thickness) => {
+    const thicknessNode = buildThicknessNode(profile, thickness, thicknessItems);
+    children.push(thicknessNode);
+    totalReady += thicknessNode.ready_count;
+    totalNeedsAttention += thicknessNode.needs_attention_count;
+  });
+  
+  // Sort children
+  children.sort((a, b) => b.needs_attention_count - a.needs_attention_count);
+  
+  return {
+    id: `profile:${profile}`,
+    level: 'profile',
+    value: profile,
+    display_label: profile,
+    items_count: items.length,
+    ready_count: totalReady,
+    needs_attention_count: totalNeedsAttention,
+    children,
+  };
 }
 
-// ─── Tree Node ──────────────────────────────────────────────
+function buildThicknessNode(profile: string, thickness: string, items: CanonicalProduct[]): ClusterNode {
+  // Group by coating
+  const coatingGroups = new Map<string, CanonicalProduct[]>();
+  
+  items.forEach(item => {
+    const coating = item.coating || '—';
+    if (!coatingGroups.has(coating)) {
+      coatingGroups.set(coating, []);
+    }
+    coatingGroups.get(coating)!.push(item);
+  });
+  
+  const children: ClusterNode[] = [];
+  let totalReady = 0;
+  let totalNeedsAttention = 0;
+  
+  coatingGroups.forEach((coatingItems, coating) => {
+    const coatingNode = buildCoatingNode(profile, thickness, coating, coatingItems);
+    children.push(coatingNode);
+    totalReady += coatingNode.ready_count;
+    totalNeedsAttention += coatingNode.needs_attention_count;
+  });
+  
+  children.sort((a, b) => b.needs_attention_count - a.needs_attention_count);
+  
+  return {
+    id: `thickness:${profile}:${thickness}`,
+    level: 'thickness',
+    value: thickness,
+    display_label: thickness === '—' ? '— мм' : `${thickness} мм`,
+    items_count: items.length,
+    ready_count: totalReady,
+    needs_attention_count: totalNeedsAttention,
+    children,
+  };
+}
 
+function buildCoatingNode(profile: string, thickness: string, coating: string, items: CanonicalProduct[]): ClusterNode {
+  // Group by color
+  const colorGroups = new Map<string, CanonicalProduct[]>();
+  
+  items.forEach(item => {
+    const color = item.color_or_ral || '—';
+    if (!colorGroups.has(color)) {
+      colorGroups.set(color, []);
+    }
+    colorGroups.get(color)!.push(item);
+  });
+  
+  const children: ClusterNode[] = [];
+  let totalReady = 0;
+  let totalNeedsAttention = 0;
+  
+  colorGroups.forEach((colorItems, color) => {
+    // Validate each item in color group
+    let ready = 0;
+    let needsAttention = 0;
+    colorItems.forEach(item => {
+      const validation = validateProduct(item);
+      if (validation.status === 'ready') ready++;
+      else needsAttention++;
+    });
+    
+    totalReady += ready;
+    totalNeedsAttention += needsAttention;
+    
+    children.push({
+      id: `color:${profile}:${thickness}:${coating}:${color}`,
+      level: 'color',
+      value: color,
+      display_label: color,
+      items_count: colorItems.length,
+      ready_count: ready,
+      needs_attention_count: needsAttention,
+    });
+  });
+  
+  children.sort((a, b) => b.needs_attention_count - a.needs_attention_count);
+  
+  return {
+    id: `coating:${profile}:${thickness}:${coating}`,
+    level: 'coating',
+    value: coating,
+    display_label: coating,
+    items_count: items.length,
+    ready_count: totalReady,
+    needs_attention_count: totalNeedsAttention,
+    children,
+  };
+}
+
+// =========================================
+// Tree Node Component
+// =========================================
 function TreeNode({
   node,
   depth,
@@ -166,15 +212,25 @@ function TreeNode({
   const hasChildren = node.children && node.children.length > 0;
   const isExpanded = expandedNodes.has(node.id);
   
+  // Build path for this node
   const nodePath: ClusterPath = { ...parentPath };
   switch (node.level) {
-    case 'profile': nodePath.profile = node.value; break;
-    case 'thickness': nodePath.thickness_mm = parseFloat(node.value) || undefined; break;
-    case 'coating': nodePath.coating = node.value; break;
-    case 'color': nodePath.color_or_ral = node.value; break;
+    case 'profile':
+      nodePath.profile = node.value;
+      break;
+    case 'thickness':
+      nodePath.thickness_mm = parseFloat(node.value) || undefined;
+      break;
+    case 'coating':
+      nodePath.coating = node.value;
+      break;
+    case 'color':
+      nodePath.color_or_ral = node.value;
+      break;
   }
   
-  const isSelected = selectedCluster &&
+  // Check if this node matches selected cluster
+  const isSelected = selectedCluster && 
     nodePath.profile === selectedCluster.profile &&
     nodePath.thickness_mm === selectedCluster.thickness_mm &&
     nodePath.coating === selectedCluster.coating &&
@@ -182,8 +238,6 @@ function TreeNode({
   
   const handleClick = () => {
     onSelectCluster(nodePath);
-    // Auto-expand on click
-    if (hasChildren && !isExpanded) onToggleNode(node.id);
   };
   
   const handleToggle = (e: React.MouseEvent) => {
@@ -191,62 +245,62 @@ function TreeNode({
     onToggleNode(node.id);
   };
   
-  const isWarning = node.value.startsWith('⚠');
-  const isProfileLevel = node.level === 'profile';
+  const status: NormalizationStatus = node.needs_attention_count > 0 ? 'needs_attention' : 'ready';
   
   return (
-    <div className={cn(depth === 0 && "mb-1")}>
+    <div>
       <button
         onClick={handleClick}
         className={cn(
-          "w-full flex items-center gap-1.5 rounded-md text-left transition-all",
-          isProfileLevel ? "px-2.5 py-2" : "px-2 py-1",
-          isSelected
-            ? "bg-primary/10 border border-primary/30 text-primary"
-            : "hover:bg-accent/50 border border-transparent",
-          isWarning && !isSelected && "text-destructive/80",
+          "w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm transition-colors",
+          "hover:bg-accent/50",
+          isSelected && "bg-primary/10 text-primary font-medium"
         )}
-        style={{ marginLeft: `${depth * 12}px` }}
+        style={{ paddingLeft: `${depth * 16 + 8}px` }}
       >
-        {/* Expand toggle */}
+        {/* Expand/Collapse */}
         {hasChildren ? (
-          <button onClick={handleToggle} className="p-0.5 hover:bg-accent rounded shrink-0">
-            {isExpanded
-              ? <ChevronDown className="h-3 w-3" />
-              : <ChevronRight className="h-3 w-3" />
-            }
+          <button
+            onClick={handleToggle}
+            className="p-0.5 hover:bg-accent rounded"
+          >
+            {isExpanded ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
           </button>
         ) : (
-          <span className="w-4 shrink-0" />
+          <span className="w-4" />
         )}
         
-        {/* Status dot */}
-        <span className={cn(
-          "w-1.5 h-1.5 rounded-full shrink-0",
-          node.needs_attention_count === 0 ? "bg-green-500" : 
-          node.ready_count === 0 ? "bg-destructive" : "bg-amber-500"
-        )} />
+        {/* Status Icon */}
+        {status === 'ready' ? (
+          <CheckCircle2 className="h-3 w-3 text-green-600 shrink-0" />
+        ) : (
+          <AlertCircle className="h-3 w-3 text-red-500 shrink-0" />
+        )}
         
         {/* Label */}
-        <span className={cn(
-          "truncate flex-1",
-          isProfileLevel ? "text-xs font-semibold" : "text-[11px]",
-        )}>
-          {node.display_label}
+        <span className="truncate flex-1">{node.display_label}</span>
+        
+        {/* Count */}
+        <span className="text-xs text-muted-foreground shrink-0">
+          {node.items_count}
         </span>
         
-        {/* Progress */}
-        {isProfileLevel ? (
-          <MiniProgress ready={node.ready_count} total={node.items_count} />
-        ) : (
-          <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">
-            {node.items_count}
-          </span>
+        {/* AI Suggestion Badge */}
+        {node.ai_suggestion && (
+          <Badge variant="secondary" className="h-4 text-[10px] px-1 bg-purple-50 text-purple-700">
+            <Sparkles className="h-2.5 w-2.5 mr-0.5" />
+            AI
+          </Badge>
         )}
       </button>
       
+      {/* Children */}
       {hasChildren && isExpanded && (
-        <div className="mt-0.5">
+        <div>
           {node.children!.map(child => (
             <TreeNode
               key={child.id}
@@ -265,8 +319,9 @@ function TreeNode({
   );
 }
 
-// ─── Main Component ─────────────────────────────────────────
-
+// =========================================
+// Main Component
+// =========================================
 export function ClusterTree({
   items,
   selectedCluster,
@@ -278,51 +333,40 @@ export function ClusterTree({
   
   const tree = useMemo(() => buildClusterTree(items), [items]);
   
+  // Calculate totals
   const totalReady = tree.reduce((sum, n) => sum + n.ready_count, 0);
-  const totalAttention = tree.reduce((sum, n) => sum + n.needs_attention_count, 0);
-  const total = totalReady + totalAttention;
-  const pct = total > 0 ? Math.round((totalReady / total) * 100) : 0;
+  const totalNeedsAttention = tree.reduce((sum, n) => sum + n.needs_attention_count, 0);
   
   if (items.length === 0) {
     return (
-      <div className="p-6 text-center text-muted-foreground">
-        <Package className="h-8 w-8 mx-auto mb-2 opacity-30" />
-        <p className="text-xs">{t('normalize.noClusters', 'Нет данных для кластеризации')}</p>
+      <div className="p-4 text-center text-muted-foreground">
+        <p className="text-sm">{t('normalize.noClusters', 'Нет данных для кластеризации')}</p>
       </div>
     );
   }
   
   return (
     <div className="flex flex-col h-full">
-      {/* Summary Header */}
-      <div className="px-3 py-3 border-b space-y-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <Layers className="h-3.5 w-3.5 text-primary" />
-            <span className="font-semibold text-xs">{t('normalize.clusters', 'Кластеры')}</span>
-          </div>
-          <span className="text-xs font-bold text-primary">{pct}%</span>
-        </div>
-        
-        <Progress value={pct} className="h-1.5" />
-        
-        <div className="flex items-center justify-between text-[10px]">
-          <div className="flex items-center gap-1">
+      {/* Header */}
+      <div className="px-4 py-3 border-b">
+        <h3 className="font-semibold text-sm">
+          {t('normalize.clusters', 'Кластеры')}
+        </h3>
+        <div className="flex items-center gap-3 mt-1">
+          <div className="flex items-center gap-1 text-xs">
             <CheckCircle2 className="h-3 w-3 text-green-600" />
-            <span className="text-green-700 font-medium">{totalReady} готово</span>
+            <span className="text-green-700">{totalReady}</span>
           </div>
-          {totalAttention > 0 && (
-            <div className="flex items-center gap-1">
-              <AlertCircle className="h-3 w-3 text-destructive" />
-              <span className="text-destructive font-medium">{totalAttention} проблем</span>
-            </div>
-          )}
+          <div className="flex items-center gap-1 text-xs">
+            <AlertCircle className="h-3 w-3 text-red-500" />
+            <span className="text-red-600">{totalNeedsAttention}</span>
+          </div>
         </div>
       </div>
       
       {/* Tree */}
       <ScrollArea className="flex-1">
-        <div className="p-2 space-y-0.5">
+        <div className="p-2">
           {tree.map(node => (
             <TreeNode
               key={node.id}

@@ -1,8 +1,5 @@
 project_id = "okxnlbndsifsrisrgcst"
 
-[functions.import-parse]
-verify_jwt = false
-
 [functions.import-validate]
 verify_jwt = false
 
