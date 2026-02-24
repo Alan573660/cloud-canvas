@@ -270,14 +270,6 @@ Deno.serve(async (req) => {
         throw dryErr;
       } finally {
         clearTimeout(timer);
-      }
-            patches_ready: readyCount,
-          },
-          patches_sample: patches.slice(0, 100),
-          questions: [], // Questions will come from AI analysis gaps
-        }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
     }
 
     // =========================================================
