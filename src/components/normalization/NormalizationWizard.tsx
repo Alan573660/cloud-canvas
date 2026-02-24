@@ -78,7 +78,7 @@ const CAT_LABELS: Record<string, string> = {
 // Профнастил профили: C8, C10, C20, C21, HC35, NS35, NS57, МП20, НС57, Н60, etc.
 const RE_PROFNASTIL_PROFILE = /^(NS|НС|С|C|Н|H|НС|HC|МП|MP|Н)-?\d/i;
 // Металлочерепица профили: Монтеррей, Каскад, Супермонтеррей, Modern, Adamante, Cascade, etc.
-const RE_METALLOCHEREPICA_TITLE = /металлочерепица|monterrey|монтеррей|cascade|каскад|adamante|адаманте|quadro|квадро|genesis|dimos|luxury|supermonterey|супермонтеррей|modern|vintage|country/i;
+const RE_METALLOCHEREPICA_TITLE = /металлочерепица|monterrey|монтеррей|cascade|каскад|adamante|адаманте|quadro|квадро|genesis|dimos|luxury|supermonterey|супермонтеррей|modern|vintage|country|андалузия|классик|банга|венеция|камея|арарат|джокер|испания/i;
 const RE_PROFNASTIL_TITLE = /профнастил|профлист/i;
 const RE_DOBOR_TITLE = /планка|конёк|конек|ендова|карниз|ветровая|заглушка|шуруп|саморез|кронштейн|крепёж|крепеж|болт|гайка|шайба|доборн/i;
 const RE_SANDWICH_TITLE = /сэндвич|sandwich|панель утеплен/i;
