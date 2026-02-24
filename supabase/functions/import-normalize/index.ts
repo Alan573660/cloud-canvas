@@ -965,6 +965,9 @@ function getWidths(
   // Fallback to reference table
   if (PROFILE_WIDTHS[profile]) {
     return PROFILE_WIDTHS[profile];
+  }
+
+  return null;
 }
 
 // ─── Question Generation ────────────────────────────────────
@@ -1186,7 +1189,4 @@ function generateQuestions(
   questions.sort((a, b) => b.affected_count - a.affected_count);
 
   return questions;
-}
-
-  return null;
 }
