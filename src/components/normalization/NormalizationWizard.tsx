@@ -211,38 +211,89 @@ function backendQuestionToAI(q: BackendQuestion, index: number): AIQuestion {
   };
 }
 
-// ─── Right Panel: Question Card ───────────────────────────────
+// ─── Right Panel: Question Card (Enhanced) ────────────────────
 
 function QuestionCard({
   card,
   onResolve,
+  relatedQuestions,
 }: {
   card: DashboardQuestionCard;
   onResolve: (type: string) => void;
+  relatedQuestions?: AIQuestion[];
 }) {
   const cfg = Q_TYPE_CONFIG[card.type] || { icon: AlertTriangle, label: card.type, color: 'bg-muted border-border text-foreground' };
   const Icon = cfg.icon;
+  
+  // Collect suggested actions from related questions
+  const suggestedActions = relatedQuestions
+    ?.flatMap(q => q.suggestions)
+    .filter((v, i, a) => a.indexOf(v) === i)
+    .slice(0, 4) || [];
+
+  // Human-readable question text from first related question
+  const questionText = relatedQuestions?.[0]?.ask;
+
   return (
-    <button
-      onClick={() => onResolve(card.type)}
-      className={`w-full text-left p-3 rounded-lg border transition-all hover:shadow-sm ${cfg.color}`}
-    >
-      <div className="flex items-center justify-between mb-1">
+    <div className={`w-full text-left p-3 rounded-lg border transition-all hover:shadow-sm ${cfg.color}`}>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-1.5">
         <div className="flex items-center gap-2">
           <Icon className="h-3.5 w-3.5" />
           <span className="font-medium text-xs">{card.label || cfg.label}</span>
         </div>
-        <Badge variant="secondary" className="text-xs font-bold">{card.count}</Badge>
+        <Badge variant="secondary" className="text-xs font-bold">{card.count} товаров</Badge>
       </div>
-      {card.examples && card.examples.length > 0 && (
-        <p className="text-xs opacity-70 truncate">{card.examples.slice(0, 2).join(', ')}</p>
+
+      {/* Question text (human-readable from backend) */}
+      {questionText && (
+        <p className="text-xs mb-1.5">{questionText}</p>
       )}
-      <p className="text-xs mt-1 opacity-50">Нажмите для исправления →</p>
-    </button>
+
+      {/* Examples (3-5 items) */}
+      {card.examples && card.examples.length > 0 && (
+        <div className="mb-2">
+          <span className="text-[10px] text-muted-foreground">Примеры: </span>
+          <span className="text-[10px] font-mono">{card.examples.slice(0, 5).join(', ')}</span>
+        </div>
+      )}
+
+      {/* Suggested actions as chips */}
+      {suggestedActions.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-2">
+          {suggestedActions.map(action => (
+            <span key={action} className="text-[10px] px-1.5 py-0.5 rounded bg-background/50 border border-border/50">
+              {action}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Action buttons */}
+      <div className="flex gap-1.5 mt-1">
+        <Button
+          size="sm"
+          variant="default"
+          className="h-6 text-[10px] px-2 flex-1"
+          onClick={() => onResolve(card.type)}
+        >
+          <CheckCircle2 className="h-3 w-3 mr-1" />
+          Подтвердить
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 text-[10px] px-2"
+          onClick={() => onResolve(card.type)}
+        >
+          Редактировать
+        </Button>
+      </div>
+    </div>
   );
 }
 
-// ─── Right Panel: Answer Form ─────────────────────────────────
+// ─── Right Panel: Answer Form (Enhanced) ──────────────────────
 
 function QuestionAnswerForm({
   question,
@@ -251,7 +302,7 @@ function QuestionAnswerForm({
   loading,
 }: {
   question: AIQuestion;
-  onSubmit: (value: string) => void;
+  onSubmit: (value: string, scope?: 'all' | 'selected') => void;
   onClose: () => void;
   loading: boolean;
 }) {
@@ -260,6 +311,7 @@ function QuestionAnswerForm({
   const [workMm, setWorkMm] = useState('');
   const [value, setValue] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
+  const [scope, setScope] = useState<'all' | 'selected'>('all');
 
   const handleSubmit = () => {
     let finalValue = '';
@@ -269,7 +321,7 @@ function QuestionAnswerForm({
     } else {
       finalValue = value || selected[0] || '';
     }
-    if (finalValue) onSubmit(finalValue);
+    if (finalValue) onSubmit(finalValue, scope);
   };
 
   const canSubmit = isWidth ? !!fullMm : (!!value || selected.length > 0);
@@ -295,9 +347,18 @@ function QuestionAnswerForm({
       )}
 
       {question.affected_count > 0 && (
-        <p className="text-[10px] text-muted-foreground">
-          Затронуто товаров: <strong>{question.affected_count}</strong>
-        </p>
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground bg-primary/5 rounded px-2 py-1">
+          <FileText className="h-3 w-3 shrink-0" />
+          Затронуто товаров: <strong className="text-foreground">{question.affected_count}</strong>
+        </div>
+      )}
+
+      {/* Examples */}
+      {question.examples.length > 0 && (
+        <div className="text-[10px]">
+          <span className="text-muted-foreground">Примеры: </span>
+          <span className="font-mono">{question.examples.slice(0, 5).join(' · ')}</span>
+        </div>
       )}
 
       {/* WIDTH: two separate fields */}
@@ -325,7 +386,6 @@ function QuestionAnswerForm({
               />
             </div>
           </div>
-          {/* Suggestions for width */}
           {question.suggestions.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {question.suggestions.map(s => (
@@ -367,15 +427,34 @@ function QuestionAnswerForm({
           <Input
             value={value}
             onChange={e => setValue(e.target.value)}
-            placeholder="Введите значение…"
+            placeholder="Введите значение (canonical_value)…"
             className="h-7 text-xs"
           />
         </>
       )}
 
+      {/* Scope selector */}
+      <div className="flex items-center gap-3 text-[10px]">
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input type="radio" checked={scope === 'all'} onChange={() => setScope('all')} className="w-3 h-3" />
+          Все совпадения ({question.affected_count})
+        </label>
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input type="radio" checked={scope === 'selected'} onChange={() => setScope('selected')} className="w-3 h-3" />
+          Только выбранные
+        </label>
+      </div>
+
+      {/* Preview of what will change */}
+      {canSubmit && (
+        <div className="text-[10px] bg-primary/5 rounded px-2 py-1.5 border border-primary/10">
+          <span className="font-medium">Предпросмотр:</span> Будет изменено <strong>{scope === 'all' ? question.affected_count : '—'}</strong> строк. Значение: <code className="bg-background px-1 rounded">{isWidth ? (workMm ? `${fullMm}:${workMm}` : fullMm) : (value || selected[0])}</code>
+        </div>
+      )}
+
       <Button size="sm" onClick={handleSubmit} disabled={loading || !canSubmit} className="h-7 text-xs w-full">
         {loading ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
-        Подтвердить
+        Подтвердить и применить
       </Button>
     </div>
   );
