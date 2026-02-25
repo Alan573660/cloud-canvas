@@ -39,7 +39,7 @@ import type {
   AIQuestionType,
 } from './types';
 import { validateProduct } from './types';
-import { useNormalization, type DryRunPatch, type BackendQuestion, type CatalogRow, type DashboardQuestionCard } from '@/hooks/use-normalization';
+import { useNormalization, type DryRunPatch, type BackendQuestion, type CatalogRow, type DashboardQuestionCard, type AiChatV2Action, type ConfirmAction } from '@/hooks/use-normalization';
 
 // ─── Props ────────────────────────────────────────────────────
 
@@ -198,17 +198,19 @@ function mapQuestionType(backendType?: string): AIQuestionType {
 }
 
 function backendQuestionToAI(q: BackendQuestion, index: number): AIQuestion {
+  // Contract v1: read new fields first, fallback to legacy
+  const suggestedActions = q.suggested_actions || q.suggested_variants || [];
   return {
     type: mapQuestionType(q.type),
     cluster_path: { profile: q.profile || q.token || `q-${index}` },
     token: q.token || '',
     examples: q.examples || [],
-    affected_count: q.affected_count || 0,
-    suggestions: Array.isArray(q.suggested_variants)
-      ? q.suggested_variants.map(String)
+    affected_count: q.affected_rows_count ?? q.affected_count ?? 0,
+    suggestions: Array.isArray(suggestedActions)
+      ? suggestedActions.map(String)
       : q.suggested ? [String(q.suggested)] : [],
     confidence: q.confidence || 0.5,
-    ask: q.ask,
+    ask: q.question_text || q.ask,
   };
 }
 
@@ -243,7 +245,9 @@ function QuestionCard({
           <Icon className="h-3.5 w-3.5" />
           <span className="font-medium text-xs">{card.label || cfg.label}</span>
         </div>
-        <Badge variant="secondary" className="text-xs font-bold">{card.count} товаров</Badge>
+        <Badge variant="secondary" className="text-xs font-bold">
+          {card.count} товаров
+        </Badge>
       </div>
 
       {/* Question text (human-readable from backend) */}
@@ -476,22 +480,27 @@ const CHAT_EXAMPLES = [
 function AIChatPanel({
   organizationId,
   importJobId,
-  onApplyAction,
+  onApplyActions,
   runId,
+  confirmActions: confirmActionsFn,
 }: {
   organizationId: string;
   importJobId?: string;
-  onApplyAction?: (action: { type: string; value: string; affected_count: number }) => void;
+  onApplyActions?: (actions: AiChatV2Action[]) => void;
   runId?: string | null;
+  confirmActions?: (actions: ConfirmAction[]) => Promise<unknown>;
 }) {
+  const norm = useNormalization({ organizationId, importJobId });
   const [messages, setMessages] = useState<Array<{
     role: 'user' | 'ai';
     text: string;
     isError?: boolean;
-    pendingAction?: { type: string; value: string; affected_count: number; preview?: string[] };
+    actions?: AiChatV2Action[];
+    actionsApplied?: boolean;
   }>>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [applyingIdx, setApplyingIdx] = useState<number | null>(null);
   const [showExamples, setShowExamples] = useState(true);
   const scrollEndRef = useRef<HTMLDivElement>(null);
 
@@ -504,58 +513,32 @@ function AIChatPanel({
     setLoading(true);
 
     try {
-      // supabase already imported at top level
-      const payload = {
-        op: 'chat',
-        organization_id: organizationId,
-        import_job_id: importJobId || 'current',
-        message: msg,
-      };
+      const result = await norm.sendAiChatV2(msg, {});
 
-      const { data, error: invokeError } = await supabase.functions.invoke('import-normalize', {
-        body: payload,
-      });
-
-      if (invokeError) throw new Error(invokeError.message);
-
-      const result = data as {
-        ok?: boolean;
-        reply?: string;
-        answer?: string;
-        message?: string;
-        error?: string;
-        code?: string;
-        ai_skip_reason?: string;
-        ai_disabled?: boolean;
-        // Pending action from backend
-        action?: { type: string; value: string; affected_count: number; preview?: string[] };
-      };
-
-      if (result?.ok === false) {
-        let errMsg = result.error || 'Ошибка ИИ';
-        if (result.code === 'TIMEOUT') errMsg = '⏱ ИИ не ответил вовремя. Попробуйте ещё раз.';
-        if (result.ai_disabled) errMsg = `ИИ отключён: ${result.ai_skip_reason || 'неизвестная причина'}`;
+      if (!result || result.ok === false) {
+        let errMsg = result?.error || 'Ошибка ИИ';
+        if (result?.code === 'TIMEOUT') errMsg = '⏱ ИИ не ответил вовремя. Попробуйте ещё раз.';
+        if (result?.ai_disabled) errMsg = `ИИ отключён: ${result.ai_skip_reason || 'неизвестная причина'}`;
         console.error('[AIChatPanel] AI error response:', result);
         setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${errMsg}`, isError: true }]);
         return;
       }
 
-      const reply = result?.reply || result?.answer || result?.message || '';
+      const reply = result.assistant_message || '';
+      const actions = result.actions || [];
 
-      // Detect "Could not parse command" or empty reply — give user-friendly guidance
-      if (!reply || reply.toLowerCase().includes('could not parse') || reply.toLowerCase().includes('не удалось')) {
+      if (!reply && actions.length === 0) {
         setMessages(prev => [...prev, {
           role: 'ai',
-          text: '💡 Примеры команд:\n\n• «Установи покрытие MattPE → Матовый полиэстер»\n• «Установи покрытие Plastisol → Пластизол»\n• «Установи цвет RAL9003 → белый»\n• «Установи цвет RR32 → тёмно-коричневый»\n• «Какие товары с неизвестным профилем?»',
+          text: '💡 Примеры команд:\n\n• «Установи покрытие MattPE → Матовый полиэстер»\n• «Установи цвет RAL9003 → белый»\n• «Какие товары с неизвестным профилем?»',
         }]);
         return;
       }
 
-      // Add reply with optional pending action
       setMessages(prev => [...prev, {
         role: 'ai',
         text: reply,
-        pendingAction: result?.action || undefined,
+        actions: actions.length > 0 ? actions : undefined,
       }]);
     } catch (err) {
       console.error('[AIChatPanel] sendMessage error:', err);
@@ -568,19 +551,37 @@ function AIChatPanel({
       setLoading(false);
       setTimeout(() => scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     }
-  }, [input, loading, organizationId, importJobId]);
+  }, [input, loading, norm]);
 
-  const handleApplyPendingAction = useCallback((action: { type: string; value: string; affected_count: number }) => {
-    if (onApplyAction) {
-      onApplyAction(action);
-      // Mark action as applied in messages
-      setMessages(prev => prev.map(m =>
-        m.pendingAction?.type === action.type && m.pendingAction?.value === action.value
-          ? { ...m, pendingAction: undefined, text: m.text + '\n\n✅ Применено!' }
-          : m
+  const handleApplyActions = useCallback(async (actions: AiChatV2Action[], msgIndex: number) => {
+    setApplyingIdx(msgIndex);
+    try {
+      // Use confirmActions batch endpoint
+      const confirmPayload: ConfirmAction[] = actions.map(a => ({
+        type: a.type,
+        payload: a.payload,
+      }));
+
+      if (confirmActionsFn) {
+        await confirmActionsFn(confirmPayload);
+      } else {
+        await norm.confirmActions(confirmPayload);
+      }
+
+      // Mark as applied
+      setMessages(prev => prev.map((m, i) =>
+        i === msgIndex ? { ...m, actionsApplied: true } : m
       ));
+
+      if (onApplyActions) {
+        onApplyActions(actions);
+      }
+    } catch (err) {
+      console.error('[AIChatPanel] Apply actions error:', err);
+    } finally {
+      setApplyingIdx(null);
     }
-  }, [onApplyAction]);
+  }, [confirmActionsFn, norm, onApplyActions]);
 
   return (
     <div className="flex flex-col h-full">
@@ -620,32 +621,38 @@ function AIChatPanel({
               }`}>
                 {m.text}
                 
-                {/* Pending Action Preview */}
-                {m.pendingAction && (
-                  <div className="mt-2 p-2 bg-background rounded border border-primary/20">
+                {/* Contract v1: Pending Actions as list */}
+                {m.actions && m.actions.length > 0 && !m.actionsApplied && (
+                  <div className="mt-2 p-2 bg-background rounded border border-primary/20 space-y-1.5">
                     <div className="flex items-center gap-1 mb-1">
                       <AlertTriangle className="h-3 w-3 text-primary" />
-                      <span className="text-[10px] font-semibold">Ожидает подтверждения</span>
+                      <span className="text-[10px] font-semibold">
+                        {m.actions.length} {m.actions.length === 1 ? 'действие' : 'действий'} ожидает подтверждения
+                      </span>
                     </div>
-                    <p className="text-[10px] text-muted-foreground mb-1">
-                      Будет изменено <strong className="text-foreground">{m.pendingAction.affected_count}</strong> строк
-                    </p>
-                    {m.pendingAction.preview && m.pendingAction.preview.length > 0 && (
-                      <div className="text-[10px] font-mono text-muted-foreground mb-1.5">
-                        {m.pendingAction.preview.slice(0, 3).map((p, j) => (
-                          <div key={j} className="truncate">{p}</div>
-                        ))}
-                        {m.pendingAction.preview.length > 3 && <div>+{m.pendingAction.preview.length - 3} ещё…</div>}
+                    {m.actions.map((action, j) => (
+                      <div key={j} className="text-[10px] font-mono bg-muted/50 rounded px-2 py-1 truncate">
+                        <span className="text-primary font-semibold">{action.type}</span>
+                        {': '}
+                        {JSON.stringify(action.payload).substring(0, 80)}
                       </div>
-                    )}
+                    ))}
                     <Button
                       size="sm"
                       className="h-6 text-[10px] w-full"
-                      onClick={() => handleApplyPendingAction(m.pendingAction!)}
+                      onClick={() => handleApplyActions(m.actions!, i)}
+                      disabled={applyingIdx === i}
                     >
-                      <Play className="h-3 w-3 mr-1" />
+                      {applyingIdx === i
+                        ? <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        : <Play className="h-3 w-3 mr-1" />}
                       Применить ко всему прайсу
                     </Button>
+                  </div>
+                )}
+                {m.actionsApplied && (
+                  <div className="mt-1 text-[10px] text-primary flex items-center gap-1">
+                    <CheckCircle2 className="h-3 w-3" /> Применено!
                   </div>
                 )}
               </div>
@@ -1144,14 +1151,14 @@ export function NormalizationWizard({
             )}
           </div>
 
-          {/* AI unavailable fallback banner */}
-          {norm.dryRunResult?.ai_disabled && (
+          {/* AI unavailable fallback banner — reads Contract v1 ai_status or legacy ai_disabled */}
+          {(norm.dryRunResult?.ai_disabled || norm.dryRunResult?.stats?.ai_status?.failed) && (
             <div className="mx-4 mb-2 flex items-center gap-2 text-xs border border-destructive/30 bg-destructive/5 rounded-md px-3 py-2">
               <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
               <div>
                 <span className="font-medium text-destructive">ИИ-ассистент недоступен</span>
                 <span className="text-muted-foreground ml-1">
-                  — {norm.dryRunResult?.ai_skip_reason || 'сервис временно недоступен'}. Используются только детерминированные правила. Ответы на вопросы доступны в ручном режиме.
+                  — {norm.dryRunResult?.stats?.ai_status?.fail_reason || norm.dryRunResult?.ai_skip_reason || 'сервис временно недоступен'}. Используются только детерминированные правила.
                 </span>
               </div>
             </div>
@@ -1377,14 +1384,11 @@ export function NormalizationWizard({
                   organizationId={organizationId}
                   importJobId={effectiveJobId}
                   runId={norm.runId}
-                  onApplyAction={(action) => {
-                    // When chat suggests an action, apply it as answer_question then re-scan
-                    norm.answerQuestion(action.type, action.value, action.value).then(ok => {
-                      if (ok) {
-                        toast({ title: 'Применено из чата', description: `${action.type}: ${action.value} (${action.affected_count} строк)` });
-                        norm.executeDryRun({ aiSuggest: true, limit: 2000 });
-                      }
-                    });
+                  confirmActions={norm.confirmActions}
+                  onApplyActions={(actions) => {
+                    // After chat batch confirm, re-scan
+                    toast({ title: 'Применено из чата', description: `${actions.length} правил применено` });
+                    norm.executeDryRun({ aiSuggest: true, limit: 2000 });
                   }}
                 />
               </TabsContent>

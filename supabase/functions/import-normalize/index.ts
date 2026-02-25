@@ -5,6 +5,9 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Contract version tag for responses
+const CONTRACT_VERSION = 'v1';
+
 // Safe JSON parser: handles non-JSON responses from enricher gracefully
 async function safeJsonParse(response: Response): Promise<{ data: Record<string, unknown> | null; rawText: string }> {
   const rawText = await response.text();
@@ -22,12 +25,44 @@ function enricherErrorResponse(status: number, rawText: string, fallbackMsg: str
   return new Response(
     JSON.stringify({
       ok: false,
+      contract_version: CONTRACT_VERSION,
       error: fallbackMsg,
       detail: `Enricher returned status ${status} with non-JSON body. Preview: ${preview}`,
     }),
     { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
   );
 }
+
+// =========================================
+// normalizeQuestion — adapter for backward compat
+// =========================================
+function normalizeQuestion(q: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...q,
+    // New fields first, fallback to legacy
+    question_text: q.question_text || q.ask || '',
+    affected_rows_count: q.affected_rows_count ?? q.affected_count ?? 0,
+    suggested_actions: q.suggested_actions || q.suggested_variants || [],
+    needs_user_confirmation: q.needs_user_confirmation ?? true,
+    confidence: q.confidence ?? 0.5,
+    // Keep legacy for backward compat
+    ask: q.question_text || q.ask || '',
+    affected_count: q.affected_rows_count ?? q.affected_count ?? 0,
+    suggested_variants: q.suggested_actions || q.suggested_variants || [],
+  };
+}
+
+// Normalize all questions in a response
+function normalizeQuestions(data: Record<string, unknown>): Record<string, unknown> {
+  if (Array.isArray(data.questions)) {
+    data.questions = (data.questions as Record<string, unknown>[]).map(normalizeQuestion);
+  }
+  return data;
+}
+
+// =========================================
+// Request types
+// =========================================
 
 interface DryRunRequest {
   op: 'dry_run';
@@ -80,6 +115,15 @@ interface ChatRequest {
   };
 }
 
+interface AiChatV2Request {
+  op: 'ai_chat_v2';
+  organization_id: string;
+  import_job_id?: string;
+  run_id?: string;
+  message: string;
+  context?: Record<string, unknown>;
+}
+
 interface AnswerQuestionRequest {
   op: 'answer_question';
   organization_id: string;
@@ -110,11 +154,14 @@ interface ConfirmRequest {
   op: 'confirm';
   organization_id: string;
   import_job_id: string;
-  type: string;
-  payload: Record<string, unknown>;
+  // Legacy single
+  type?: string;
+  payload?: Record<string, unknown>;
+  // Contract v1 batch
+  actions?: Array<{ type: string; payload: Record<string, unknown> }>;
 }
 
-type NormalizeRequest = DryRunRequest | ApplyRequest | ApplyStatusRequest | PreviewRowsRequest | ChatRequest | AnswerQuestionRequest | StatsRequest | DashboardRequest | TreeRequest | ConfirmRequest;
+type NormalizeRequest = DryRunRequest | ApplyRequest | ApplyStatusRequest | PreviewRowsRequest | ChatRequest | AiChatV2Request | AnswerQuestionRequest | StatsRequest | DashboardRequest | TreeRequest | ConfirmRequest;
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -144,7 +191,6 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Diagnostic: log enricher base URL on every call
     console.log(`[import-normalize] enricher_base_url= ${enricherUrl}`);
 
     const userClient = createClient(supabaseUrl, supabaseAnon, {
@@ -234,7 +280,6 @@ Deno.serve(async (req) => {
         const response = await fetch(endpoint, fetchOpts);
         const { data, rawText } = await safeJsonParse(response);
 
-        // Diagnostic: log status and body preview on non-2xx
         if (!response.ok) {
           console.error(`[import-normalize] <- ${response.status} ${rawText.substring(0, 300)}`);
         } else {
@@ -257,6 +302,14 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Helper: JSON response with contract_version
+    function jsonResponse(data: Record<string, unknown>, status = 200) {
+      return new Response(
+        JSON.stringify({ ...data, contract_version: CONTRACT_VERSION }),
+        { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     // =========================================
     // Handle apply_status
     // =========================================
@@ -264,10 +317,7 @@ Deno.serve(async (req) => {
       const statusBody = body as ApplyStatusRequest;
       const applyId = statusBody.apply_id || statusBody.run_id;
       if (!applyId) {
-        return new Response(
-          JSON.stringify({ ok: false, error: 'Missing apply_id or run_id' }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, error: 'Missing apply_id or run_id' }, 400);
       }
 
       const statusEndpoint = `${enricherUrl}/api/enrich/apply_status?import_job_id=${encodeURIComponent(import_job_id || 'current')}&apply_id=${encodeURIComponent(applyId)}&organization_id=${encodeURIComponent(organization_id)}`;
@@ -276,25 +326,16 @@ Deno.serve(async (req) => {
       const result = await callEnricher(statusEndpoint, 'GET', undefined, 15000);
 
       if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Status check timed out.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, code: 'TIMEOUT', error: 'Status check timed out.' });
       }
       if (result.data === null) {
         return enricherErrorResponse(result.status, result.rawText, 'Status check returned non-JSON');
       }
       if (!result.ok) {
-        return new Response(
-          JSON.stringify({ ok: false, error: (result.data as Record<string, unknown>).error || 'Status check failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, error: (result.data as Record<string, unknown>).error || 'Status check failed' });
       }
 
-      return new Response(
-        JSON.stringify(result.data),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse(result.data as Record<string, unknown>);
     }
 
     // =========================================
@@ -318,27 +359,21 @@ Deno.serve(async (req) => {
       const result = await callEnricher(`${enricherUrl}/api/enrich/dry_run`, 'POST', enricherPayload);
 
       if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Enricher request timed out (55s). Retry with smaller limit.', recommended_limit: 250 }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, code: 'TIMEOUT', error: 'Enricher request timed out (55s). Retry with smaller limit.', recommended_limit: 250 });
       }
       if (result.data === null) {
         return enricherErrorResponse(result.status, result.rawText, 'Enricher dry_run returned non-JSON response');
       }
       if (!result.ok) {
         const d = result.data as Record<string, unknown>;
-        return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Enricher request failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, error: d.error || d.detail || 'Enricher request failed' });
       }
 
-      console.log('[import-normalize] dry_run OK, questions:', (result.data as Record<string, unknown[]>).questions?.length || 0);
-      return new Response(
-        JSON.stringify(result.data),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      // Normalize questions in response
+      const normalized = normalizeQuestions(result.data as Record<string, unknown>);
+
+      console.log('[import-normalize] dry_run OK, questions:', (normalized.questions as unknown[] | undefined)?.length || 0);
+      return jsonResponse(normalized);
     }
 
     // =========================================
@@ -347,10 +382,7 @@ Deno.serve(async (req) => {
     if (op === 'apply') {
       const applyBody = body as ApplyRequest;
       if (!applyBody.run_id || !applyBody.profile_hash) {
-        return new Response(
-          JSON.stringify({ ok: false, error: 'Missing run_id or profile_hash for apply' }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, error: 'Missing run_id or profile_hash for apply' }, 400);
       }
 
       const applyPayload = {
@@ -360,19 +392,15 @@ Deno.serve(async (req) => {
         profile_hash: applyBody.profile_hash,
       };
 
-      // Try async start first: POST /api/enrich/apply_start (underscore, not /apply/start)
+      // Try async start first
       const startResult = await callEnricher(`${enricherUrl}/api/enrich/apply_start`, 'POST', applyPayload, 10000);
 
       if (startResult.ok && startResult.data) {
         const d = startResult.data as Record<string, unknown>;
         console.log('[import-normalize] Async apply started, apply_id:', d.apply_id);
-        return new Response(
-          JSON.stringify({ ok: true, apply_id: d.apply_id, status: d.status || 'PENDING' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: true, apply_id: d.apply_id, status: d.status || 'PENDING' });
       }
 
-      // Log why async failed
       if (startResult.data === null) {
         console.log(`[import-normalize] apply_start unavailable (status ${startResult.status}, non-JSON), falling back to sync`);
       } else {
@@ -383,27 +411,18 @@ Deno.serve(async (req) => {
       const syncResult = await callEnricher(`${enricherUrl}/api/enrich/apply`, 'POST', applyPayload);
 
       if (syncResult.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Apply timed out. The operation may still be running on the server. Try checking status later.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, code: 'TIMEOUT', error: 'Apply timed out. The operation may still be running on the server.' });
       }
       if (syncResult.data === null) {
         return enricherErrorResponse(syncResult.status, syncResult.rawText, 'Apply returned non-JSON response');
       }
       if (!syncResult.ok) {
         const d = syncResult.data as Record<string, unknown>;
-        return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Apply failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, error: d.error || d.detail || 'Apply failed' });
       }
 
       console.log('[import-normalize] Sync apply OK');
-      return new Response(
-        JSON.stringify(syncResult.data),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse(syncResult.data as Record<string, unknown>);
     }
 
     // =========================================
@@ -424,38 +443,118 @@ Deno.serve(async (req) => {
       const result = await callEnricher(`${enricherUrl}/api/enrich/preview_rows`, 'POST', previewPayload, 30000);
 
       if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Preview request timed out.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, code: 'TIMEOUT', error: 'Preview request timed out.' });
       }
       if (result.data === null) {
         return enricherErrorResponse(result.status, result.rawText, 'Preview returned non-JSON response');
       }
       if (!result.ok) {
         const d = result.data as Record<string, unknown>;
-        return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Preview failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, error: d.error || d.detail || 'Preview failed' });
       }
 
-      return new Response(
-        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ ok: true, ...result.data as Record<string, unknown> });
     }
 
     // =========================================
-    // Handle chat
+    // Handle ai_chat_v2 — Contract v1 AI Chat
+    // =========================================
+    if (op === 'ai_chat_v2') {
+      const chatBody = body as AiChatV2Request;
+      if (!chatBody.message) {
+        return jsonResponse({ ok: false, error: 'Missing message' }, 400);
+      }
+
+      const chatPayload = {
+        organization_id,
+        import_job_id: chatBody.import_job_id || 'current',
+        run_id: chatBody.run_id || null,
+        message: chatBody.message,
+        context: chatBody.context || null,
+      };
+
+      console.log(`[import-normalize] ai_chat_v2: msg="${chatBody.message.substring(0, 60)}"`);
+
+      const result = await callEnricher(`${enricherUrl}/api/enrich/ai_chat_v2`, 'POST', chatPayload, 45000);
+
+      // If ai_chat_v2 endpoint not available, fallback to legacy /chat
+      if (!result.ok && (result.status === 404 || result.data === null)) {
+        console.log('[import-normalize] ai_chat_v2 not found, falling back to legacy /chat');
+        const legacyResult = await callEnricher(`${enricherUrl}/api/enrich/chat`, 'POST', {
+          organization_id,
+          import_job_id: chatBody.import_job_id || 'current',
+          message: chatBody.message,
+          context: chatBody.context || null,
+        }, 45000);
+
+        if (legacyResult.timeout) {
+          return jsonResponse({ ok: false, code: 'TIMEOUT', error: 'AI request timed out.' });
+        }
+        if (legacyResult.data === null) {
+          return enricherErrorResponse(legacyResult.status, legacyResult.rawText, 'Chat returned non-JSON response');
+        }
+        if (!legacyResult.ok) {
+          const d = legacyResult.data as Record<string, unknown>;
+          return jsonResponse({ ok: false, error: d.error || d.detail || 'Chat failed' });
+        }
+
+        // Adapt legacy response to v1 contract: wrap singleton `action` into `actions[]`
+        const legacyData = legacyResult.data as Record<string, unknown>;
+        const actions: unknown[] = [];
+        if (legacyData.action && typeof legacyData.action === 'object') {
+          actions.push(legacyData.action);
+        }
+        if (Array.isArray(legacyData.actions)) {
+          actions.push(...legacyData.actions);
+        }
+
+        return jsonResponse({
+          ok: true,
+          assistant_message: legacyData.reply || legacyData.answer || legacyData.message || '',
+          actions,
+          missing_fields: legacyData.missing_fields || [],
+          requires_confirm: actions.length > 0,
+          shadow_mode: legacyData.shadow_mode ?? false,
+        });
+      }
+
+      if (result.timeout) {
+        return jsonResponse({ ok: false, code: 'TIMEOUT', error: 'AI request timed out.' });
+      }
+      if (result.data === null) {
+        return enricherErrorResponse(result.status, result.rawText, 'AI Chat v2 returned non-JSON response');
+      }
+      if (!result.ok) {
+        const d = result.data as Record<string, unknown>;
+        return jsonResponse({ ok: false, error: d.error || d.detail || 'AI Chat v2 failed' });
+      }
+
+      // Ensure actions[] is always an array
+      const v2Data = result.data as Record<string, unknown>;
+      if (!Array.isArray(v2Data.actions)) {
+        v2Data.actions = [];
+        if (v2Data.action && typeof v2Data.action === 'object') {
+          (v2Data.actions as unknown[]).push(v2Data.action);
+        }
+      }
+
+      return jsonResponse({
+        ok: true,
+        assistant_message: v2Data.assistant_message || v2Data.reply || v2Data.message || '',
+        actions: v2Data.actions,
+        missing_fields: v2Data.missing_fields || [],
+        requires_confirm: v2Data.requires_confirm ?? (v2Data.actions as unknown[]).length > 0,
+        shadow_mode: v2Data.shadow_mode ?? false,
+      });
+    }
+
+    // =========================================
+    // Handle legacy chat (kept for backward compat)
     // =========================================
     if (op === 'chat') {
       const chatBody = body as ChatRequest;
       if (!chatBody.message) {
-        return new Response(
-          JSON.stringify({ ok: false, error: 'Missing message' }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, error: 'Missing message' }, 400);
       }
 
       const chatPayload = {
@@ -468,38 +567,26 @@ Deno.serve(async (req) => {
       const result = await callEnricher(`${enricherUrl}/api/enrich/chat`, 'POST', chatPayload, 45000);
 
       if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'AI request timed out.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, code: 'TIMEOUT', error: 'AI request timed out.' });
       }
       if (result.data === null) {
         return enricherErrorResponse(result.status, result.rawText, 'Chat returned non-JSON response');
       }
       if (!result.ok) {
         const d = result.data as Record<string, unknown>;
-        return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Chat failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, error: d.error || d.detail || 'Chat failed' });
       }
 
-      return new Response(
-        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ ok: true, ...result.data as Record<string, unknown> });
     }
 
     // =========================================
-    // Handle answer_question — user answers an AI question, then re-run is needed
+    // Handle answer_question
     // =========================================
     if (op === 'answer_question') {
       const aqBody = body as AnswerQuestionRequest;
       if (!aqBody.question_type || !aqBody.token) {
-        return new Response(
-          JSON.stringify({ ok: false, error: 'Missing question_type or token' }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, error: 'Missing question_type or token' }, 400);
       }
 
       const aqPayload = {
@@ -513,26 +600,17 @@ Deno.serve(async (req) => {
       const result = await callEnricher(`${enricherUrl}/api/enrich/answer_question`, 'POST', aqPayload, 30000);
 
       if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Answer submission timed out.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, code: 'TIMEOUT', error: 'Answer submission timed out.' });
       }
       if (result.data === null) {
         return enricherErrorResponse(result.status, result.rawText, 'Answer returned non-JSON response');
       }
       if (!result.ok) {
         const d = result.data as Record<string, unknown>;
-        return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Answer submission failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, error: d.error || d.detail || 'Answer submission failed' });
       }
 
-      return new Response(
-        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ ok: true, ...result.data as Record<string, unknown> });
     }
 
     // =========================================
@@ -549,30 +627,21 @@ Deno.serve(async (req) => {
       const result = await callEnricher(`${enricherUrl}/api/enrich/stats`, 'POST', statsPayload, 30000);
 
       if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Stats request timed out.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, code: 'TIMEOUT', error: 'Stats request timed out.' });
       }
       if (result.data === null) {
         return enricherErrorResponse(result.status, result.rawText, 'Stats returned non-JSON response');
       }
       if (!result.ok) {
         const d = result.data as Record<string, unknown>;
-        return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Stats failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, error: d.error || d.detail || 'Stats failed' });
       }
 
-      return new Response(
-        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ ok: true, ...result.data as Record<string, unknown> });
     }
 
     // =========================================
-    // Handle dashboard — KPI metrics + question cards
+    // Handle dashboard
     // =========================================
     if (op === 'dashboard') {
       const dashBody = body as DashboardRequest;
@@ -586,30 +655,21 @@ Deno.serve(async (req) => {
       const result = await callEnricher(`${enricherUrl}/api/enrich/dashboard`, 'POST', dashPayload, 30000);
 
       if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Dashboard request timed out.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, code: 'TIMEOUT', error: 'Dashboard request timed out.' });
       }
       if (result.data === null) {
         return enricherErrorResponse(result.status, result.rawText, 'Dashboard returned non-JSON response');
       }
       if (!result.ok) {
         const d = result.data as Record<string, unknown>;
-        return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Dashboard failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, error: d.error || d.detail || 'Dashboard failed' });
       }
 
-      return new Response(
-        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ ok: true, ...result.data as Record<string, unknown> });
     }
 
     // =========================================
-    // Handle tree — category tree navigation
+    // Handle tree
     // =========================================
     if (op === 'tree') {
       const treeEndpoint = `${enricherUrl}/api/enrich/tree?organization_id=${encodeURIComponent(organization_id)}`;
@@ -619,84 +679,120 @@ Deno.serve(async (req) => {
       const result = await callEnricher(treeEndpoint, 'GET', undefined, 20000);
 
       if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Tree request timed out.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, code: 'TIMEOUT', error: 'Tree request timed out.' });
       }
       if (result.data === null) {
         return enricherErrorResponse(result.status, result.rawText, 'Tree returned non-JSON response');
       }
       if (!result.ok) {
         const d = result.data as Record<string, unknown>;
-        return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Tree failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return jsonResponse({ ok: false, error: d.error || d.detail || 'Tree failed' });
       }
 
-      return new Response(
-        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return jsonResponse({ ok: true, ...result.data as Record<string, unknown> });
     }
 
     // =========================================
-    // Handle confirm — apply confirmed settings by type
+    // Handle confirm — supports batch actions[] (Contract v1)
     // =========================================
     if (op === 'confirm') {
       const confirmBody = body as ConfirmRequest;
-      if (!confirmBody.type || !confirmBody.payload) {
-        return new Response(
-          JSON.stringify({ ok: false, error: 'Missing type or payload for confirm' }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+
+      // Build actions array: support both batch and legacy single
+      let actions: Array<{ type: string; payload: Record<string, unknown> }> = [];
+
+      if (Array.isArray(confirmBody.actions) && confirmBody.actions.length > 0) {
+        // Contract v1: batch actions
+        actions = confirmBody.actions;
+      } else if (confirmBody.type && confirmBody.payload) {
+        // Legacy: single type+payload → wrap in array
+        actions = [{ type: confirmBody.type, payload: confirmBody.payload }];
+      } else {
+        return jsonResponse({ ok: false, error: 'Missing type/payload or actions[] for confirm' }, 400);
       }
 
-      const confirmPayload = {
+      console.log(`[import-normalize] confirm: ${actions.length} action(s), org=${organization_id}`);
+
+      // Try batch endpoint first
+      const batchPayload = {
         organization_id,
         import_job_id: confirmBody.import_job_id || 'current',
-        type: confirmBody.type,
-        payload: confirmBody.payload,
+        actions,
       };
 
-      console.log(`[import-normalize] confirm: type=${confirmBody.type}, org=${organization_id}`);
+      const batchResult = await callEnricher(`${enricherUrl}/api/enrich/confirm`, 'POST', batchPayload, 30000);
 
-      const result = await callEnricher(`${enricherUrl}/api/enrich/confirm`, 'POST', confirmPayload, 30000);
-
-      if (result.timeout) {
-        return new Response(
-          JSON.stringify({ ok: false, code: 'TIMEOUT', error: 'Confirm request timed out.' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-      if (result.data === null) {
-        return enricherErrorResponse(result.status, result.rawText, 'Confirm returned non-JSON response');
-      }
-      if (!result.ok) {
-        const d = result.data as Record<string, unknown>;
-        return new Response(
-          JSON.stringify({ ok: false, error: d.error || d.detail || 'Confirm failed' }),
-          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+      // If batch confirm works, return as-is
+      if (batchResult.ok && batchResult.data) {
+        const d = batchResult.data as Record<string, unknown>;
+        return jsonResponse({
+          ok: true,
+          type: 'BATCH',
+          affected_clusters: d.affected_clusters || [],
+          apply_started: d.apply_started ?? false,
+          apply_id: d.apply_id,
+          status_url: d.status_url,
+          mode: d.mode || (d.apply_id ? 'async' : 'sync'),
+          stats: d.stats || { updates: actions.length },
+          ...d,
+        });
       }
 
-      return new Response(
-        JSON.stringify({ ok: true, ...result.data as Record<string, unknown> }),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      // If batch not supported (404), fall back to sequential single confirms
+      if (batchResult.status === 404 || batchResult.data === null) {
+        console.log('[import-normalize] Batch confirm not supported, falling back to sequential');
+        let totalUpdates = 0;
+        const allAffectedClusters: string[] = [];
+        let lastApplyId: string | undefined;
+
+        for (const action of actions) {
+          const singlePayload = {
+            organization_id,
+            import_job_id: confirmBody.import_job_id || 'current',
+            type: action.type,
+            payload: action.payload,
+          };
+
+          const singleResult = await callEnricher(`${enricherUrl}/api/enrich/confirm`, 'POST', singlePayload, 30000);
+
+          if (singleResult.ok && singleResult.data) {
+            const sd = singleResult.data as Record<string, unknown>;
+            totalUpdates++;
+            if (Array.isArray(sd.affected_clusters)) {
+              allAffectedClusters.push(...(sd.affected_clusters as string[]));
+            }
+            if (sd.apply_id) lastApplyId = sd.apply_id as string;
+          } else {
+            console.error(`[import-normalize] Single confirm failed for ${action.type}:`, singleResult.rawText?.substring(0, 200));
+          }
+        }
+
+        return jsonResponse({
+          ok: true,
+          type: 'BATCH',
+          affected_clusters: allAffectedClusters,
+          apply_started: !!lastApplyId,
+          apply_id: lastApplyId,
+          mode: lastApplyId ? 'async' : 'sync',
+          stats: { updates: totalUpdates, elapsed_ms: 0 },
+        });
+      }
+
+      // Other errors from batch
+      if (batchResult.timeout) {
+        return jsonResponse({ ok: false, code: 'TIMEOUT', error: 'Confirm request timed out.' });
+      }
+      const d = (batchResult.data || {}) as Record<string, unknown>;
+      return jsonResponse({ ok: false, error: d.error || d.detail || 'Confirm failed' });
     }
 
     // Unknown op
-    return new Response(
-      JSON.stringify({ ok: false, error: `Unknown op: ${op}` }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return jsonResponse({ ok: false, error: `Unknown op: ${op}` }, 400);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[import-normalize] Unhandled error:', message);
     return new Response(
-      JSON.stringify({ ok: false, error: message }),
+      JSON.stringify({ ok: false, contract_version: CONTRACT_VERSION, error: message }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
