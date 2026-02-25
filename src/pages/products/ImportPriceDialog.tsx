@@ -203,7 +203,8 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
       await supabase
         .from('import_jobs')
         .update({ file_url: `storage://${STORAGE_BUCKET}/${storagePath}` })
-        .eq('id', job.id);
+        .eq('id', job.id)
+        .eq('organization_id', profile.organization_id);
 
       setStep('uploading');
       setUploadProgress(10);
@@ -229,7 +230,8 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
         await supabase
           .from('import_jobs')
           .update({ status: 'FAILED', error_message: userMessage })
-          .eq('id', job.id);
+          .eq('id', job.id)
+          .eq('organization_id', profile.organization_id);
 
         throw new Error(userMessage);
       }
@@ -328,6 +330,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
         .from('import_jobs')
         .select('status, error_message, error_code, summary')
         .eq('id', jobId)
+        .eq('organization_id', profile!.organization_id)
         .single();
       
       if (job?.status === 'COMPLETED') return 'COMPLETED';
