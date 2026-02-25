@@ -69,16 +69,20 @@ function getQuestionConfig(type: string) {
 function DashboardPanel({ organizationId, onLaunchWizard }: { organizationId: string; onLaunchWizard: (jobId?: string) => void }) {
   const { t } = useTranslation();
   const norm = useNormalization({ organizationId });
+  const {
+    fetchDashboard,
+    dashboardResult: dash,
+    dashboardLoading,
+  } = norm;
 
   useEffect(() => {
-    norm.fetchDashboard();
-  }, [organizationId, norm]);
+    void fetchDashboard();
+  }, [fetchDashboard]);
 
-  const dash = norm.dashboardResult;
   const progress = dash?.progress;
   const questionCards = dash?.question_cards || [];
 
-  if (norm.dashboardLoading) {
+  if (dashboardLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -87,12 +91,12 @@ function DashboardPanel({ organizationId, onLaunchWizard }: { organizationId: st
     );
   }
 
-  if (!dash && !norm.dashboardLoading) {
+  if (!dash && !dashboardLoading) {
     return (
       <div className="text-center py-12">
         <Activity className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
         <p className="text-muted-foreground text-sm">{t('normalize.noDashboard', 'Сводка недоступна. Убедитесь, что каталог-энричер запущен.')}</p>
-        <Button variant="outline" size="sm" className="mt-4" onClick={() => norm.fetchDashboard()}>
+        <Button variant="outline" size="sm" className="mt-4" onClick={() => fetchDashboard()}>
           <RefreshCw className="h-4 w-4 mr-2" />{t('common.retry', 'Повторить')}
         </Button>
       </div>
@@ -196,7 +200,7 @@ function DashboardPanel({ organizationId, onLaunchWizard }: { organizationId: st
       )}
 
       <div className="flex justify-end">
-        <Button onClick={() => norm.fetchDashboard()} variant="outline" size="sm">
+        <Button onClick={() => fetchDashboard()} variant="outline" size="sm">
           <RefreshCw className="h-4 w-4 mr-2" />{t('common.refresh', 'Обновить')}
         </Button>
       </div>

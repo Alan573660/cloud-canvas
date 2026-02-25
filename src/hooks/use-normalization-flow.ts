@@ -42,6 +42,22 @@ interface UseNormalizationFlowOptions {
 
 export function useNormalizationFlow({ organizationId, importJobId }: UseNormalizationFlowOptions) {
   const norm = useNormalization({ organizationId, importJobId });
+  const {
+    applyState,
+    dryRunLoading,
+    dryRunResult,
+    runId,
+    profileHash,
+    applyId,
+    applyError,
+    catalogTotal,
+    executeDryRun,
+    confirmActions,
+    executeApply,
+    sendAiChatV2,
+    reset,
+  } = norm;
+
   const [flowState, setFlowState] = useState<NormFlowState>('IDLE');
   const [lastError, setLastError] = useState<string | null>(null);
 
@@ -51,34 +67,34 @@ export function useNormalizationFlow({ organizationId, importJobId }: UseNormali
     if (flowState === 'CONFIRMING') return 'CONFIRMING';
 
     // Apply states take precedence
-    if (norm.applyState === 'STARTING' || norm.applyState === 'PENDING') return 'APPLY_STARTING';
-    if (norm.applyState === 'RUNNING') return 'APPLY_RUNNING';
-    if (norm.applyState === 'DONE') return 'APPLY_DONE';
-    if (norm.applyState === 'ERROR' || norm.applyState === 'POLL_EXCEEDED') return 'ERROR';
+    if (applyState === 'STARTING' || applyState === 'PENDING') return 'APPLY_STARTING';
+    if (applyState === 'RUNNING') return 'APPLY_RUNNING';
+    if (applyState === 'DONE') return 'APPLY_DONE';
+    if (applyState === 'ERROR' || applyState === 'POLL_EXCEEDED') return 'ERROR';
 
     // Scanning
-    if (norm.dryRunLoading) return 'SCANNING';
+    if (dryRunLoading) return 'SCANNING';
 
     // Questions available
-    if (norm.dryRunResult?.questions && norm.dryRunResult.questions.length > 0) return 'QUESTIONS_OPEN';
+    if (dryRunResult?.questions && dryRunResult.questions.length > 0) return 'QUESTIONS_OPEN';
 
     // Have results but no questions
-    if (norm.dryRunResult) return 'QUESTIONS_OPEN'; // Still in workspace mode
+    if (dryRunResult) return 'QUESTIONS_OPEN'; // Still in workspace mode
 
     return flowState;
-  }, [flowState, norm.applyState, norm.dryRunLoading, norm.dryRunResult]);
+  }, [flowState, applyState, dryRunLoading, dryRunResult]);
 
   // Context for UI
   const context = useMemo((): NormFlowContext => ({
     importJobId,
-    runId: norm.runId,
-    profileHash: norm.profileHash,
-    applyId: norm.applyId,
-    lastError: lastError || norm.applyError,
-    questionsCount: norm.dryRunResult?.questions?.length || 0,
-    patchesReady: norm.dryRunResult?.stats?.patches_ready || 0,
-    totalScanned: norm.dryRunResult?.stats?.rows_scanned || norm.catalogTotal || 0,
-  }), [importJobId, norm, lastError]);
+    runId,
+    profileHash,
+    applyId,
+    lastError: lastError || applyError,
+    questionsCount: dryRunResult?.questions?.length || 0,
+    patchesReady: dryRunResult?.stats?.patches_ready || 0,
+    totalScanned: dryRunResult?.stats?.rows_scanned || catalogTotal || 0,
+  }), [importJobId, runId, profileHash, applyId, lastError, applyError, dryRunResult, catalogTotal]);
 
   // ─── Actions ────────────────────────────────────────────
 
@@ -88,7 +104,7 @@ export function useNormalizationFlow({ organizationId, importJobId }: UseNormali
   }): Promise<DryRunResult | null> => {
     setFlowState('SCANNING');
     setLastError(null);
-    const result = await norm.executeDryRun({
+    const result = await executeDryRun({
       aiSuggest: options?.aiSuggest ?? true,
       limit: options?.limit ?? 2000,
       onlyWhereNull: false,
@@ -98,11 +114,11 @@ export function useNormalizationFlow({ organizationId, importJobId }: UseNormali
     }
     // State will be derived from norm.dryRunResult
     return result;
-  }, [norm]);
+  }, [executeDryRun]);
 
   const confirmBatch = useCallback(async (actions: ConfirmAction[]): Promise<ConfirmResult | null> => {
     setFlowState('CONFIRMING');
-    const result = await norm.confirmActions(actions);
+    const result = await confirmActions(actions);
     if (!result?.ok) {
       setFlowState('ERROR');
     } else {
@@ -113,23 +129,23 @@ export function useNormalizationFlow({ organizationId, importJobId }: UseNormali
       }
     }
     return result;
-  }, [norm]);
+  }, [confirmActions]);
 
   const startApply = useCallback(async () => {
     setFlowState('APPLY_STARTING');
     setLastError(null);
-    await norm.executeApply();
-  }, [norm]);
+    await executeApply();
+  }, [executeApply]);
 
   const sendChat = useCallback(async (message: string, ctx?: Record<string, unknown>): Promise<AiChatV2Result | null> => {
-    return norm.sendAiChatV2(message, ctx);
-  }, [norm]);
+    return sendAiChatV2(message, ctx);
+  }, [sendAiChatV2]);
 
   const resetFlow = useCallback(() => {
     setFlowState('IDLE');
     setLastError(null);
-    norm.reset();
-  }, [norm]);
+    reset();
+  }, [reset]);
 
   return {
     // State
