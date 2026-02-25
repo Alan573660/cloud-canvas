@@ -142,12 +142,13 @@ export function StagingRowEditor({ open, onOpenChange, jobId, rowNumber }: Stagi
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
       onOpenChange(false);
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       console.error('Save error:', error);
-      if (error.code === '42501' || error.message?.includes('policy')) {
+      const err = error as { code?: string; message?: string };
+      if (err.code === '42501' || err.message?.includes('policy')) {
         toast.error(t('common.permissionDenied', 'Недостаточно прав'));
       } else {
-        toast.error(error.message || t('common.error'));
+        toast.error(err.message || t('common.error'));
       }
     },
   });

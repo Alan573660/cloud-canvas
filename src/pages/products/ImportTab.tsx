@@ -122,9 +122,10 @@ export function ImportTab() {
       setSelectedIds(new Set());
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       console.error('Delete error:', error);
-      toast.error(error.code === '42501' ? t('common.permissionDenied', 'Недостаточно прав') : t('common.error', 'Ошибка'));
+      const err = error as { code?: string };
+      toast.error(err.code === '42501' ? t('common.permissionDenied', 'Недостаточно прав') : t('common.error', 'Ошибка'));
     },
   });
 
@@ -146,7 +147,7 @@ export function ImportTab() {
       queryClient.invalidateQueries({ queryKey: ['import-errors'] });
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       console.error('Exclude row error:', error);
       toast.error(t('common.error', 'Ошибка'));
     },
@@ -546,7 +547,7 @@ export function ImportTab() {
                       <TableCell className="font-mono text-xs">{row.row_number}</TableCell>
                       {PREVIEW_FIELDS.map(field => (
                         <TableCell key={field} className="text-sm max-w-[150px] truncate">
-                          {String((row.data as any)?.[field] ?? '—')}
+                          {String((row.data as Record<string, unknown>)?.[field] ?? '—')}
                         </TableCell>
                       ))}
                       <TableCell>
