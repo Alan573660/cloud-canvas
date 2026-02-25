@@ -1,7 +1,7 @@
 /**
  * useNormalization — hook for all normalization backend calls.
  * 
- * Wraps: dry_run, apply (async), apply_status polling, stats, settings-merge.
+ * Contract v1: Unified types for questions, batch confirm, ai_chat_v2.
  * All calls go through Supabase Edge Functions (import-normalize, settings-merge).
  * 
  * Security & stability features:
@@ -35,16 +35,32 @@ export interface DryRunPatch {
   family_key?: string;
 }
 
+// Contract v1: Question with both new and legacy fields
 export interface BackendQuestion {
   type: string;
   token?: string;
   profile?: string;
   examples?: string[];
+  // Contract v1 fields (primary)
+  question_text?: string;
+  affected_rows_count?: number;
+  suggested_actions?: unknown[];
+  needs_user_confirmation?: boolean;
+  // Legacy fields (backward compat)
   affected_count?: number;
   suggested?: unknown;
   suggested_variants?: unknown[];
   ask?: string;
   confidence?: number;
+}
+
+// Contract v1: AI status from dry_run
+export interface AIStatus {
+  enabled: boolean;
+  attempted: boolean;
+  failed: boolean;
+  fail_reason?: string;
+  model?: string;
 }
 
 export interface DryRunResult {
@@ -55,15 +71,20 @@ export interface DryRunResult {
     rows_scanned: number;
     candidates: number;
     patches_ready: number;
+    // Contract v1: AI status
+    ai_status?: AIStatus;
+    // Legacy
+    ai?: boolean;
+    shadow_mode?: boolean;
   };
   patches_sample?: DryRunPatch[];
   questions?: BackendQuestion[];
   error?: string;
   code?: string;
   recommended_limit?: number;
-  // AI skip reason: set by backend when AI suggestions are skipped
   ai_skip_reason?: string;
   ai_disabled?: boolean;
+  contract_version?: string;
 }
 
 export type ApplyState = 'IDLE' | 'STARTING' | 'PENDING' | 'RUNNING' | 'DONE' | 'ERROR' | 'POLL_EXCEEDED';
@@ -71,8 +92,11 @@ export type ApplyState = 'IDLE' | 'STARTING' | 'PENDING' | 'RUNNING' | 'DONE' | 
 export interface ApplyStatusResult {
   state?: string;
   progress?: number;
+  phase?: string;
+  progress_percent?: number;
   report?: Record<string, number>;
   error?: string;
+  last_error?: string;
 }
 
 export interface QualityMetrics {
@@ -87,7 +111,7 @@ export interface QualityMetrics {
   [key: string]: number;
 }
 
-// ─── Dashboard types from /api/enrich/dashboard ──────────────
+// ─── Dashboard types ─────────────────────────────────────────
 
 export interface DashboardProgress {
   total: number;
@@ -119,7 +143,7 @@ export interface DashboardResult {
   error?: string;
 }
 
-// ─── Tree types from /api/enrich/tree ────────────────────────
+// ─── Tree types ──────────────────────────────────────────────
 
 export interface TreeNode {
   cat_tree: string;
@@ -135,15 +159,46 @@ export interface TreeResult {
   error?: string;
 }
 
-// ─── Confirm types ───────────────────────────────────────────
+// ─── Confirm types (Contract v1: batch) ──────────────────────
+
+export interface ConfirmAction {
+  type: string;
+  payload: Record<string, unknown>;
+}
 
 export interface ConfirmResult {
   ok: boolean;
-  type?: string;
+  type?: string;       // 'BATCH' for v1
   next_action?: string;
   affected_clusters?: string[];
+  apply_started?: boolean;
+  apply_id?: string;
+  status_url?: string;
+  mode?: string;       // 'sync' | 'async'
   stats?: { updates: number; elapsed_ms: number };
+  apply_error?: string;
   error?: string;
+}
+
+// ─── AI Chat v2 types ────────────────────────────────────────
+
+export interface AiChatV2Action {
+  type: string;
+  payload: Record<string, unknown>;
+}
+
+export interface AiChatV2Result {
+  ok: boolean;
+  assistant_message: string;
+  actions: AiChatV2Action[];
+  missing_fields?: string[];
+  requires_confirm?: boolean;
+  shadow_mode?: boolean;
+  error?: string;
+  code?: string;
+  ai_skip_reason?: string;
+  ai_disabled?: boolean;
+  contract_version?: string;
 }
 
 export interface ConfirmedSettings {
@@ -175,7 +230,7 @@ export interface CatalogRow {
 // ─── Polling constants ────────────────────────────────────────
 
 const POLL_INTERVAL_MS = 3000;
-const POLL_MAX_DURATION_MS = 7 * 60 * 1000; // 7 minutes
+const POLL_MAX_DURATION_MS = 7 * 60 * 1000;
 const POLL_MAX_REQUESTS = 300;
 
 // ─── Hook ─────────────────────────────────────────────────────
@@ -415,7 +470,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     }
   }, [organizationId]);
 
-  // ─── Confirm Question ─────────────────────────────────────
+  // ─── Confirm Question (legacy single) ─────────────────────
 
   const confirmQuestion = useCallback(async (type: string, payload: Record<string, unknown>, jobId?: string) => {
     setConfirmingType(type);
@@ -446,8 +501,89 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     }
   }, [organizationId, importJobId]);
 
-  // ─── Apply ────────────────────────────────────────────────
+  // ─── Confirm Actions (Contract v1: batch) ─────────────────
 
+  const confirmActions = useCallback(async (actions: ConfirmAction[], jobId?: string): Promise<ConfirmResult | null> => {
+    if (actions.length === 0) return null;
+    setConfirmingType('BATCH');
+    try {
+      const { data, error } = await supabase.functions.invoke('import-normalize', {
+        body: {
+          op: 'confirm',
+          organization_id: organizationId,
+          import_job_id: jobId || importJobId || 'current',
+          actions,
+        },
+      });
+
+      if (error) throw new Error(error.message);
+
+      const result = data as ConfirmResult;
+      if (!result?.ok) throw new Error(parseEdgeFunctionError(null, result));
+
+      toast({
+        title: 'Правила применены',
+        description: `${result.stats?.updates || actions.length} обновлений${result.apply_started ? ', применение запущено' : ''}`,
+      });
+
+      // If apply was auto-started, begin polling
+      if (result.apply_started && result.apply_id) {
+        setApplyId(result.apply_id);
+        setApplyState('PENDING');
+        pollStartRef.current = Date.now();
+        pollCountRef.current = 0;
+        const aid = result.apply_id;
+        const rid = runId || '';
+        pollingRef.current = setInterval(() => {
+          pollApplyStatus(aid, rid);
+        }, POLL_INTERVAL_MS);
+      }
+
+      return result;
+    } catch (err) {
+      const msg = parseEdgeFunctionError(err);
+      toast({ title: 'Ошибка подтверждения', description: msg, variant: 'destructive' });
+      return null;
+    } finally {
+      setConfirmingType(null);
+    }
+  }, [organizationId, importJobId, runId]);
+
+  // ─── AI Chat v2 (Contract v1) ─────────────────────────────
+
+  const sendAiChatV2 = useCallback(async (message: string, context?: Record<string, unknown>): Promise<AiChatV2Result | null> => {
+    try {
+      const { data, error } = await supabase.functions.invoke<AiChatV2Result>('import-normalize', {
+        body: {
+          op: 'ai_chat_v2',
+          organization_id: organizationId,
+          import_job_id: importJobId || 'current',
+          run_id: runId,
+          message,
+          context,
+        },
+      });
+
+      if (error) throw new Error(error.message);
+
+      const result = data as AiChatV2Result;
+      if (!result?.ok) {
+        return result; // Return error for UI to handle
+      }
+
+      return result;
+    } catch (err) {
+      const msg = parseEdgeFunctionError(err);
+      return {
+        ok: false,
+        assistant_message: '',
+        actions: [],
+        error: msg,
+      };
+    }
+  }, [organizationId, importJobId, runId]);
+
+  // ─── Apply ────────────────────────────────────────────────
 
   const stopPolling = useCallback(() => {
     if (pollingRef.current) {
@@ -459,7 +595,6 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   }, []);
 
   const pollApplyStatus = useCallback(async (currentApplyId: string, currentRunId: string) => {
-    // Check polling limits
     pollCountRef.current += 1;
     const elapsed = Date.now() - pollStartRef.current;
 
@@ -499,15 +634,14 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
         toast({ title: 'Нормализация завершена' });
       } else if (state === 'ERROR' || state === 'FAILED') {
         setApplyState('ERROR');
-        setApplyError(parseEdgeFunctionError(null, result));
+        setApplyError(result.last_error || parseEdgeFunctionError(null, result));
         stopPolling();
       } else {
         setApplyState('RUNNING');
-        setApplyProgress(result.progress ?? 50);
+        setApplyProgress(result.progress_percent ?? result.progress ?? 50);
       }
     } catch (err) {
       console.error('[polling] error:', err);
-      // Don't stop polling on transient errors
     }
   }, [organizationId, importJobId, stopPolling]);
 
@@ -545,26 +679,17 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
         error_code?: string;
       };
 
-      // --- PROFILE_HASH_MISMATCH recovery ---
       if (isHashMismatch(result)) {
         toast({
           title: 'Настройки изменились',
           description: 'Автоматически пересканируем каталог…',
         });
         setApplyState('IDLE');
-        // Auto-retry: re-run dry_run then user can re-apply
         const newResult = await executeDryRun({ aiSuggest: true, limit: 2000 });
         if (newResult) {
-          toast({
-            title: 'Пересканирование завершено',
-            description: 'Нажмите «Применить» снова.',
-          });
+          toast({ title: 'Пересканирование завершено', description: 'Нажмите «Применить» снова.' });
         } else {
-          toast({
-            title: 'Не удалось пересканировать',
-            description: 'Попробуйте нажать «Сканировать» вручную.',
-            variant: 'destructive',
-          });
+          toast({ title: 'Не удалось пересканировать', description: 'Попробуйте нажать «Сканировать» вручную.', variant: 'destructive' });
         }
         return;
       }
@@ -576,7 +701,6 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       }
 
       if (result?.apply_id) {
-        // Async mode — start polling with limits
         const newApplyId = result.apply_id;
         setApplyId(newApplyId);
         setApplyState('PENDING');
@@ -587,13 +711,9 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
           pollApplyStatus(newApplyId, runId);
         }, POLL_INTERVAL_MS);
       } else if (result?.ok !== false && result?.patched_rows !== undefined) {
-        // Sync mode — done immediately
         setApplyState('DONE');
         setApplyProgress(100);
-        toast({
-          title: 'Готово',
-          description: `Обновлено строк: ${result.patched_rows}`,
-        });
+        toast({ title: 'Готово', description: `Обновлено строк: ${result.patched_rows}` });
       } else {
         throw new Error(parseEdgeFunctionError(null, result));
       }
@@ -608,7 +728,6 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   // ─── Answer Question (with double-click protection) ────────
 
   const answerQuestion = useCallback(async (questionType: string, token: string, value: string | number) => {
-    // Double-click lock: key = type + token
     const lockKey = `${questionType}:${token}`;
     if (answerLocksRef.current.has(lockKey)) {
       console.log(`[answerQuestion] Ignoring duplicate for ${lockKey}`);
@@ -634,12 +753,8 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
 
       const result = data as { ok: boolean; error?: string; code?: string; error_code?: string };
 
-      // Hash mismatch on answer → auto-retry dry_run
       if (isHashMismatch(result)) {
-        toast({
-          title: 'Настройки изменились',
-          description: 'Пересканируем каталог…',
-        });
+        toast({ title: 'Настройки изменились', description: 'Пересканируем каталог…' });
         await executeDryRun({ aiSuggest: true, limit: 2000 });
         return false;
       }
@@ -654,14 +769,13 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       return false;
     } finally {
       setAnsweringQuestion(false);
-      // Release lock after 500ms debounce
       setTimeout(() => {
         answerLocksRef.current.delete(lockKey);
       }, 500);
     }
   }, [organizationId, importJobId, executeDryRun]);
 
-  // ─── Fetch Catalog Items via enricher preview_rows (BigQuery) ────────
+  // ─── Fetch Catalog Items via enricher preview_rows ─────────
 
   const fetchCatalogItems = useCallback(async (limit = 500) => {
     setCatalogLoading(true);
@@ -686,7 +800,6 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       };
 
       if (!result?.ok) {
-        // If enricher not available or catalog not in BQ yet, return empty silently
         console.warn('[fetchCatalogItems] preview_rows returned not ok:', result?.error);
         setCatalogItems([]);
         setCatalogTotal(0);
@@ -699,8 +812,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       return rows;
     } catch (err) {
       const msg = parseEdgeFunctionError(err);
-      console.warn('[fetchCatalogItems] preview_rows error (enricher may be unavailable):', msg);
-      // Don't show destructive toast for background load — wizard still works with dry_run data
+      console.warn('[fetchCatalogItems] preview_rows error:', msg);
       setCatalogItems([]);
       return [];
     } finally {
@@ -765,9 +877,15 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     treeResult,
     fetchTree,
 
-    // Confirm question
+    // Confirm (legacy single)
     confirmingType,
     confirmQuestion,
+
+    // Confirm (Contract v1: batch)
+    confirmActions,
+
+    // AI Chat v2
+    sendAiChatV2,
 
     // Settings
     savingSettings,
@@ -781,4 +899,3 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     reset,
   };
 }
-
