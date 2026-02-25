@@ -335,7 +335,22 @@ Deno.serve(async (req) => {
         return jsonResponse({ ok: false, error: (result.data as Record<string, unknown>).error || 'Status check failed' });
       }
 
-      return jsonResponse(result.data as Record<string, unknown>);
+      // Normalize apply_status response to canonical fields
+      const raw = result.data as Record<string, unknown>;
+      const status = String(raw.status || raw.state || 'UNKNOWN').toUpperCase();
+      const phase = String(raw.phase || 'unknown');
+      const progressPercent = typeof raw.progress_percent === 'number' ? raw.progress_percent
+        : typeof raw.progress === 'number' ? raw.progress : 0;
+      const lastError = raw.last_error || raw.error || null;
+
+      return jsonResponse({
+        ...raw,
+        ok: true,
+        status,
+        phase,
+        progress_percent: progressPercent,
+        last_error: lastError,
+      });
     }
 
     // =========================================
@@ -529,21 +544,32 @@ Deno.serve(async (req) => {
         return jsonResponse({ ok: false, error: d.error || d.detail || 'AI Chat v2 failed' });
       }
 
-      // Ensure actions[] is always an array
+      // Output guard: ensure actions[] is always an array
       const v2Data = result.data as Record<string, unknown>;
-      if (!Array.isArray(v2Data.actions)) {
-        v2Data.actions = [];
-        if (v2Data.action && typeof v2Data.action === 'object') {
-          (v2Data.actions as unknown[]).push(v2Data.action);
-        }
+      const rawActions: unknown[] = [];
+      if (Array.isArray(v2Data.actions)) {
+        rawActions.push(...v2Data.actions);
+      } else if (v2Data.action && typeof v2Data.action === 'object') {
+        rawActions.push(v2Data.action);
       }
+      // Validate each action has type+payload
+      const validActions = rawActions.filter((a): a is Record<string, unknown> => {
+        if (!a || typeof a !== 'object') return false;
+        const act = a as Record<string, unknown>;
+        return typeof act.type === 'string' && act.type.length > 0;
+      }).map(a => ({
+        type: String(a.type),
+        payload: (a.payload && typeof a.payload === 'object') ? a.payload : {},
+      }));
+
+      const assistantMessage = String(v2Data.assistant_message || v2Data.reply || v2Data.message || '');
 
       return jsonResponse({
         ok: true,
-        assistant_message: v2Data.assistant_message || v2Data.reply || v2Data.message || '',
-        actions: v2Data.actions,
-        missing_fields: v2Data.missing_fields || [],
-        requires_confirm: v2Data.requires_confirm ?? (v2Data.actions as unknown[]).length > 0,
+        assistant_message: assistantMessage,
+        actions: validActions,
+        missing_fields: Array.isArray(v2Data.missing_fields) ? v2Data.missing_fields : [],
+        requires_confirm: v2Data.requires_confirm ?? validActions.length > 0,
         shadow_mode: v2Data.shadow_mode ?? false,
       });
     }
@@ -725,15 +751,21 @@ Deno.serve(async (req) => {
       // If batch confirm works, return as-is
       if (batchResult.ok && batchResult.data) {
         const d = batchResult.data as Record<string, unknown>;
+        // Output guard: validate confirm response structure
+        const affectedClusters = Array.isArray(d.affected_clusters) ? d.affected_clusters : [];
+        const applyStarted = typeof d.apply_started === 'boolean' ? d.apply_started : false;
+        const applyId = typeof d.apply_id === 'string' ? d.apply_id : undefined;
+        const stats = (d.stats && typeof d.stats === 'object') ? d.stats : { updates: actions.length };
+
         return jsonResponse({
           ok: true,
           type: 'BATCH',
-          affected_clusters: d.affected_clusters || [],
-          apply_started: d.apply_started ?? false,
-          apply_id: d.apply_id,
+          affected_clusters: affectedClusters,
+          apply_started: applyStarted,
+          apply_id: applyId,
           status_url: d.status_url,
-          mode: d.mode || (d.apply_id ? 'async' : 'sync'),
-          stats: d.stats || { updates: actions.length },
+          mode: d.mode || (applyId ? 'async' : 'sync'),
+          stats,
           ...d,
         });
       }

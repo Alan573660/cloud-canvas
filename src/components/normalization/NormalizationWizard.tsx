@@ -39,7 +39,8 @@ import type {
   AIQuestionType,
 } from './types';
 import { validateProduct } from './types';
-import { useNormalization, type DryRunPatch, type BackendQuestion, type CatalogRow, type DashboardQuestionCard, type AiChatV2Action, type ConfirmAction } from '@/hooks/use-normalization';
+import { useNormalization } from '@/hooks/use-normalization';
+import type { DryRunPatch, BackendQuestion, CatalogRow, DashboardQuestionCard, AiChatV2Action, ConfirmAction } from '@/lib/contract-types';
 
 // ─── Props ────────────────────────────────────────────────────
 
@@ -975,10 +976,35 @@ export function NormalizationWizard({
     }
   }, [aiQuestions]);
 
-  const handleAnswerQuestion = useCallback(async (value: string) => {
+  const handleAnswerQuestion = useCallback(async (value: string, scope?: 'all' | 'selected') => {
     if (!activeQuestionForm) return;
-    const ok = await norm.answerQuestion(activeQuestionForm.type, activeQuestionForm.token, value);
-    if (ok) {
+    // Contract v1: convert answer to confirmActions payload
+    const questionType = activeQuestionForm.type.toUpperCase();
+    const backendType = questionType === 'WIDTH' ? 'WIDTH_MASTER'
+      : questionType === 'COATING' ? 'COATING_MAP'
+      : questionType === 'COLOR' ? 'COLOR_MAP'
+      : questionType === 'THICKNESS' ? 'THICKNESS_SET'
+      : questionType === 'PROFILE' ? 'PROFILE_MAP'
+      : questionType === 'CATEGORY' ? 'CATEGORY_FIX'
+      : questionType;
+    
+    const payload: Record<string, unknown> = {
+      token: activeQuestionForm.token,
+      canonical: value,
+    };
+    
+    // For widths, parse "full:work" format
+    if (backendType === 'WIDTH_MASTER' && value.includes(':')) {
+      const [full, work] = value.split(':');
+      payload.profile = activeQuestionForm.token;
+      payload.full_mm = parseInt(full, 10) || 0;
+      payload.work_mm = parseInt(work, 10) || 0;
+      delete payload.canonical;
+    }
+
+    const action: ConfirmAction = { type: backendType, payload };
+    const result = await norm.confirmActions([action]);
+    if (result?.ok) {
       setActiveQuestionForm(null);
       toast({ title: t('normalize.rerunning', 'Обновляем результаты…') });
       norm.executeDryRun({ aiSuggest: true, limit: 2000 });
@@ -988,18 +1014,30 @@ export function NormalizationWizard({
   const handleAnswerFromCluster = useCallback(async (questionId: string, value: string | number) => {
     const question = aiQuestions.find((q, i) => `q-${i}` === questionId || q.token === questionId);
     const questionType = question?.type || questionId;
+    const backendType = questionType.toUpperCase() === 'WIDTH' ? 'WIDTH_MASTER'
+      : questionType.toUpperCase() === 'COATING' ? 'COATING_MAP'
+      : questionType.toUpperCase() === 'COLOR' ? 'COLOR_MAP'
+      : questionType.toUpperCase();
     const token = question?.token || questionId;
-    const ok = await norm.answerQuestion(questionType, token, value);
-    if (ok) {
+    
+    const action: ConfirmAction = {
+      type: backendType,
+      payload: { token, canonical: value },
+    };
+    const result = await norm.confirmActions([action]);
+    if (result?.ok) {
       toast({ title: t('normalize.rerunning', 'Обновляем результаты…') });
       norm.executeDryRun({ aiSuggest: true, limit: 2000 });
     }
   }, [norm, aiQuestions, t]);
 
   const getApplyStatusLabel = () => {
+    const phaseLabel = norm.applyPhase && norm.applyPhase !== 'unknown'
+      ? ` (${norm.applyPhase === 'materialize' ? 'подготовка' : norm.applyPhase === 'merge' ? 'слияние' : norm.applyPhase})`
+      : '';
     switch (norm.applyState) {
-      case 'STARTING': case 'PENDING': return 'Сканируем товары…';
-      case 'RUNNING': return `Применяем исправления… ${norm.applyProgress > 0 ? norm.applyProgress + '%' : ''}`;
+      case 'STARTING': case 'PENDING': return `Запуск${phaseLabel}…`;
+      case 'RUNNING': return `Применяем${phaseLabel}… ${norm.applyProgress > 0 ? norm.applyProgress + '%' : ''}`;
       case 'DONE': return '✓ Готово';
       case 'ERROR': return 'Ошибка';
       case 'POLL_EXCEEDED': return 'Превышен лимит ожидания';
