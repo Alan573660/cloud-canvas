@@ -42,7 +42,7 @@ import type {
   AIQuestionType,
 } from './types';
 import { validateProduct } from './types';
-import { useNormalization } from '@/hooks/use-normalization';
+import { useNormalizationFlow } from '@/hooks/use-normalization-flow';
 import type { DryRunPatch, BackendQuestion, CatalogRow, DashboardQuestionCard, AiChatV2Action, ConfirmAction } from '@/lib/contract-types';
 
 // ─── Props ────────────────────────────────────────────────────
@@ -373,15 +373,12 @@ const CHAT_EXAMPLES = [
 ];
 
 function AIChatPanel({
-  organizationId, importJobId, onApplyActions, runId, confirmActions: confirmActionsFn,
+  onApplyActions, confirmActions: confirmActionsFn, sendAiChatV2Fn,
 }: {
-  organizationId: string;
-  importJobId?: string;
   onApplyActions?: (actions: AiChatV2Action[]) => void;
-  runId?: string | null;
   confirmActions?: (actions: ConfirmAction[]) => Promise<unknown>;
+  sendAiChatV2Fn: (message: string, context?: Record<string, unknown>) => Promise<import('@/lib/contract-types').AiChatV2Result | null>;
 }) {
-  const norm = useNormalization({ organizationId, importJobId });
   const [messages, setMessages] = useState<Array<{
     role: 'user' | 'ai'; text: string; isError?: boolean; actions?: AiChatV2Action[]; actionsApplied?: boolean;
   }>>([]);
@@ -400,7 +397,7 @@ function AIChatPanel({
     setLoading(true);
 
     try {
-      const result = await norm.sendAiChatV2(msg, {});
+      const result = await sendAiChatV2Fn(msg, {});
       if (!result || result.ok === false) {
         let errMsg = result?.error || 'Ошибка ИИ';
         if (result?.code === 'TIMEOUT') errMsg = '⏱ ИИ не ответил вовремя. Попробуйте ещё раз.';
@@ -422,14 +419,13 @@ function AIChatPanel({
       setLoading(false);
       setTimeout(() => scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     }
-  }, [input, loading, norm]);
+  }, [input, loading, sendAiChatV2Fn]);
 
   const handleApplyActions = useCallback(async (actions: AiChatV2Action[], msgIndex: number) => {
     setApplyingIdx(msgIndex);
     try {
       const confirmPayload: ConfirmAction[] = actions.map(a => ({ type: a.type, payload: a.payload }));
       if (confirmActionsFn) await confirmActionsFn(confirmPayload);
-      else await norm.confirmActions(confirmPayload);
       setMessages(prev => prev.map((m, i) => i === msgIndex ? { ...m, actionsApplied: true } : m));
       if (onApplyActions) onApplyActions(actions);
     } catch (err) {
@@ -437,7 +433,7 @@ function AIChatPanel({
     } finally {
       setApplyingIdx(null);
     }
-  }, [confirmActionsFn, norm, onApplyActions]);
+  }, [confirmActionsFn, onApplyActions]);
 
   return (
     <div className="flex flex-col h-full">
@@ -595,7 +591,8 @@ export function NormalizationWizard({
   const [confirmApplyOpen, setConfirmApplyOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
-  const norm = useNormalization({ organizationId, importJobId: effectiveJobId });
+  const flow = useNormalizationFlow({ organizationId, importJobId: effectiveJobId });
+  const norm = flow.norm;
 
   // Auto-load on open
   const autoStartedRef = useRef(false);
@@ -1080,9 +1077,7 @@ export function NormalizationWizard({
                 {/* CHAT */}
                 <TabsContent value="chat" className="flex-1 min-h-0 m-0 flex flex-col">
                   <AIChatPanel
-                    organizationId={organizationId}
-                    importJobId={effectiveJobId}
-                    runId={norm.runId}
+                    sendAiChatV2Fn={norm.sendAiChatV2}
                     confirmActions={norm.confirmActions}
                     onApplyActions={(actions) => {
                       toast({ title: 'Применено из чата', description: `${actions.length} правил` });
