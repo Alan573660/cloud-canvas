@@ -475,11 +475,20 @@ const CHAT_EXAMPLES = [
 function AIChatPanel({
   organizationId,
   importJobId,
+  onApplyAction,
+  runId,
 }: {
   organizationId: string;
   importJobId?: string;
+  onApplyAction?: (action: { type: string; value: string; affected_count: number }) => void;
+  runId?: string | null;
 }) {
-  const [messages, setMessages] = useState<Array<{ role: 'user' | 'ai'; text: string; isError?: boolean }>>([]);
+  const [messages, setMessages] = useState<Array<{
+    role: 'user' | 'ai';
+    text: string;
+    isError?: boolean;
+    pendingAction?: { type: string; value: string; affected_count: number; preview?: string[] };
+  }>>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [showExamples, setShowExamples] = useState(true);
@@ -517,6 +526,8 @@ function AIChatPanel({
         code?: string;
         ai_skip_reason?: string;
         ai_disabled?: boolean;
+        // Pending action from backend
+        action?: { type: string; value: string; affected_count: number; preview?: string[] };
       };
 
       if (result?.ok === false) {
@@ -539,7 +550,12 @@ function AIChatPanel({
         return;
       }
 
-      setMessages(prev => [...prev, { role: 'ai', text: reply }]);
+      // Add reply with optional pending action
+      setMessages(prev => [...prev, {
+        role: 'ai',
+        text: reply,
+        pendingAction: result?.action || undefined,
+      }]);
     } catch (err) {
       console.error('[AIChatPanel] sendMessage error:', err);
       const errMsg = err instanceof Error ? err.message : 'Ошибка подключения к ИИ';
@@ -553,6 +569,18 @@ function AIChatPanel({
     }
   }, [input, loading, organizationId, importJobId]);
 
+  const handleApplyPendingAction = useCallback((action: { type: string; value: string; affected_count: number }) => {
+    if (onApplyAction) {
+      onApplyAction(action);
+      // Mark action as applied in messages
+      setMessages(prev => prev.map(m =>
+        m.pendingAction?.type === action.type && m.pendingAction?.value === action.value
+          ? { ...m, pendingAction: undefined, text: m.text + '\n\n✅ Применено!' }
+          : m
+      ));
+    }
+  }, [onApplyAction]);
+
   return (
     <div className="flex flex-col h-full">
       <ScrollArea className="flex-1 min-h-0">
@@ -563,7 +591,7 @@ function AIChatPanel({
               <div className="text-center py-3 text-muted-foreground">
                 <MessageSquare className="h-7 w-7 mx-auto mb-2 opacity-30" />
                 <p className="text-xs font-medium">ИИ-чат для нормализации</p>
-                <p className="text-[10px] mt-0.5 opacity-70">Отдавайте команды или задайте вопрос</p>
+                <p className="text-[10px] mt-0.5 opacity-70">Задайте вопрос или отдайте команду</p>
               </div>
               <div className="space-y-1">
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Примеры команд</p>
@@ -590,6 +618,35 @@ function AIChatPanel({
                     : 'bg-muted text-foreground'
               }`}>
                 {m.text}
+                
+                {/* Pending Action Preview */}
+                {m.pendingAction && (
+                  <div className="mt-2 p-2 bg-background rounded border border-primary/20">
+                    <div className="flex items-center gap-1 mb-1">
+                      <AlertTriangle className="h-3 w-3 text-primary" />
+                      <span className="text-[10px] font-semibold">Ожидает подтверждения</span>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground mb-1">
+                      Будет изменено <strong className="text-foreground">{m.pendingAction.affected_count}</strong> строк
+                    </p>
+                    {m.pendingAction.preview && m.pendingAction.preview.length > 0 && (
+                      <div className="text-[10px] font-mono text-muted-foreground mb-1.5">
+                        {m.pendingAction.preview.slice(0, 3).map((p, j) => (
+                          <div key={j} className="truncate">{p}</div>
+                        ))}
+                        {m.pendingAction.preview.length > 3 && <div>+{m.pendingAction.preview.length - 3} ещё…</div>}
+                      </div>
+                    )}
+                    <Button
+                      size="sm"
+                      className="h-6 text-[10px] w-full"
+                      onClick={() => handleApplyPendingAction(m.pendingAction!)}
+                    >
+                      <Play className="h-3 w-3 mr-1" />
+                      Применить ко всему прайсу
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           ))}
