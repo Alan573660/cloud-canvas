@@ -1098,14 +1098,23 @@ export function NormalizationWizard({
                 Загрузка данных…
               </div>
             )}
+            {/* Apply Progress Bar */}
             {norm.applyState !== 'IDLE' && (
-              <Badge
-                variant={norm.applyState === 'DONE' ? 'default' : norm.applyState === 'ERROR' ? 'destructive' : 'secondary'}
-                className="text-xs"
-              >
-                {isApplying && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
-                {getApplyStatusLabel()}
-              </Badge>
+              <div className="flex items-center gap-3">
+                <Badge
+                  variant={norm.applyState === 'DONE' ? 'default' : norm.applyState === 'ERROR' ? 'destructive' : 'secondary'}
+                  className="text-xs"
+                >
+                  {isApplying && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+                  {getApplyStatusLabel()}
+                </Badge>
+                {isApplying && (
+                  <div className="flex items-center gap-2">
+                    <Progress value={norm.applyProgress} className="h-1.5 w-24" />
+                    <span className="text-[10px] text-muted-foreground">{norm.applyProgress}%</span>
+                  </div>
+                )}
+              </div>
             )}
             {norm.applyError && (
               <div className="flex items-center gap-1 text-xs text-destructive">
@@ -1118,6 +1127,19 @@ export function NormalizationWizard({
               </span>
             )}
           </div>
+
+          {/* AI unavailable fallback banner */}
+          {norm.dryRunResult?.ai_disabled && (
+            <div className="mx-4 mb-2 flex items-center gap-2 text-xs border border-destructive/30 bg-destructive/5 rounded-md px-3 py-2">
+              <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
+              <div>
+                <span className="font-medium text-destructive">ИИ-ассистент недоступен</span>
+                <span className="text-muted-foreground ml-1">
+                  — {norm.dryRunResult?.ai_skip_reason || 'сервис временно недоступен'}. Используются только детерминированные правила. Ответы на вопросы доступны в ручном режиме.
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* Settings panel */}
           {showSettings && (
