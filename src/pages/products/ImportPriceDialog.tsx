@@ -221,7 +221,7 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
         
         const is409 = uploadError.message?.includes('already exists') || 
                       uploadError.message?.includes('Duplicate') ||
-                      (uploadError as any).statusCode === 409;
+                      (uploadError as { statusCode?: number }).statusCode === 409;
         
         const userMessage = is409 
           ? t('import.fileAlreadyExists', 'Файл с таким именем уже загружен. Создайте новый импорт.')
