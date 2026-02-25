@@ -795,7 +795,6 @@ export function NormalizationWizard({
     console.log('[NormalizationWizard] Opening, auto-loading dashboard + preview_rows...');
 
     // 0. Ensure ai_policy exists in bot_settings (idempotent deep merge)
-    norm.saveConfirmedSettings({} as any).catch(() => {});
     supabase.functions.invoke('settings-merge', {
       body: {
         organization_id: organizationId,
