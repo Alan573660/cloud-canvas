@@ -504,7 +504,7 @@ function AIChatPanel({
     setLoading(true);
 
     try {
-      const { supabase } = await import('@/integrations/supabase/client');
+      // supabase already imported at top level
       const payload = {
         op: 'chat',
         organization_id: organizationId,
