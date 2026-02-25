@@ -1241,13 +1241,24 @@ export function NormalizationWizard({
                         <div className="space-y-2">
                           {questionCards
                             .sort((a, b) => (b.count || 0) - (a.count || 0))
-                            .map(card => (
-                              <QuestionCard
-                                key={card.type}
-                                card={card}
-                                onResolve={handleResolveQuestionType}
-                              />
-                            ))}
+                            .map(card => {
+                              // Find related AI questions for this card type
+                              const relatedQs = aiQuestions.filter(aq => {
+                                const t = (aq.type || '').toUpperCase();
+                                if (card.type === 'WIDTH_MASTER' && t === 'WIDTH') return true;
+                                if (card.type === 'COATING_MAP' && t === 'COATING') return true;
+                                if (card.type === 'COLOR_MAP' && t === 'COLOR') return true;
+                                return t === card.type;
+                              });
+                              return (
+                                <QuestionCard
+                                  key={card.type}
+                                  card={card}
+                                  onResolve={handleResolveQuestionType}
+                                  relatedQuestions={relatedQs}
+                                />
+                              );
+                            })}
                         </div>
                       </>
                     ) : !norm.dryRunResult ? (
@@ -1324,7 +1335,20 @@ export function NormalizationWizard({
 
               {/* CHAT TAB */}
               <TabsContent value="chat" className="flex-1 min-h-0 m-0 flex flex-col">
-                <AIChatPanel organizationId={organizationId} importJobId={effectiveJobId} />
+                <AIChatPanel
+                  organizationId={organizationId}
+                  importJobId={effectiveJobId}
+                  runId={norm.runId}
+                  onApplyAction={(action) => {
+                    // When chat suggests an action, apply it as answer_question then re-scan
+                    norm.answerQuestion(action.type, action.value, action.value).then(ok => {
+                      if (ok) {
+                        toast({ title: 'Применено из чата', description: `${action.type}: ${action.value} (${action.affected_count} строк)` });
+                        norm.executeDryRun({ aiSuggest: true, limit: 2000 });
+                      }
+                    });
+                  }}
+                />
               </TabsContent>
 
               {/* RULES TAB */}
