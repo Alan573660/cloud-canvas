@@ -793,6 +793,22 @@ export function NormalizationWizard({
 
     console.log('[NormalizationWizard] Opening, auto-loading dashboard + preview_rows...');
 
+    // 0. Ensure ai_policy exists in bot_settings (idempotent deep merge)
+    norm.saveConfirmedSettings({} as any).catch(() => {});
+    supabase.functions.invoke('settings-merge', {
+      body: {
+        organization_id: organizationId,
+        patch: {
+          ai_policy: {
+            ai_enabled: true,
+            shadow_mode: true,
+            autopatch_after_confirm: true,
+            max_questions_per_run: 40,
+          },
+        },
+      },
+    }).catch(err => console.warn('[NormalizationWizard] ai_policy seed failed (non-critical):', err));
+
     // 1. Load dashboard KPIs
     norm.fetchDashboard(effectiveJobId);
 
