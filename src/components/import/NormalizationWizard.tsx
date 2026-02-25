@@ -62,8 +62,7 @@ export function NormalizationWizard({
           setPhase('error');
         }
       });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoStart]);
+  }, [autoStart, norm]);
 
   // Track apply state
   useEffect(() => {
