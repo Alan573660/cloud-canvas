@@ -594,6 +594,12 @@ export function NormalizationWizard({
   const flow = useNormalizationFlow({ organizationId, importJobId: effectiveJobId });
   const norm = flow.norm; // read-only data access (catalogItems, dryRunResult, dashboard, etc.)
 
+  const fetchDashboard = norm.fetchDashboard;
+  const fetchCatalogItems = norm.fetchCatalogItems;
+  const startScan = flow.startScan;
+  const confirmBatch = flow.confirmBatch;
+  const startApply = flow.startApply;
+
   // Auto-load on open
   const autoStartedRef = useRef(false);
   useEffect(() => {
@@ -608,13 +614,13 @@ export function NormalizationWizard({
       },
     }).catch(err => console.warn('[NormWizard] ai_policy seed failed:', err));
 
-    norm.fetchDashboard(effectiveJobId);
-    norm.fetchCatalogItems(500);
+    void fetchDashboard(effectiveJobId);
+    void fetchCatalogItems(500);
 
     if (effectiveJobId) {
-      flow.startScan({ aiSuggest: true, limit: 2000 });
+      void startScan({ aiSuggest: true, limit: 2000 });
     }
-  }, [open, organizationId, effectiveJobId, flow, norm]);
+  }, [open, organizationId, effectiveJobId, fetchDashboard, fetchCatalogItems, startScan]);
 
   useEffect(() => { if (!open) autoStartedRef.current = false; }, [open]);
 
@@ -696,11 +702,11 @@ export function NormalizationWizard({
 
   // Handlers
   const handleRunScan = useCallback(() => {
-    flow.startScan({ aiSuggest: true, limit: 2000 });
-    norm.fetchDashboard(effectiveJobId);
-  }, [flow, norm, effectiveJobId]);
+    void startScan({ aiSuggest: true, limit: 2000 });
+    void fetchDashboard(effectiveJobId);
+  }, [startScan, fetchDashboard, effectiveJobId]);
 
-  const handleApply = useCallback(() => { setConfirmApplyOpen(false); flow.startApply(); }, [flow]);
+  const handleApply = useCallback(() => { setConfirmApplyOpen(false); void startApply(); }, [startApply]);
 
   const handleSelectCluster = useCallback((path: ClusterPath) => { setSelectedCluster(path); }, []);
   const handleToggleNode = useCallback((nodeId: string) => {
@@ -733,12 +739,12 @@ export function NormalizationWizard({
       delete payload.canonical;
     }
     const action: ConfirmAction = { type: backendType, payload };
-    const result = await flow.confirmBatch([action]);
+    const result = await confirmBatch([action]);
     if (result?.ok) {
       setActiveQuestionForm(null);
-      flow.startScan({ aiSuggest: true, limit: 2000 });
+      void startScan({ aiSuggest: true, limit: 2000 });
     }
-  }, [flow, activeQuestionForm]);
+  }, [confirmBatch, startScan, activeQuestionForm]);
 
   const handleAnswerFromCluster = useCallback(async (questionId: string, value: string | number) => {
     const question = aiQuestions.find((q, i) => `q-${i}` === questionId || q.token === questionId);
@@ -747,9 +753,9 @@ export function NormalizationWizard({
       : questionType.toUpperCase() === 'COLOR' ? 'COLOR_MAP' : questionType.toUpperCase();
     const token = question?.token || questionId;
     const action: ConfirmAction = { type: backendType, payload: { token, canonical: value } };
-    const result = await flow.confirmBatch([action]);
-    if (result?.ok) flow.startScan({ aiSuggest: true, limit: 2000 });
-  }, [flow, aiQuestions]);
+    const result = await confirmBatch([action]);
+    if (result?.ok) void startScan({ aiSuggest: true, limit: 2000 });
+  }, [confirmBatch, startScan, aiQuestions]);
 
   const getApplyStatusLabel = () => {
     const phaseLabel = norm.applyPhase && norm.applyPhase !== 'unknown'

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Save, Loader2, X, FileEdit } from 'lucide-react';
@@ -51,9 +51,9 @@ export function StagingRowEditor({ open, onOpenChange, jobId, rowNumber }: Stagi
   const [isLoading, setIsLoading] = useState(false);
 
   // Fetch staging row when dialog opens
-  const fetchRow = async () => {
+  const fetchRow = useCallback(async () => {
     if (!profile?.organization_id || !open) return;
-    
+
     setIsLoading(true);
     try {
       const { data, error } = await supabase
@@ -83,21 +83,13 @@ export function StagingRowEditor({ open, onOpenChange, jobId, rowNumber }: Stagi
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [jobId, open, profile?.organization_id, rowNumber, t]);
 
-  // Fetch row when dialog opens
-  useState(() => {
-    if (open) {
-      fetchRow();
-    }
-  });
-
-  // Refetch when open changes
-  useMemo(() => {
-    if (open && profile?.organization_id) {
-      fetchRow();
-    }
-  }, [open, jobId, rowNumber, profile?.organization_id]);
+  // Fetch row when dialog opens / context changes
+  useEffect(() => {
+    if (!open) return;
+    void fetchRow();
+  }, [open, fetchRow]);
 
   // Save mutation
   const saveMutation = useMutation({
