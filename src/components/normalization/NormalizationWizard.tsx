@@ -592,7 +592,7 @@ export function NormalizationWizard({
   const [showSettings, setShowSettings] = useState(false);
 
   const flow = useNormalizationFlow({ organizationId, importJobId: effectiveJobId });
-  const norm = flow.norm;
+  const norm = flow.norm; // read-only data access (catalogItems, dryRunResult, dashboard, etc.)
 
   // Auto-load on open
   const autoStartedRef = useRef(false);
@@ -612,7 +612,7 @@ export function NormalizationWizard({
     norm.fetchCatalogItems(500);
 
     if (effectiveJobId) {
-      norm.executeDryRun({ aiSuggest: true, limit: 2000, onlyWhereNull: false });
+      flow.startScan({ aiSuggest: true, limit: 2000 });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, organizationId]);
@@ -685,9 +685,9 @@ export function NormalizationWizard({
   }, [items, activeCategory, onlyProblematic]);
 
   const isNormalizable = activeCategory === 'PROFNASTIL' || activeCategory === 'METALLOCHEREPICA';
-  const isApplying = norm.applyState === 'STARTING' || norm.applyState === 'PENDING' || norm.applyState === 'RUNNING';
-  const patchesReady = norm.dryRunResult?.stats?.patches_ready || 0;
-  const totalScanned = norm.dryRunResult?.stats?.rows_scanned || norm.catalogTotal || 0;
+  const isApplying = flow.state === 'APPLY_STARTING' || flow.state === 'APPLY_RUNNING';
+  const patchesReady = flow.context.patchesReady;
+  const totalScanned = flow.context.totalScanned;
 
   const dashProgress = norm.dashboardResult?.progress;
   const kpiTotal = dashProgress?.total || categoryStats.ALL.total || totalScanned;
@@ -697,11 +697,11 @@ export function NormalizationWizard({
 
   // Handlers
   const handleRunScan = useCallback(() => {
-    norm.executeDryRun({ aiSuggest: true, limit: 2000, onlyWhereNull: false });
+    flow.startScan({ aiSuggest: true, limit: 2000 });
     norm.fetchDashboard(effectiveJobId);
-  }, [norm, effectiveJobId]);
+  }, [flow, norm, effectiveJobId]);
 
-  const handleApply = useCallback(() => { setConfirmApplyOpen(false); norm.executeApply(); }, [norm]);
+  const handleApply = useCallback(() => { setConfirmApplyOpen(false); flow.startApply(); }, [flow]);
 
   const handleSelectCluster = useCallback((path: ClusterPath) => { setSelectedCluster(path); }, []);
   const handleToggleNode = useCallback((nodeId: string) => {
@@ -734,12 +734,12 @@ export function NormalizationWizard({
       delete payload.canonical;
     }
     const action: ConfirmAction = { type: backendType, payload };
-    const result = await norm.confirmActions([action]);
+    const result = await flow.confirmBatch([action]);
     if (result?.ok) {
       setActiveQuestionForm(null);
-      norm.executeDryRun({ aiSuggest: true, limit: 2000 });
+      flow.startScan({ aiSuggest: true, limit: 2000 });
     }
-  }, [norm, activeQuestionForm]);
+  }, [flow, activeQuestionForm]);
 
   const handleAnswerFromCluster = useCallback(async (questionId: string, value: string | number) => {
     const question = aiQuestions.find((q, i) => `q-${i}` === questionId || q.token === questionId);
@@ -748,20 +748,19 @@ export function NormalizationWizard({
       : questionType.toUpperCase() === 'COLOR' ? 'COLOR_MAP' : questionType.toUpperCase();
     const token = question?.token || questionId;
     const action: ConfirmAction = { type: backendType, payload: { token, canonical: value } };
-    const result = await norm.confirmActions([action]);
-    if (result?.ok) norm.executeDryRun({ aiSuggest: true, limit: 2000 });
-  }, [norm, aiQuestions]);
+    const result = await flow.confirmBatch([action]);
+    if (result?.ok) flow.startScan({ aiSuggest: true, limit: 2000 });
+  }, [flow, aiQuestions]);
 
   const getApplyStatusLabel = () => {
     const phaseLabel = norm.applyPhase && norm.applyPhase !== 'unknown'
       ? ` (${norm.applyPhase === 'materialize' ? 'подготовка' : norm.applyPhase === 'merge' ? 'слияние' : norm.applyPhase})`
       : '';
-    switch (norm.applyState) {
-      case 'STARTING': case 'PENDING': return `Запуск${phaseLabel}…`;
-      case 'RUNNING': return `Применяем${phaseLabel}… ${norm.applyProgress > 0 ? norm.applyProgress + '%' : ''}`;
-      case 'DONE': return '✓ Готово';
-      case 'ERROR': return 'Ошибка';
-      case 'POLL_EXCEEDED': return 'Превышен лимит ожидания';
+    switch (flow.state) {
+      case 'APPLY_STARTING': return `Запуск${phaseLabel}…`;
+      case 'APPLY_RUNNING': return `Применяем${phaseLabel}… ${norm.applyProgress > 0 ? norm.applyProgress + '%' : ''}`;
+      case 'APPLY_DONE': return '✓ Готово';
+      case 'ERROR': return flow.context.lastError || 'Ошибка';
       default: return '';
     }
   };
@@ -804,8 +803,8 @@ export function NormalizationWizard({
               <Button size="sm" variant="ghost" onClick={() => setShowSettings(v => !v)} className="h-7 text-xs gap-1">
                 <Settings2 className="h-3.5 w-3.5" />
               </Button>
-              <Button size="sm" variant="outline" onClick={handleRunScan} disabled={norm.dryRunLoading || isApplying} className="h-7 text-xs">
-                {norm.dryRunLoading ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
+              <Button size="sm" variant="outline" onClick={handleRunScan} disabled={flow.state === 'SCANNING' || isApplying} className="h-7 text-xs">
+                {flow.state === 'SCANNING' ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
                 Сканировать
               </Button>
               {!confirmApplyOpen ? (
@@ -852,19 +851,19 @@ export function NormalizationWizard({
 
             {/* Status indicators */}
             <div className="flex items-center gap-3 flex-1 min-w-0">
-              {norm.dryRunLoading && (
+              {flow.state === 'SCANNING' && (
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" /> Сканирование…
                 </div>
               )}
-              {norm.catalogLoading && !norm.dryRunLoading && (
+              {norm.catalogLoading && flow.state !== 'SCANNING' && (
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" /> Загрузка…
                 </div>
               )}
-              {norm.applyState !== 'IDLE' && (
+              {(flow.state === 'APPLY_STARTING' || flow.state === 'APPLY_RUNNING' || flow.state === 'APPLY_DONE' || flow.state === 'ERROR') && (
                 <div className="flex items-center gap-3">
-                  <Badge variant={norm.applyState === 'DONE' ? 'default' : norm.applyState === 'ERROR' ? 'destructive' : 'secondary'} className="text-xs">
+                  <Badge variant={flow.state === 'APPLY_DONE' ? 'default' : flow.state === 'ERROR' ? 'destructive' : 'secondary'} className="text-xs">
                     {isApplying && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
                     {getApplyStatusLabel()}
                   </Badge>
@@ -876,12 +875,12 @@ export function NormalizationWizard({
                   )}
                 </div>
               )}
-              {norm.applyError && (
+              {flow.context.lastError && (
                 <div className="flex items-center gap-1 text-xs text-destructive">
-                  <AlertCircle className="h-3 w-3" /> {norm.applyError}
+                  <AlertCircle className="h-3 w-3" /> {flow.context.lastError}
                 </div>
               )}
-              {norm.dryRunResult?.stats && !norm.dryRunLoading && (
+              {norm.dryRunResult?.stats && flow.state !== 'SCANNING' && (
                 <span className="text-xs text-muted-foreground ml-auto">
                   Исправлений: <strong className="text-foreground">{norm.dryRunResult.stats.patches_ready}</strong>
                 </span>
@@ -1077,11 +1076,11 @@ export function NormalizationWizard({
                 {/* CHAT */}
                 <TabsContent value="chat" className="flex-1 min-h-0 m-0 flex flex-col">
                   <AIChatPanel
-                    sendAiChatV2Fn={norm.sendAiChatV2}
-                    confirmActions={norm.confirmActions}
+                    sendAiChatV2Fn={flow.sendChat}
+                    confirmActions={flow.confirmBatch}
                     onApplyActions={(actions) => {
                       toast({ title: 'Применено из чата', description: `${actions.length} правил` });
-                      norm.executeDryRun({ aiSuggest: true, limit: 2000 });
+                      flow.startScan({ aiSuggest: true, limit: 2000 });
                     }}
                   />
                 </TabsContent>
