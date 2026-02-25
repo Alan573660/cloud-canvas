@@ -72,8 +72,7 @@ function DashboardPanel({ organizationId, onLaunchWizard }: { organizationId: st
 
   useEffect(() => {
     norm.fetchDashboard();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [organizationId]);
+  }, [organizationId, norm]);
 
   const dash = norm.dashboardResult;
   const progress = dash?.progress;

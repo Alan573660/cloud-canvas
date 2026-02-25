@@ -614,8 +614,7 @@ export function NormalizationWizard({
     if (effectiveJobId) {
       flow.startScan({ aiSuggest: true, limit: 2000 });
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, organizationId]);
+  }, [open, organizationId, effectiveJobId, flow, norm]);
 
   useEffect(() => { if (!open) autoStartedRef.current = false; }, [open]);
 
