@@ -813,6 +813,141 @@ export type Database = {
           },
         ]
       }
+      enrich_ai_actions_log: {
+        Row: {
+          action_json: Json
+          applied: boolean
+          created_at: string
+          id: string
+          import_job_id: string | null
+          organization_id: string
+          run_id: string | null
+        }
+        Insert: {
+          action_json?: Json
+          applied?: boolean
+          created_at?: string
+          id?: string
+          import_job_id?: string | null
+          organization_id: string
+          run_id?: string | null
+        }
+        Update: {
+          action_json?: Json
+          applied?: boolean
+          created_at?: string
+          id?: string
+          import_job_id?: string | null
+          organization_id?: string
+          run_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "enrich_ai_actions_log_import_job_id_fkey"
+            columns: ["import_job_id"]
+            isOneToOne: false
+            referencedRelation: "import_jobs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "enrich_ai_actions_log_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      enrich_ai_sessions: {
+        Row: {
+          created_at: string
+          id: string
+          import_job_id: string | null
+          organization_id: string
+          run_id: string | null
+          session_id: string | null
+          status: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          import_job_id?: string | null
+          organization_id: string
+          run_id?: string | null
+          session_id?: string | null
+          status?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          import_job_id?: string | null
+          organization_id?: string
+          run_id?: string | null
+          session_id?: string | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "enrich_ai_sessions_import_job_id_fkey"
+            columns: ["import_job_id"]
+            isOneToOne: false
+            referencedRelation: "import_jobs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "enrich_ai_sessions_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      enrich_user_decisions: {
+        Row: {
+          created_at: string
+          decision_payload: Json
+          id: string
+          import_job_id: string | null
+          organization_id: string
+          question_type: string
+          run_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          decision_payload?: Json
+          id?: string
+          import_job_id?: string | null
+          organization_id: string
+          question_type: string
+          run_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          decision_payload?: Json
+          id?: string
+          import_job_id?: string | null
+          organization_id?: string
+          question_type?: string
+          run_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "enrich_user_decisions_import_job_id_fkey"
+            columns: ["import_job_id"]
+            isOneToOne: false
+            referencedRelation: "import_jobs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "enrich_user_decisions_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       idempotency_keys: {
         Row: {
           action: string
