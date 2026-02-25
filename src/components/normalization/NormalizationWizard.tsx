@@ -4,6 +4,7 @@
  */
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { supabase } from '@/integrations/supabase/client';
 import { useTranslation } from 'react-i18next';
 import {
   Dialog,
@@ -211,38 +212,89 @@ function backendQuestionToAI(q: BackendQuestion, index: number): AIQuestion {
   };
 }
 
-// ─── Right Panel: Question Card ───────────────────────────────
+// ─── Right Panel: Question Card (Enhanced) ────────────────────
 
 function QuestionCard({
   card,
   onResolve,
+  relatedQuestions,
 }: {
   card: DashboardQuestionCard;
   onResolve: (type: string) => void;
+  relatedQuestions?: AIQuestion[];
 }) {
   const cfg = Q_TYPE_CONFIG[card.type] || { icon: AlertTriangle, label: card.type, color: 'bg-muted border-border text-foreground' };
   const Icon = cfg.icon;
+  
+  // Collect suggested actions from related questions
+  const suggestedActions = relatedQuestions
+    ?.flatMap(q => q.suggestions)
+    .filter((v, i, a) => a.indexOf(v) === i)
+    .slice(0, 4) || [];
+
+  // Human-readable question text from first related question
+  const questionText = relatedQuestions?.[0]?.ask;
+
   return (
-    <button
-      onClick={() => onResolve(card.type)}
-      className={`w-full text-left p-3 rounded-lg border transition-all hover:shadow-sm ${cfg.color}`}
-    >
-      <div className="flex items-center justify-between mb-1">
+    <div className={`w-full text-left p-3 rounded-lg border transition-all hover:shadow-sm ${cfg.color}`}>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-1.5">
         <div className="flex items-center gap-2">
           <Icon className="h-3.5 w-3.5" />
           <span className="font-medium text-xs">{card.label || cfg.label}</span>
         </div>
-        <Badge variant="secondary" className="text-xs font-bold">{card.count}</Badge>
+        <Badge variant="secondary" className="text-xs font-bold">{card.count} товаров</Badge>
       </div>
-      {card.examples && card.examples.length > 0 && (
-        <p className="text-xs opacity-70 truncate">{card.examples.slice(0, 2).join(', ')}</p>
+
+      {/* Question text (human-readable from backend) */}
+      {questionText && (
+        <p className="text-xs mb-1.5">{questionText}</p>
       )}
-      <p className="text-xs mt-1 opacity-50">Нажмите для исправления →</p>
-    </button>
+
+      {/* Examples (3-5 items) */}
+      {card.examples && card.examples.length > 0 && (
+        <div className="mb-2">
+          <span className="text-[10px] text-muted-foreground">Примеры: </span>
+          <span className="text-[10px] font-mono">{card.examples.slice(0, 5).join(', ')}</span>
+        </div>
+      )}
+
+      {/* Suggested actions as chips */}
+      {suggestedActions.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-2">
+          {suggestedActions.map(action => (
+            <span key={action} className="text-[10px] px-1.5 py-0.5 rounded bg-background/50 border border-border/50">
+              {action}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Action buttons */}
+      <div className="flex gap-1.5 mt-1">
+        <Button
+          size="sm"
+          variant="default"
+          className="h-6 text-[10px] px-2 flex-1"
+          onClick={() => onResolve(card.type)}
+        >
+          <CheckCircle2 className="h-3 w-3 mr-1" />
+          Подтвердить
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 text-[10px] px-2"
+          onClick={() => onResolve(card.type)}
+        >
+          Редактировать
+        </Button>
+      </div>
+    </div>
   );
 }
 
-// ─── Right Panel: Answer Form ─────────────────────────────────
+// ─── Right Panel: Answer Form (Enhanced) ──────────────────────
 
 function QuestionAnswerForm({
   question,
@@ -251,7 +303,7 @@ function QuestionAnswerForm({
   loading,
 }: {
   question: AIQuestion;
-  onSubmit: (value: string) => void;
+  onSubmit: (value: string, scope?: 'all' | 'selected') => void;
   onClose: () => void;
   loading: boolean;
 }) {
@@ -260,6 +312,7 @@ function QuestionAnswerForm({
   const [workMm, setWorkMm] = useState('');
   const [value, setValue] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
+  const [scope, setScope] = useState<'all' | 'selected'>('all');
 
   const handleSubmit = () => {
     let finalValue = '';
@@ -269,7 +322,7 @@ function QuestionAnswerForm({
     } else {
       finalValue = value || selected[0] || '';
     }
-    if (finalValue) onSubmit(finalValue);
+    if (finalValue) onSubmit(finalValue, scope);
   };
 
   const canSubmit = isWidth ? !!fullMm : (!!value || selected.length > 0);
@@ -295,9 +348,18 @@ function QuestionAnswerForm({
       )}
 
       {question.affected_count > 0 && (
-        <p className="text-[10px] text-muted-foreground">
-          Затронуто товаров: <strong>{question.affected_count}</strong>
-        </p>
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground bg-primary/5 rounded px-2 py-1">
+          <FileText className="h-3 w-3 shrink-0" />
+          Затронуто товаров: <strong className="text-foreground">{question.affected_count}</strong>
+        </div>
+      )}
+
+      {/* Examples */}
+      {question.examples.length > 0 && (
+        <div className="text-[10px]">
+          <span className="text-muted-foreground">Примеры: </span>
+          <span className="font-mono">{question.examples.slice(0, 5).join(' · ')}</span>
+        </div>
       )}
 
       {/* WIDTH: two separate fields */}
@@ -325,7 +387,6 @@ function QuestionAnswerForm({
               />
             </div>
           </div>
-          {/* Suggestions for width */}
           {question.suggestions.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {question.suggestions.map(s => (
@@ -367,15 +428,34 @@ function QuestionAnswerForm({
           <Input
             value={value}
             onChange={e => setValue(e.target.value)}
-            placeholder="Введите значение…"
+            placeholder="Введите значение (canonical_value)…"
             className="h-7 text-xs"
           />
         </>
       )}
 
+      {/* Scope selector */}
+      <div className="flex items-center gap-3 text-[10px]">
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input type="radio" checked={scope === 'all'} onChange={() => setScope('all')} className="w-3 h-3" />
+          Все совпадения ({question.affected_count})
+        </label>
+        <label className="flex items-center gap-1.5 cursor-pointer">
+          <input type="radio" checked={scope === 'selected'} onChange={() => setScope('selected')} className="w-3 h-3" />
+          Только выбранные
+        </label>
+      </div>
+
+      {/* Preview of what will change */}
+      {canSubmit && (
+        <div className="text-[10px] bg-primary/5 rounded px-2 py-1.5 border border-primary/10">
+          <span className="font-medium">Предпросмотр:</span> Будет изменено <strong>{scope === 'all' ? question.affected_count : '—'}</strong> строк. Значение: <code className="bg-background px-1 rounded">{isWidth ? (workMm ? `${fullMm}:${workMm}` : fullMm) : (value || selected[0])}</code>
+        </div>
+      )}
+
       <Button size="sm" onClick={handleSubmit} disabled={loading || !canSubmit} className="h-7 text-xs w-full">
         {loading ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
-        Подтвердить
+        Подтвердить и применить
       </Button>
     </div>
   );
@@ -396,11 +476,20 @@ const CHAT_EXAMPLES = [
 function AIChatPanel({
   organizationId,
   importJobId,
+  onApplyAction,
+  runId,
 }: {
   organizationId: string;
   importJobId?: string;
+  onApplyAction?: (action: { type: string; value: string; affected_count: number }) => void;
+  runId?: string | null;
 }) {
-  const [messages, setMessages] = useState<Array<{ role: 'user' | 'ai'; text: string; isError?: boolean }>>([]);
+  const [messages, setMessages] = useState<Array<{
+    role: 'user' | 'ai';
+    text: string;
+    isError?: boolean;
+    pendingAction?: { type: string; value: string; affected_count: number; preview?: string[] };
+  }>>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [showExamples, setShowExamples] = useState(true);
@@ -415,7 +504,7 @@ function AIChatPanel({
     setLoading(true);
 
     try {
-      const { supabase } = await import('@/integrations/supabase/client');
+      // supabase already imported at top level
       const payload = {
         op: 'chat',
         organization_id: organizationId,
@@ -438,6 +527,8 @@ function AIChatPanel({
         code?: string;
         ai_skip_reason?: string;
         ai_disabled?: boolean;
+        // Pending action from backend
+        action?: { type: string; value: string; affected_count: number; preview?: string[] };
       };
 
       if (result?.ok === false) {
@@ -460,7 +551,12 @@ function AIChatPanel({
         return;
       }
 
-      setMessages(prev => [...prev, { role: 'ai', text: reply }]);
+      // Add reply with optional pending action
+      setMessages(prev => [...prev, {
+        role: 'ai',
+        text: reply,
+        pendingAction: result?.action || undefined,
+      }]);
     } catch (err) {
       console.error('[AIChatPanel] sendMessage error:', err);
       const errMsg = err instanceof Error ? err.message : 'Ошибка подключения к ИИ';
@@ -474,6 +570,18 @@ function AIChatPanel({
     }
   }, [input, loading, organizationId, importJobId]);
 
+  const handleApplyPendingAction = useCallback((action: { type: string; value: string; affected_count: number }) => {
+    if (onApplyAction) {
+      onApplyAction(action);
+      // Mark action as applied in messages
+      setMessages(prev => prev.map(m =>
+        m.pendingAction?.type === action.type && m.pendingAction?.value === action.value
+          ? { ...m, pendingAction: undefined, text: m.text + '\n\n✅ Применено!' }
+          : m
+      ));
+    }
+  }, [onApplyAction]);
+
   return (
     <div className="flex flex-col h-full">
       <ScrollArea className="flex-1 min-h-0">
@@ -484,7 +592,7 @@ function AIChatPanel({
               <div className="text-center py-3 text-muted-foreground">
                 <MessageSquare className="h-7 w-7 mx-auto mb-2 opacity-30" />
                 <p className="text-xs font-medium">ИИ-чат для нормализации</p>
-                <p className="text-[10px] mt-0.5 opacity-70">Отдавайте команды или задайте вопрос</p>
+                <p className="text-[10px] mt-0.5 opacity-70">Задайте вопрос или отдайте команду</p>
               </div>
               <div className="space-y-1">
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Примеры команд</p>
@@ -511,6 +619,35 @@ function AIChatPanel({
                     : 'bg-muted text-foreground'
               }`}>
                 {m.text}
+                
+                {/* Pending Action Preview */}
+                {m.pendingAction && (
+                  <div className="mt-2 p-2 bg-background rounded border border-primary/20">
+                    <div className="flex items-center gap-1 mb-1">
+                      <AlertTriangle className="h-3 w-3 text-primary" />
+                      <span className="text-[10px] font-semibold">Ожидает подтверждения</span>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground mb-1">
+                      Будет изменено <strong className="text-foreground">{m.pendingAction.affected_count}</strong> строк
+                    </p>
+                    {m.pendingAction.preview && m.pendingAction.preview.length > 0 && (
+                      <div className="text-[10px] font-mono text-muted-foreground mb-1.5">
+                        {m.pendingAction.preview.slice(0, 3).map((p, j) => (
+                          <div key={j} className="truncate">{p}</div>
+                        ))}
+                        {m.pendingAction.preview.length > 3 && <div>+{m.pendingAction.preview.length - 3} ещё…</div>}
+                      </div>
+                    )}
+                    <Button
+                      size="sm"
+                      className="h-6 text-[10px] w-full"
+                      onClick={() => handleApplyPendingAction(m.pendingAction!)}
+                    >
+                      <Play className="h-3 w-3 mr-1" />
+                      Применить ко всему прайсу
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -656,6 +793,21 @@ export function NormalizationWizard({
     autoStartedRef.current = true;
 
     console.log('[NormalizationWizard] Opening, auto-loading dashboard + preview_rows...');
+
+    // 0. Ensure ai_policy exists in bot_settings (idempotent deep merge)
+    supabase.functions.invoke('settings-merge', {
+      body: {
+        organization_id: organizationId,
+        patch: {
+          ai_policy: {
+            ai_enabled: true,
+            shadow_mode: true,
+            autopatch_after_confirm: true,
+            max_questions_per_run: 40,
+          },
+        },
+      },
+    }).catch(err => console.warn('[NormalizationWizard] ai_policy seed failed (non-critical):', err));
 
     // 1. Load dashboard KPIs
     norm.fetchDashboard(effectiveJobId);
@@ -962,14 +1114,23 @@ export function NormalizationWizard({
                 Загрузка данных…
               </div>
             )}
+            {/* Apply Progress Bar */}
             {norm.applyState !== 'IDLE' && (
-              <Badge
-                variant={norm.applyState === 'DONE' ? 'default' : norm.applyState === 'ERROR' ? 'destructive' : 'secondary'}
-                className="text-xs"
-              >
-                {isApplying && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
-                {getApplyStatusLabel()}
-              </Badge>
+              <div className="flex items-center gap-3">
+                <Badge
+                  variant={norm.applyState === 'DONE' ? 'default' : norm.applyState === 'ERROR' ? 'destructive' : 'secondary'}
+                  className="text-xs"
+                >
+                  {isApplying && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+                  {getApplyStatusLabel()}
+                </Badge>
+                {isApplying && (
+                  <div className="flex items-center gap-2">
+                    <Progress value={norm.applyProgress} className="h-1.5 w-24" />
+                    <span className="text-[10px] text-muted-foreground">{norm.applyProgress}%</span>
+                  </div>
+                )}
+              </div>
             )}
             {norm.applyError && (
               <div className="flex items-center gap-1 text-xs text-destructive">
@@ -982,6 +1143,19 @@ export function NormalizationWizard({
               </span>
             )}
           </div>
+
+          {/* AI unavailable fallback banner */}
+          {norm.dryRunResult?.ai_disabled && (
+            <div className="mx-4 mb-2 flex items-center gap-2 text-xs border border-destructive/30 bg-destructive/5 rounded-md px-3 py-2">
+              <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
+              <div>
+                <span className="font-medium text-destructive">ИИ-ассистент недоступен</span>
+                <span className="text-muted-foreground ml-1">
+                  — {norm.dryRunResult?.ai_skip_reason || 'сервис временно недоступен'}. Используются только детерминированные правила. Ответы на вопросы доступны в ручном режиме.
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* Settings panel */}
           {showSettings && (
@@ -1105,13 +1279,24 @@ export function NormalizationWizard({
                         <div className="space-y-2">
                           {questionCards
                             .sort((a, b) => (b.count || 0) - (a.count || 0))
-                            .map(card => (
-                              <QuestionCard
-                                key={card.type}
-                                card={card}
-                                onResolve={handleResolveQuestionType}
-                              />
-                            ))}
+                            .map(card => {
+                              // Find related AI questions for this card type
+                              const relatedQs = aiQuestions.filter(aq => {
+                                const t = (aq.type || '').toUpperCase();
+                                if (card.type === 'WIDTH_MASTER' && t === 'WIDTH') return true;
+                                if (card.type === 'COATING_MAP' && t === 'COATING') return true;
+                                if (card.type === 'COLOR_MAP' && t === 'COLOR') return true;
+                                return t === card.type;
+                              });
+                              return (
+                                <QuestionCard
+                                  key={card.type}
+                                  card={card}
+                                  onResolve={handleResolveQuestionType}
+                                  relatedQuestions={relatedQs}
+                                />
+                              );
+                            })}
                         </div>
                       </>
                     ) : !norm.dryRunResult ? (
@@ -1188,7 +1373,20 @@ export function NormalizationWizard({
 
               {/* CHAT TAB */}
               <TabsContent value="chat" className="flex-1 min-h-0 m-0 flex flex-col">
-                <AIChatPanel organizationId={organizationId} importJobId={effectiveJobId} />
+                <AIChatPanel
+                  organizationId={organizationId}
+                  importJobId={effectiveJobId}
+                  runId={norm.runId}
+                  onApplyAction={(action) => {
+                    // When chat suggests an action, apply it as answer_question then re-scan
+                    norm.answerQuestion(action.type, action.value, action.value).then(ok => {
+                      if (ok) {
+                        toast({ title: 'Применено из чата', description: `${action.type}: ${action.value} (${action.affected_count} строк)` });
+                        norm.executeDryRun({ aiSuggest: true, limit: 2000 });
+                      }
+                    });
+                  }}
+                />
               </TabsContent>
 
               {/* RULES TAB */}
