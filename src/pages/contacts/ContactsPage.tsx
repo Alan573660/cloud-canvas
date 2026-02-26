@@ -99,18 +99,6 @@ export default function ContactsPage() {
     enabled: !!profile?.organization_id,
   });
 
-  // Show error toast if query failed
-  if (fetchError) {
-    const isPermissionError = 
-      (fetchError as { code?: string })?.code === '42501' || 
-      fetchError.message?.includes('permission');
-    
-    if (isPermissionError) {
-      return <PermissionDenied />;
-    }
-    showErrorToast(fetchError, { logPrefix: 'ContactsPage' });
-  }
-
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
       const { error } = await supabase.from('contacts').delete().eq('id', id);
@@ -126,6 +114,18 @@ export default function ContactsPage() {
       setDeletingContact(null);
     },
   });
+
+  // Show error toast if query failed
+  if (fetchError) {
+    const isPermissionError = 
+      (fetchError as { code?: string })?.code === '42501' || 
+      fetchError.message?.includes('permission');
+    
+    if (isPermissionError) {
+      return <PermissionDenied />;
+    }
+    showErrorToast(fetchError, { logPrefix: 'ContactsPage' });
+  }
 
   const columns: Column<Contact>[] = [
     {

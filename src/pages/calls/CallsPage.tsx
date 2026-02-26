@@ -99,11 +99,6 @@ export default function CallsPage() {
     }
   }, [profile?.organization_id, canViewCalls]);
 
-  // If accountant, show permission denied — AFTER all hooks
-  if (!canViewCalls && profile) {
-    return <PermissionDenied />;
-  }
-
   const dateLocale = i18n.language === 'ru' ? ru : enUS;
 
   // Fetch calls data
@@ -157,7 +152,7 @@ export default function CallsPage() {
 
       return { data: data as CallSession[], count: count || 0 };
     },
-    enabled: !!profile?.organization_id,
+    enabled: !!profile?.organization_id && canViewCalls,
   });
 
   // Fetch stats for the overview cards
@@ -194,8 +189,13 @@ export default function CallsPage() {
 
       return { total, completed, failed, avgDuration, inbound, outbound };
     },
-    enabled: !!profile?.organization_id,
+    enabled: !!profile?.organization_id && canViewCalls,
   });
+
+  // Permission denied — AFTER all hooks
+  if (!canViewCalls && profile) {
+    return <PermissionDenied />;
+  }
 
   // Show error toast if query failed
   if (error) {

@@ -61,12 +61,12 @@ ChartContainer.displayName = "Chart";
 const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
   const colorConfig = Object.entries(config).filter(([_, config]) => config.theme || config.color);
 
-  if (!colorConfig.length) {
-    return null;
-  }
-
   // Build CSS rules safely without dangerouslySetInnerHTML
   const cssRules = React.useMemo(() => {
+    if (!colorConfig.length) {
+      return '';
+    }
+
     const rules: string[] = [];
     
     Object.entries(THEMES).forEach(([theme, prefix]) => {
@@ -99,6 +99,10 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
       styleRef.current.textContent = cssRules;
     }
   }, [cssRules]);
+
+  if (!colorConfig.length) {
+    return null;
+  }
 
   return <style ref={styleRef} />;
 };
