@@ -71,12 +71,8 @@ export default function CallDetailPage() {
 
   // Role check: accountant cannot access calls
   const canViewCalls = hasPermission(profile?.role, 'calls', 'view');
-  
-  if (!canViewCalls && profile) {
-    return <PermissionDenied />;
-  }
 
-  // Fetch call session
+  // Fetch call session — hooks MUST be before early return
   const { data: call, isLoading, error } = useQuery({
     queryKey: ['call', id],
     queryFn: async () => {
@@ -89,7 +85,7 @@ export default function CallDetailPage() {
       if (error) throw error;
       return data as CallSession;
     },
-    enabled: !!id,
+    enabled: !!id && canViewCalls,
   });
 
   // Fetch linked lead
@@ -107,6 +103,11 @@ export default function CallDetailPage() {
     },
     enabled: !!call?.lead_id,
   });
+
+  // Permission denied — AFTER all hooks
+  if (!canViewCalls && profile) {
+    return <PermissionDenied />;
+  }
 
   // Show error toast if query failed
   if (error) {
