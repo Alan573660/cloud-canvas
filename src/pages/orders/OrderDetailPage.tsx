@@ -779,7 +779,7 @@ export default function OrderDetailPage() {
           </DialogHeader>
           <OrderItemForm
             orderId={id!}
-            organizationId={profile?.organization_id!}
+            organizationId={profile?.organization_id ?? ''}
             item={editingItem}
             products={products || []}
             onSuccess={() => {
