@@ -83,18 +83,6 @@ export default function CallsPage() {
 
   // Role check: accountant cannot access calls
   const canViewCalls = hasPermission(profile?.role, 'calls', 'view');
-  
-  // Audit log on mount (only if allowed)
-  useEffect(() => {
-    if (profile?.organization_id && canViewCalls) {
-      logListView(profile.organization_id, 'contacts'); // Using contacts as proxy for call_sessions audit
-    }
-  }, [profile?.organization_id, canViewCalls]);
-
-  // If accountant, show permission denied
-  if (!canViewCalls && profile) {
-    return <PermissionDenied />;
-  }
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -103,6 +91,18 @@ export default function CallsPage() {
   const [directionFilter, setDirectionFilter] = useState<Direction | 'all'>('all');
   const [sentimentFilter, setSentimentFilter] = useState<Sentiment | 'all'>('all');
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
+  
+  // Audit log on mount (only if allowed)
+  useEffect(() => {
+    if (profile?.organization_id && canViewCalls) {
+      logListView(profile.organization_id, 'contacts'); // Using contacts as proxy for call_sessions audit
+    }
+  }, [profile?.organization_id, canViewCalls]);
+
+  // If accountant, show permission denied — AFTER all hooks
+  if (!canViewCalls && profile) {
+    return <PermissionDenied />;
+  }
 
   const dateLocale = i18n.language === 'ru' ? ru : enUS;
 

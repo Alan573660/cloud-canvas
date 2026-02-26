@@ -681,7 +681,7 @@ export function NormalizationWizard({
       if ((categoryStats[c]?.total || 0) > bestCount) { bestCount = categoryStats[c].total; best = c; }
     }
     setActiveCategory(bestCount > 0 ? best : 'ALL');
-  }, [items, categoryStats]);
+  }, [items, categoryStats, activeCategory]);
 
   const filteredItems = useMemo(() => {
     let result = activeCategory === 'ALL' ? items : items.filter(i => (i.product_type || 'OTHER') === activeCategory);
