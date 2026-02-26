@@ -442,8 +442,22 @@ export default function ImportPage() {
               <Eye className="h-5 w-5" />
               {t('import.preview')} — {selectedJob?.file_name}
             </DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="flex items-center gap-2">
               {t('import.previewDescription', 'Предварительный просмотр данных (первые 50 строк)')}
+              {selectedJobId && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 font-mono text-xs"
+                  onClick={() => {
+                    navigator.clipboard.writeText(selectedJobId);
+                    import('sonner').then(({ toast }) => toast.success(t('common.copied', 'ID скопирован')));
+                  }}
+                  title={t('import.copyJobId', 'Скопировать ID импорта')}
+                >
+                  ID: {selectedJobId.slice(0, 8)}…
+                </Button>
+              )}
             </DialogDescription>
           </DialogHeader>
           <div className="flex-1 overflow-auto">
