@@ -1,0 +1,92 @@
+[
+  {
+    "id": "mp40_unknown_profile",
+    "title": "Профлист МП40 оцинкованный",
+    "expect": {
+      "width_work_mm": null,
+      "width_full_mm": null,
+      "question": "WIDTH_MANUAL",
+      "patch": "REQUEST_WIDTH_PATCH"
+    }
+  },
+  {
+    "id": "metal_tile_without_profile",
+    "title": "Металлочерепица 0.5 PE",
+    "expect": {
+      "question": "PROFILE_RESOLUTION"
+    }
+  },
+  {
+    "id": "accessory_self_tapper",
+    "title": "Саморез кровельный 4.8x35",
+    "expect": {
+      "category": "ACCESSORY"
+    }
+  },
+  {
+    "id": "smooth_sheet",
+    "title": "Лист гладкий 0.45",
+    "expect": {
+      "category": "SMOOTH_SHEET"
+    }
+  },
+  {
+    "id": "coating_normalization_mattpe",
+    "title": "Профнастил С-8 MattPE",
+    "expect": {
+      "coating": "MATT_PE"
+    }
+  },
+  {
+    "id": "rr29_color_system",
+    "title": "Профнастил С8 RR29",
+    "expect": {
+      "color_system": "RR",
+      "color_code": "RR29"
+    }
+  },
+  {
+    "id": "printech_oak",
+    "title": "Профлист С8 Printech Дуб",
+    "expect": {
+      "color_system": "DECOR",
+      "color_name": "Дуб"
+    }
+  },
+  {
+    "id": "thickness_comma",
+    "title": "Профнастил С8 толщина 0,7 мм",
+    "expect": {
+      "thickness_mm": 0.7
+    }
+  },
+  {
+    "id": "known_profile_s8_widths_only_if_confirmed",
+    "title": "Профнастил С-8 оцинкованный",
+    "input": {
+      "widths_selected": false
+    },
+    "expect": {
+      "width_work_mm": null,
+      "width_full_mm": null,
+      "question": "WIDTH_CONFIRM",
+      "patch": "SUGGEST_WIDTHS"
+    }
+  },
+  {
+    "id": "defaults_not_confirmed",
+    "title": "Профнастил С-8 PE",
+    "input": {
+      "widths_selected": false,
+      "defaults": {
+        "width_work_mm": 999,
+        "width_full_mm": 1001
+      }
+    },
+    "expect": {
+      "width_work_mm": null,
+      "width_full_mm": null,
+      "patch": "DEFAULTS_REVIEW"
+    }
+  }
+]
