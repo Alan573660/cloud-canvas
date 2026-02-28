@@ -213,7 +213,7 @@ export default function ImportPage() {
                 navigator.clipboard.writeText(row.id);
                 import('sonner').then(({ toast }) => toast.success(t('common.copied', 'ID скопирован')));
               }}
-              title={t('import.copyJobId', 'Скопировать ID импорта')}
+              title={t('import.copyJobId', 'Скопировать ID импорта (dev)')}
             >
               ID: {row.id.slice(0, 8)}…
             </button>
@@ -466,7 +466,7 @@ export default function ImportPage() {
                     navigator.clipboard.writeText(selectedJobId);
                     import('sonner').then(({ toast }) => toast.success(t('common.copied', 'ID скопирован')));
                   }}
-                  title={t('import.copyJobId', 'Скопировать ID импорта')}
+                  title={t('import.copyJobId', 'Скопировать ID импорта (dev)')}
                 >
                   ID: {selectedJobId.slice(0, 8)}…
                 </Button>
