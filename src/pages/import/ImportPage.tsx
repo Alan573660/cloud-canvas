@@ -198,12 +198,25 @@ export default function ImportPage() {
         <div className="flex items-center gap-2">
           <FileSpreadsheet className="h-4 w-4 text-muted-foreground" />
           <div>
-            <span className="font-medium">{row.file_name || '—'}</span>
-            {row.dry_run && (
-              <Badge variant="outline" className="ml-2 text-xs">
-                {t('import.dryRun', 'Тест')}
-              </Badge>
-            )}
+            <div className="flex items-center gap-1">
+              <span className="font-medium">{row.file_name || '—'}</span>
+              {row.dry_run && (
+                <Badge variant="outline" className="ml-1 text-xs">
+                  {t('import.dryRun', 'Тест')}
+                </Badge>
+              )}
+            </div>
+            <button
+              className="text-xs font-mono text-muted-foreground hover:text-foreground transition-colors"
+              onClick={(e) => {
+                e.stopPropagation();
+                navigator.clipboard.writeText(row.id);
+                import('sonner').then(({ toast }) => toast.success(t('common.copied', 'ID скопирован')));
+              }}
+              title={t('import.copyJobId', 'Скопировать ID импорта')}
+            >
+              ID: {row.id.slice(0, 8)}…
+            </button>
           </div>
         </div>
       ),
