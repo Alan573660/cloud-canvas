@@ -1,22 +1,21 @@
-# OPENAPI SOURCE (frontend note)
+# OPENAPI_SOURCE
 
-## Canonical источник контракта
+## Canonical контракт
 - `maxim-saas/docs/api/openapi.yaml`
 - `maxim-saas/docs/api/README.md`
 
-## Правило владения контрактом
-- OpenAPI-контракт правится **только** в backend-репозитории `maxim-saas`.
-- Frontend-репозиторий `cloud-canvas` не является источником истины по API-спеке.
+## Правило
+- API-контракт правится **только** в backend-репозитории `maxim-saas`.
+- `cloud-canvas` использует контракт как потребитель и не редактирует его как source of truth.
 
 ## Как frontend обновляется после backend PR
 1. Дождаться merge backend PR с изменением контракта.
-2. Изучить изменения в `openapi.yaml` и примечания в backend `docs/api/README.md`.
-3. Сверить affected endpoints/DTO с frontend кодом (`src/lib`, `src/hooks`, feature-страницы).
-4. Обновить frontend типы/адаптеры/обработку ошибок под новый контракт.
-5. Проверить i18n-строки для новых ошибок/статусов (если затронуто поведение).
-6. Прогнать локальные проверки (`lint`, `typecheck`, `test`, если доступны).
-7. Создать PR в `lovable-dev` с обязательным Handoff (что нужно от backend/QA).
+2. Проверить diff в `maxim-saas/docs/api/openapi.yaml` и пояснения в `maxim-saas/docs/api/README.md`.
+3. Обновить frontend-код под новый контракт: типы, API-клиенты, адаптеры, обработку ошибок.
+4. Актуализировать тесты и документацию frontend (если затронуто поведение).
+5. Прогнать локальные проверки (`lint`, `typecheck`, `test`, если доступны).
+6. Открыть PR в `lovable-dev` с явным Handoff по изменениям контракта/поведения.
 
 ## Важно
-- Если frontend видит расхождение со спекой, исправление вносится сначала в canonical backend-контракт,
-  а затем фронт синхронизируется отдельным PR.
+- При расхождении между frontend и API сначала исправляется canonical контракт в backend,
+  затем выполняется синхронизация frontend отдельным PR.
