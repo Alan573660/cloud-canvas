@@ -492,6 +492,10 @@ Deno.serve(async (req) => {
 
       const result = await callEnricher(`${enricherUrl}/api/enrich/ai_chat_v2`, 'POST', chatPayload, 45000);
 
+      if (result.timeout) {
+        return jsonResponse({ ok: false, code: 'TIMEOUT', error: 'AI request timed out.' });
+      }
+
       // If ai_chat_v2 endpoint not available, fallback to legacy /chat
       if (!result.ok && (result.status === 404 || result.data === null)) {
         console.log('[import-normalize] ai_chat_v2 not found, falling back to legacy /chat');
@@ -533,11 +537,9 @@ Deno.serve(async (req) => {
         });
       }
 
-      if (result.timeout) {
-        return jsonResponse({ ok: false, code: 'TIMEOUT', error: 'AI request timed out.' });
-      }
       if (result.data === null) {
-        return enricherErrorResponse(result.status, result.rawText, 'AI Chat v2 returned non-JSON response');
+        return jsonResponse({ ok: false, error: 'AI Chat v2 returned non-JSON response' });
+      }
       }
       if (!result.ok) {
         const d = result.data as Record<string, unknown>;
