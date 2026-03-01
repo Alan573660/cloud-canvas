@@ -26,25 +26,32 @@ function safeObject(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null;
 }
 
+function safeMessage(value: unknown): string | undefined {
+  if (typeof value === 'string') return value;
+  return undefined;
+}
+
 export function normalizeApiError(error: unknown, fallbackMessage = 'Request failed'): ApiErrorShape {
   const obj = safeObject(error);
 
+  // Preserve canonical error payload fields when present.
   const code =
-    (obj?.code as string | undefined) ||
-    (obj?.error_code as string | undefined) ||
-    (obj?.name as string | undefined) ||
+    (typeof obj?.code === 'string' ? obj.code : undefined) ||
+    (typeof obj?.error_code === 'string' ? obj.error_code : undefined) ||
+    (typeof obj?.name === 'string' ? obj.name : undefined) ||
     'API_ERROR';
 
   const message =
-    (obj?.message as string | undefined) ||
-    (obj?.error as string | undefined) ||
+    safeMessage(obj?.message) ||
+    safeMessage(obj?.error) ||
+    (error instanceof Error ? error.message : undefined) ||
     fallbackMessage;
 
   const status = typeof obj?.status === 'number' ? obj.status : undefined;
   const details = obj?.details ?? obj?.detail;
   const correlationId =
-    (obj?.correlation_id as string | undefined) ||
-    (obj?.correlationId as string | undefined);
+    (typeof obj?.correlation_id === 'string' ? obj.correlation_id : undefined) ||
+    (typeof obj?.correlationId === 'string' ? obj.correlationId : undefined);
 
   return { code, message, details, status, correlationId };
 }
