@@ -2,6 +2,7 @@
 
 > Источник истины: код Edge Functions из `supabase/functions/`.
 > Все ответы фронту приходят с HTTP 200 (кроме auth 401/403), бизнес-ошибки внутри JSON.
+> ✅ Все примеры ниже — **реальные JSON** из живого окружения (март 2026).
 
 ---
 
@@ -52,31 +53,92 @@
 }
 ```
 
-**Response OK:**
+**Response OK (LIVE):**
 ```json
 {
   "ok": true,
+  "organization_id": "d267278c-...",
+  "import_job_id": "b8dd6be8-...",
+  "run_id": "d63d70ca-...",
+  "profile_hash": "d4b33f67b423ba44045a97421099a27c1c473ef2fb4acfcf4bf772afaedfb166",
   "contract_version": "v1",
-  "run_id": "abc123",
-  "profile_hash": "sha256hex",
-  "ai_status": { "available": true, "reason": null },
-  "questions": [
+  "patches_sample": [
     {
-      "question_text": "Как классифицировать 'Профнастил С-8'?",
-      "affected_rows_count": 42,
-      "suggested_actions": ["Профнастил", "Металлочерепица"],
-      "needs_user_confirmation": true,
-      "confidence": 0.7,
-      "question_type": "CATEGORY",
-      "token": "q_abc123",
-      "ask": "Как классифицировать 'Профнастил С-8'?",
-      "affected_count": 42,
-      "suggested_variants": ["Профнастил", "Металлочерепица"]
+      "id": "Металлочерепица Adamante 0.4 MattPE RAL6005",
+      "title": "Металлочерепица Adamante 0.4 MattPE RAL6005",
+      "unit": null,
+      "cur": "706",
+      "cat_name": "Металлочерепица",
+      "cat_tree": "Металлочерепица\\0.4\\RAL6005",
+      "sheet_kind": "METAL_TILE",
+      "profile": "",
+      "thickness_mm": 0.4,
+      "coating": null,
+      "color_system": "RAL",
+      "color_code": "6005"
     }
   ],
-  "stats": { "total": 1500, "matched": 1200, "unmatched": 300 }
+  "questions": [
+    {
+      "type": "WIDTH_MASTER",
+      "profiles": [
+        {
+          "profile": "МП40",
+          "count": 7,
+          "examples": ["Профнастил MP40 0.45 Agneta RAL5005", "..."]
+        }
+      ],
+      "families": [
+        {
+          "family_key": "METAL_TILE:UNKNOWN",
+          "count": 102,
+          "examples": ["Металлочерепица Adamante 0.4 MattPE RAL6005", "..."]
+        },
+        {
+          "family_key": "PROFNASTIL:МП40",
+          "count": 7,
+          "examples": ["Профнастил MP40 0.45 Agneta RAL5005", "..."]
+        }
+      ],
+      "affected_count": 202,
+      "unknown_profile_count": 181,
+      "unknown_profile_examples": ["Металлочерепица Adamante 0.4 MattPE RAL6005", "..."],
+      "note": "Профили без ширин. Заполните widths_selected (work/full) в настройках.",
+      "token": "МП40",
+      "examples": ["Профнастил MP40 0.45 Agneta RAL5005", "..."],
+      "suggested_variants": [{ "type": "WIDTH_MASTER", "payload": {} }],
+      "confidence": 0.7,
+      "affected_rows_count": 202,
+      "needs_user_confirmation": true,
+      "suggested_actions": [{ "type": "WIDTH_MASTER", "payload": {} }],
+      "question_text": "Для листовых материалов не хватает ширин. Подтвердите рабочую и полную ширину профилей.",
+      "ask": "Для листовых материалов не хватает ширин. Подтвердите рабочую и полную ширину профилей."
+    }
+  ],
+  "stats": {
+    "sample": 60,
+    "target_sample": 300,
+    "questions": 1,
+    "ai": true,
+    "shadow_mode": true,
+    "ai_status": {
+      "enabled": true,
+      "attempted": false,
+      "failed": false,
+      "fail_reason": "not_attempted",
+      "model": "gemini-2.5-flash-lite"
+    }
+  }
 }
 ```
+
+**Ключевые поля dry_run:**
+- `patches_sample[]` — примеры извлечённых атрибутов (до 60 шт).
+- `questions[]` — вопросы, требующие подтверждения пользователем.
+- `questions[].type` — тип вопроса: `WIDTH_MASTER`, `CATEGORY`, и др.
+- `questions[].profiles[]` — профили с примерами (для WIDTH_MASTER).
+- `questions[].families[]` — группы family_key + count.
+- `stats.ai_status` — статус ИИ с причиной отказа.
 
 **Response ERROR:**
 ```json
@@ -94,17 +156,6 @@
   "actions": [
     { "type": "SET_CATEGORY", "payload": { "cluster_key": "profnastil_c8", "category": "Профнастил" } }
   ]
-}
-```
-
-**Request (legacy single):**
-```json
-{
-  "op": "confirm",
-  "organization_id": "uuid",
-  "import_job_id": "uuid",
-  "type": "SET_CATEGORY",
-  "payload": { "cluster_key": "profnastil_c8", "category": "Профнастил" }
 }
 ```
 
@@ -289,16 +340,15 @@
 }
 ```
 
-**Response OK:**
+**Response OK (LIVE):**
 ```json
 {
   "ok": true,
-  "import_job_id": "uuid",
-  "total_rows": 1500,
-  "valid_rows": 1480,
-  "invalid_rows": 20
+  "import_job_id": "b8dd6be8-5fc2-4508-b389-ee9fc52768ed"
 }
 ```
+
+**Примечание:** При успехе возвращает **только** `ok` и `import_job_id`. Поля `total_rows`, `valid_rows`, `invalid_rows` обновляются **в таблице `import_jobs`**, а не в ответе Edge Function.
 
 **Response ERROR (missing columns → triggers mapping UI):**
 ```json
@@ -344,11 +394,11 @@
 }
 ```
 
-**Response OK (HTTP 202):**
+**Response OK (LIVE, HTTP 202):**
 ```json
 {
   "ok": true,
-  "import_job_id": "uuid",
+  "import_job_id": "b8dd6be8-5fc2-4508-b389-ee9fc52768ed",
   "status": "APPLYING",
   "message": "Import started. Processing in background. Poll import_jobs for status updates."
 }
@@ -366,28 +416,73 @@
 
 **Endpoint:** `supabase.functions.invoke('catalog-proxy', { body })`
 
+### 5.1 /api/catalog/facets
+
+**Request:**
+```json
+{
+  "endpoint": "/api/catalog/facets",
+  "organization_id": "uuid",
+  "params": {}
+}
+```
+
+**Response OK (LIVE):**
+```json
+{
+  "ok": true,
+  "organization_id": "d267278c-8a53-42db-a5a7-2871e946db66",
+  "units": [{ "unit": null, "cnt": 300 }],
+  "categories": [{ "cat_name": null, "cnt": 300 }],
+  "price_min": 461.0,
+  "price_max": 1393.0,
+  "total": 300
+}
+```
+
+### 5.2 /api/catalog/items
+
 **Request:**
 ```json
 {
   "endpoint": "/api/catalog/items",
   "organization_id": "uuid",
-  "params": { "limit": "50", "offset": "0", "q": "профнастил" }
+  "params": { "limit": "15", "offset": "0", "sort": "updated_desc" }
 }
 ```
 
-**Response OK (passthrough from pricing-api-saas):**
+**Response OK (LIVE):**
 ```json
 {
-  "items": [ { "id": "...", "title": "...", "base_price_rub_m2": 450 } ],
-  "total": 1500,
-  "facets": {}
+  "ok": true,
+  "organization_id": "d267278c-...",
+  "q": "",
+  "cat_name": "",
+  "unit": "",
+  "limit": 15,
+  "offset": 0,
+  "sort": "updated_desc",
+  "total": 300,
+  "items": [
+    {
+      "id": "Профнастил C21 0.45 Pural RAL7024",
+      "title": "Профнастил C21 0.45 Pural RAL7024",
+      "price_rub_m2": 1000.0,
+      "unit": null,
+      "cur": "1000",
+      "cat_name": null,
+      "cat_tree": null,
+      "updated_at": "2026-03-01 15:50:03.135000+00:00"
+    }
+  ]
 }
 ```
 
-**Особенности:**
-- Ответ НЕ обёрнут в `{ ok: true }` — проксируется as-is от upstream.
+**Особенности (ОБНОВЛЕНО):**
+- ~~Ответ НЕ обёрнут в `{ ok: true }`~~ → **LIVE-данные подтверждают: ответ ОБЁРНУТ в `ok: true`** как для `/items`, так и для `/facets`.
 - Ошибки обёрнуты: `{ "ok": false, "error": "Upstream error: 500" }`.
 - Allowed endpoints: `/api/catalog/items`, `/api/catalog/facets`.
+- Ответ содержит echo-параметры запроса (`q`, `cat_name`, `unit`, `limit`, `offset`, `sort`).
 
 ---
 
@@ -399,17 +494,18 @@
 | settings-merge    | ✅ always  | ❌                  | `error`       | real codes  | —               |
 | import-validate   | ✅ always  | ❌                  | `error`+`error_code` | mostly 200 | —         |
 | import-publish    | ✅ always  | ❌                  | `error`+`error_code` | 202/4xx/5xx| —         |
-| catalog-proxy     | ❌ passthru| ❌                  | `error` (only on fail)| 200     | —               |
+| catalog-proxy     | ✅ always  | ❌                  | `error` (only on fail)| 200     | —               |
 
 ---
 
 ## 7. Рекомендации для apiInvoke / Codex
 
 1. **`invokeEdge` ОБЯЗАН проверять `result.ok === false`** и бросать `ApiContractError`. Текущий код это делает ✅.
-2. **`catalog-proxy` — особый случай**: ответ upstream не содержит `ok` при успехе. `invokeEdge` должен НЕ применять `ok===false` check если `ok` отсутствует в ответе.
+2. **`catalog-proxy`** — оборачивает в `ok: true`. Стандартная проверка `ok === false` работает корректно.
 3. **`import-publish`** возвращает HTTP 202 — `supabase.functions.invoke` может интерпретировать это как ошибку. Нужен guard.
 4. **Поля ошибки не унифицированы**: `code` (normalize) vs `error_code` (validate/publish). `parseEdgeFunctionError` уже обрабатывает оба.
 5. **`settings-merge`** возвращает реальные HTTP коды (401, 403, 500), а не 200. `supabase.functions.invoke` бросит Error для non-2xx.
+6. **`import-validate`** при успехе возвращает только `ok + import_job_id`. Статистика (`total_rows` и т.д.) — через polling `import_jobs`.
 
 ---
 
