@@ -50,14 +50,22 @@ export async function apiInvoke<TData = unknown, TBody = unknown>(
       });
     }
 
-    const response = await fetch(options.fetchUrl, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        ...headers,
-      },
-      body: options.body ? JSON.stringify(options.body) : undefined,
-    });
+    let response: Response;
+    try {
+      response = await fetch(options.fetchUrl, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          ...headers,
+        },
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      });
+    } catch (error) {
+      throw toApiLayerError({
+        ...normalizeApiError(error, 'HTTP request failed'),
+        correlationId,
+      });
+    }
 
     const json = await response.json().catch(() => null);
 
