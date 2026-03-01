@@ -67,18 +67,36 @@ export async function apiInvoke<TData = unknown, TBody = unknown>(
       });
     }
 
-    const json = await response.json().catch(() => null);
+    let json: unknown = null;
+    try {
+      json = await response.json();
+    } catch (error) {
+      if (response.ok) {
+        throw toApiLayerError({
+          code: 'INVALID_JSON',
+          message: 'Ответ сервера не JSON',
+          details: normalizeApiError(error, 'JSON parse failed'),
+          status: response.status,
+          correlationId,
+        });
+      }
+    }
 
     if (!response.ok) {
       const normalized = normalizeApiError(
         {
-          ...(json ?? {}),
+          ...(typeof json === 'object' && json !== null ? json : {}),
           status: response.status,
           correlationId,
         },
         `HTTP ${response.status}`,
       );
       throw new ApiLayerError(normalized);
+    }
+
+    if (json && typeof json === 'object' && 'ok' in json && (json as { ok?: boolean }).ok === false) {
+      const normalized = normalizeApiError(json, 'Ошибка API (ok:false)');
+      throw new ApiLayerError({ ...normalized, correlationId });
     }
 
     return { data: (json as TData) ?? ({} as TData), correlationId };
