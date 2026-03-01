@@ -540,7 +540,6 @@ Deno.serve(async (req) => {
       if (result.data === null) {
         return jsonResponse({ ok: false, error: 'AI Chat v2 returned non-JSON response' });
       }
-      }
       if (!result.ok) {
         const d = result.data as Record<string, unknown>;
         return jsonResponse({ ok: false, error: d.error || d.detail || 'AI Chat v2 failed' });
