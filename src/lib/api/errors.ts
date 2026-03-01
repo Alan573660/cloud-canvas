@@ -33,23 +33,29 @@ function safeMessage(value: unknown): string | undefined {
 
 export function normalizeApiError(error: unknown, fallbackMessage = 'Request failed'): ApiErrorShape {
   const obj = safeObject(error);
+  const nested = safeObject(obj?.error);
 
-  // Preserve canonical error payload fields when present.
   const code =
+    (typeof nested?.code === 'string' ? nested.code : undefined) ||
     (typeof obj?.code === 'string' ? obj.code : undefined) ||
     (typeof obj?.error_code === 'string' ? obj.error_code : undefined) ||
     (typeof obj?.name === 'string' ? obj.name : undefined) ||
     'API_ERROR';
 
   const message =
+    safeMessage(nested?.message) ||
     safeMessage(obj?.message) ||
     safeMessage(obj?.error) ||
     (error instanceof Error ? error.message : undefined) ||
     fallbackMessage;
 
-  const status = typeof obj?.status === 'number' ? obj.status : undefined;
-  const details = obj?.details ?? obj?.detail;
+  const status =
+    (typeof nested?.status === 'number' ? nested.status : undefined) ??
+    (typeof obj?.status === 'number' ? obj.status : undefined);
+  const details = nested?.details ?? obj?.details ?? obj?.detail;
   const correlationId =
+    (typeof nested?.correlation_id === 'string' ? nested.correlation_id : undefined) ||
+    (typeof nested?.correlationId === 'string' ? nested.correlationId : undefined) ||
     (typeof obj?.correlation_id === 'string' ? obj.correlation_id : undefined) ||
     (typeof obj?.correlationId === 'string' ? obj.correlationId : undefined);
 
