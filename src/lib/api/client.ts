@@ -28,8 +28,8 @@ function buildCorrelationId(explicitId?: string): string {
 
 function buildHeaders(correlationId: string, headers?: Record<string, string>): Record<string, string> {
   return {
-    'x-correlation-id': correlationId,
     ...headers,
+    'x-correlation-id': correlationId,
   };
 }
 
