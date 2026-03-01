@@ -67,6 +67,10 @@ export async function apiInvoke<TData = unknown, TBody = unknown>(
       });
     }
 
+    if (response.ok && (response.status === 204 || response.status === 205)) {
+      return { data: null as unknown as TData, correlationId };
+    }
+
     let json: unknown = null;
     try {
       json = await response.json();
@@ -99,7 +103,7 @@ export async function apiInvoke<TData = unknown, TBody = unknown>(
       throw new ApiLayerError({ ...normalized, correlationId });
     }
 
-    return { data: (json as TData) ?? ({} as TData), correlationId };
+    return { data: json as TData, correlationId };
   }
 
   if (!options.endpoint) {
@@ -118,6 +122,16 @@ export async function apiInvoke<TData = unknown, TBody = unknown>(
 
   if (error) {
     const normalized = normalizeApiError(error, 'Edge function invocation failed');
+    throw new ApiLayerError({ ...normalized, correlationId });
+  }
+
+  if (data && typeof data === 'object' && 'ok' in data && (data as { ok?: boolean }).ok === false) {
+    const dataObj = data as Record<string, unknown>;
+    const nestedErr = dataObj.error && typeof dataObj.error === 'object'
+      ? (dataObj.error as Record<string, unknown>)
+      : null;
+
+    const normalized = normalizeApiError(nestedErr ?? dataObj, 'Edge function returned ok:false');
     throw new ApiLayerError({ ...normalized, correlationId });
   }
 
