@@ -149,7 +149,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
 
     try {
       const data = await invokeOrThrow<DryRunResult>('import-normalize', {
-          op: 'dry_run',
+        op: 'dry_run',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
           scope: {
@@ -158,7 +158,6 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
             ...(options?.sheetKinds ? { sheet_kinds: options.sheetKinds } : {}),
           },
           ai_suggest: options?.aiSuggest ?? false,
-        },
       });
 
       const result = data as DryRunResult;
@@ -195,11 +194,10 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setSavingSettings(true);
     try {
       const data = await invokeOrThrow<{ ok: boolean; error?: string }>('settings-merge', {
-          organization_id: organizationId,
+        organization_id: organizationId,
           patch: {
             pricing: settings,
           },
-        },
       });
 
       const result = data as { ok: boolean; error?: string };
@@ -222,10 +220,9 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setStatsLoading(true);
     try {
       const data = await invokeOrThrow('import-normalize', {
-          op: 'stats',
+        op: 'stats',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
-        },
       });
 
       const result = data as { ok: boolean; metrics?: QualityMetrics; error?: string };
@@ -250,10 +247,9 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setDashboardLoading(true);
     try {
       const data = await invokeOrThrow('import-normalize', {
-          op: 'dashboard',
+        op: 'dashboard',
           organization_id: organizationId,
           import_job_id: jobId || importJobId || 'current',
-        },
       });
 
       const result = data as DashboardResult;
@@ -276,9 +272,8 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setTreeLoading(true);
     try {
       const data = await invokeOrThrow('import-normalize', {
-          op: 'tree',
+        op: 'tree',
           organization_id: organizationId,
-        },
       });
 
       const result = data as TreeResult;
@@ -301,12 +296,11 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setConfirmingType(type);
     try {
       const data = await invokeOrThrow('import-normalize', {
-          op: 'confirm',
+        op: 'confirm',
           organization_id: organizationId,
           import_job_id: jobId || importJobId || 'current',
           type,
           payload,
-        },
       });
 
       const result = data as ConfirmResult;
@@ -352,12 +346,11 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
 
     try {
       const data = await invokeOrThrow<ApplyStatusResult>('import-normalize', {
-          op: 'apply_status',
+        op: 'apply_status',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
           apply_id: currentApplyId,
           run_id: currentRunId,
-        },
       });
 
       const result = data as ApplyStatusResult;
@@ -413,11 +406,10 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setConfirmingType('BATCH');
     try {
       const data = await invokeOrThrow('import-normalize', {
-          op: 'confirm',
+        op: 'confirm',
           organization_id: organizationId,
           import_job_id: jobId || importJobId || 'current',
           actions,
-        },
       });
 
       const result = data as ConfirmResult;
@@ -448,13 +440,12 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   const sendAiChatV2 = useCallback(async (message: string, context?: Record<string, unknown>): Promise<AiChatV2Result | null> => {
     try {
       const data = await invokeOrThrow<AiChatV2Result>('import-normalize', {
-          op: 'ai_chat_v2',
+        op: 'ai_chat_v2',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
           run_id: runId,
           message,
           context,
-        },
       });
 
       const result = data as AiChatV2Result;
@@ -490,12 +481,11 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
 
     try {
       const data = await invokeOrThrow('import-normalize', {
-          op: 'apply',
+        op: 'apply',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
           run_id: runId,
           profile_hash: profileHash,
-        },
       });
 
       const result = data as {
@@ -560,13 +550,12 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
 
     try {
       const data = await invokeOrThrow('import-normalize', {
-          op: 'answer_question',
+        op: 'answer_question',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
           question_type: questionType,
           token,
           value,
-        },
       });
 
       const result = data as { ok: boolean; error?: string; code?: string; error_code?: string };
@@ -599,12 +588,11 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setCatalogLoading(true);
     try {
       const data = await invokeOrThrow('import-normalize', {
-          op: 'preview_rows',
+        op: 'preview_rows',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
           limit: Math.min(limit, 500),
           offset: 0,
-        },
       });
 
       const result = data as {
