@@ -100,16 +100,7 @@ export async function apiInvoke<
       return buildErrorResult(correlationId, normalized);
     }
 
-    // 200 and 202 should be treated as success in compat layer.
-    if (statusCode === 401 || statusCode === 403) {
-      const authError: ApiErrorInfo = {
-        code: statusCode === 401 ? 'UNAUTHORIZED' : 'FORBIDDEN',
-        message: statusCode === 401 ? 'Unauthorized' : 'Access denied',
-        details: { statusCode },
-        statusCode,
-      };
-      return buildErrorResult(correlationId, authError);
-    }
+    // 200/202 and passthrough payloads without business envelope are success.
 
     return buildSuccessResult(correlationId, data as TData);
   } catch (err) {
@@ -147,8 +138,8 @@ export async function invokeNormalize<
   organizationId: string,
   params: TPayload = {} as TPayload,
   options: ApiInvokeOptions = {},
-): Promise<ApiInvokeResult<TData>> {
-  return apiInvoke<TData>('import-normalize', {
+): Promise<TData> {
+  return invokeEdge<TData>('import-normalize', {
     op,
     organization_id: organizationId,
     ...params,
