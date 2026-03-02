@@ -23,10 +23,10 @@ import {
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { toast } from '@/hooks/use-toast';
-import { supabase } from '@/integrations/supabase/client';
 import { Sparkles, Check, Loader2, Zap, Download, RefreshCw } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
+import { apiInvoke } from '@/lib/api-client';
 
 import { GroupsSidebar, type PatternGroup } from './GroupsSidebar';
 import { CatalogTable } from './CatalogTable';
@@ -122,18 +122,20 @@ export function NormalizationDialog({
   // dry_run mutation to get questions/groups
   const dryRunMutation = useMutation({
     mutationFn: async (params: { limit: number; aiSuggest: boolean }) => {
-      const { data, error } = await supabase.functions.invoke<DryRunResponse>('import-normalize', {
-        body: {
-          op: 'dry_run',
-          organization_id: organizationId,
-          import_job_id: importJobId || 'current', // 'current' = normalize existing catalog
-          scope: { only_where_null: true, limit: params.limit },
-          ai_suggest: params.aiSuggest,
-        },
+      const result = await apiInvoke<DryRunResponse>('import-normalize', {
+        op: 'dry_run',
+        organization_id: organizationId,
+        import_job_id: importJobId || 'current', // 'current' = normalize existing catalog
+        scope: { only_where_null: true, limit: params.limit },
+        ai_suggest: params.aiSuggest,
       });
 
-      if (error) throw new Error(error.message);
-      
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+
+      const data = result.data;
+
       // Timeout fallback: retry with smaller limit
       if (data?.code === 'TIMEOUT' && params.limit > 2000) {
         setDryRunLimit(2000);
@@ -143,7 +145,7 @@ export function NormalizationDialog({
         });
         throw new Error('TIMEOUT_RETRY');
       }
-      
+
       if (!data?.ok) throw new Error(data?.error || 'Dry run failed');
       return data;
     },
@@ -360,15 +362,13 @@ export function NormalizationDialog({
     }
 
     try {
-      const { data, error } = await supabase.functions.invoke('settings-merge', {
-        body: {
+      const result = await apiInvoke<{ ok: boolean; error?: string }>('settings-merge', {
           organization_id: organizationId,
           patch,
         },
       });
 
-      if (error) throw new Error(error.message);
-      if (!data?.ok) throw new Error(data?.error || 'Failed to save');
+      if (!result.ok || !result.data?.ok) throw new Error(result.ok ? (result.data?.error || 'Failed to save') : result.error.message);
 
       // Mark as confirmed
       setGroups(prev => prev.map(g =>
@@ -403,8 +403,7 @@ export function NormalizationDialog({
 
     try {
       // Start async apply
-      const { data: startData, error: startError } = await supabase.functions.invoke('import-normalize', {
-        body: {
+      const startResult = await apiInvoke<{ apply_id?: string; status?: string }>('import-normalize', {
           op: 'apply',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
@@ -413,22 +412,23 @@ export function NormalizationDialog({
         },
       });
 
-      if (startError) throw new Error(startError.message);
-      
+      if (!startResult.ok) throw new Error(startResult.error.message);
+
+      const startData = startResult.data;
+
       // Poll for completion
       if (startData?.apply_id) {
         let status = 'PENDING';
-        while (status !== 'DONE' && status !== 'FAILED') {
+        while (status !== 'DONE' && status !== 'COMPLETED' && status !== 'FAILED') {
           await new Promise(r => setTimeout(r, 2000));
-          const { data: statusData } = await supabase.functions.invoke('import-normalize', {
-            body: {
+          const statusResult = await apiInvoke<{ status?: string }>('import-normalize', {
               op: 'apply_status',
               organization_id: organizationId,
               import_job_id: importJobId || 'current',
               apply_id: startData.apply_id,
             },
           });
-          status = statusData?.status || 'FAILED';
+          status = statusResult.ok ? String(statusResult.data?.status || 'FAILED').toUpperCase() : 'FAILED';
         }
         
         if (status === 'FAILED') {
