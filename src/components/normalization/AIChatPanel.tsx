@@ -241,7 +241,14 @@ export function AIChatPanel({
         } : null,
       });
 
-      if (!result.ok) throw new Error(result.error.message);
+      if (!result.ok) {
+        return {
+          ok: false,
+          message: result.error.message,
+          error: result.error.message,
+        } as AIChatResponse;
+      }
+
       return result.data;
     },
     onSuccess: (data) => {
@@ -249,7 +256,7 @@ export function AIChatPanel({
         const assistantMessage: ChatMessage = {
           id: `msg-${Date.now()}`,
           role: 'assistant',
-          content: data.message || '',
+          content: data.message || data.error || t('common.error'),
           patch: data.patch,
           timestamp: new Date(),
         };
