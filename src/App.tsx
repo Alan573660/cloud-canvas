@@ -1,3 +1,4 @@
+import { Suspense, lazy } from 'react';
 // Main App component - routing and providers
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
@@ -20,17 +21,23 @@ import OrdersPage from "@/pages/orders/OrdersPage";
 import OrderDetailPage from "@/pages/orders/OrderDetailPage";
 import InvoicesPage from "@/pages/invoices/InvoicesPage";
 import InvoiceDetailPage from "@/pages/invoices/InvoiceDetailPage";
-import ProductsPage from "@/pages/products/ProductsPage";
+const ProductsPage = lazy(() => import("@/pages/products/ProductsPage"));
 import EmailPage from "@/pages/email/EmailPage";
 import CallsPage from "@/pages/calls/CallsPage";
 import CallDetailPage from "@/pages/calls/CallDetailPage";
 import BillingPage from "@/pages/billing/BillingPage";
-import AnalyticsPage from "@/pages/analytics/AnalyticsPage";
-import ImportPage from "@/pages/import/ImportPage";
+const AnalyticsPage = lazy(() => import("@/pages/analytics/AnalyticsPage"));
+const ImportPage = lazy(() => import("@/pages/import/ImportPage"));
 import SettingsPage from "@/pages/settings/SettingsPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
+
+const renderLazy = (node: JSX.Element) => (
+  <Suspense fallback={null}>
+    {node}
+  </Suspense>
+);
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
@@ -55,13 +62,13 @@ const App = () => (
               <Route path="orders/:id" element={<OrderDetailPage />} />
               <Route path="invoices" element={<InvoicesPage />} />
               <Route path="invoices/:id" element={<InvoiceDetailPage />} />
-              <Route path="products" element={<ProductsPage />} />
+              <Route path="products" element={renderLazy(<ProductsPage />)} />
               <Route path="email" element={<EmailPage />} />
               <Route path="calls" element={<CallsPage />} />
               <Route path="calls/:id" element={<CallDetailPage />} />
               <Route path="billing" element={<BillingPage />} />
-              <Route path="analytics" element={<AnalyticsPage />} />
-              <Route path="import" element={<ImportPage />} />
+              <Route path="analytics" element={renderLazy(<AnalyticsPage />)} />
+              <Route path="import" element={renderLazy(<ImportPage />)} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>
             <Route path="*" element={<NotFound />} />
