@@ -89,6 +89,12 @@ export async function apiInvoke<
     const statusCode = getResponseStatus(error, data);
 
     if (error) {
+      // Supabase invoke may surface HTTP 202 in `error` for some versions.
+      // Treat 202 + payload as success to preserve async-flow semantics (import-publish).
+      if (statusCode === 202 && data !== undefined) {
+        return buildSuccessResult(correlationId, data as TData);
+      }
+
       const normalized = normalizeInvokeError(error, data, statusCode);
       return buildErrorResult(correlationId, normalized);
     }
