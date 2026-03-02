@@ -12,9 +12,9 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 import { parseEdgeFunctionError, isHashMismatch } from '@/lib/edge-error-utils';
+import { apiInvoke } from '@/lib/api-client';
 
 // ─── Re-export all Contract v1 types from canonical source ────
 export type {
@@ -59,6 +59,18 @@ import { normalizeApplyStatus } from '@/lib/contract-types';
 const POLL_INTERVAL_MS = 3000;
 const POLL_MAX_DURATION_MS = 7 * 60 * 1000;
 const POLL_MAX_REQUESTS = 300;
+
+
+async function invokeOrThrow<TData = unknown>(
+  functionName: string,
+  payload: Record<string, unknown>,
+): Promise<TData> {
+  const result = await apiInvoke<TData>(functionName, payload);
+  if (!result.ok) {
+    throw new Error(result.error.message);
+  }
+  return result.data;
+}
 
 // ─── Hook ─────────────────────────────────────────────────────
 
@@ -136,8 +148,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setApplyError(null);
 
     try {
-      const { data, error } = await supabase.functions.invoke<DryRunResult>('import-normalize', {
-        body: {
+      const data = await invokeOrThrow<DryRunResult>('import-normalize', {
           op: 'dry_run',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
@@ -149,8 +160,6 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
           ai_suggest: options?.aiSuggest ?? false,
         },
       });
-
-      if (error) throw new Error(error.message);
 
       const result = data as DryRunResult;
 
@@ -185,16 +194,13 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   const saveConfirmedSettings = useCallback(async (settings: ConfirmedSettings) => {
     setSavingSettings(true);
     try {
-      const { data, error } = await supabase.functions.invoke('settings-merge', {
-        body: {
+      const data = await invokeOrThrow<{ ok: boolean; error?: string }>('settings-merge', {
           organization_id: organizationId,
           patch: {
             pricing: settings,
           },
         },
       });
-
-      if (error) throw new Error(error.message);
 
       const result = data as { ok: boolean; error?: string };
       if (!result?.ok) throw new Error(parseEdgeFunctionError(null, result));
@@ -215,15 +221,12 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   const fetchStats = useCallback(async () => {
     setStatsLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke('import-normalize', {
-        body: {
+      const data = await invokeOrThrow('import-normalize', {
           op: 'stats',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
         },
       });
-
-      if (error) throw new Error(error.message);
 
       const result = data as { ok: boolean; metrics?: QualityMetrics; error?: string };
       if (!result?.ok) throw new Error(parseEdgeFunctionError(null, result));
@@ -246,15 +249,12 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   const fetchDashboard = useCallback(async (jobId?: string) => {
     setDashboardLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke('import-normalize', {
-        body: {
+      const data = await invokeOrThrow('import-normalize', {
           op: 'dashboard',
           organization_id: organizationId,
           import_job_id: jobId || importJobId || 'current',
         },
       });
-
-      if (error) throw new Error(error.message);
 
       const result = data as DashboardResult;
       if (!result?.ok) throw new Error(parseEdgeFunctionError(null, result));
@@ -275,14 +275,11 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   const fetchTree = useCallback(async () => {
     setTreeLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke('import-normalize', {
-        body: {
+      const data = await invokeOrThrow('import-normalize', {
           op: 'tree',
           organization_id: organizationId,
         },
       });
-
-      if (error) throw new Error(error.message);
 
       const result = data as TreeResult;
       if (!result?.ok) throw new Error(parseEdgeFunctionError(null, result));
@@ -303,8 +300,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   const confirmQuestion = useCallback(async (type: string, payload: Record<string, unknown>, jobId?: string) => {
     setConfirmingType(type);
     try {
-      const { data, error } = await supabase.functions.invoke('import-normalize', {
-        body: {
+      const data = await invokeOrThrow('import-normalize', {
           op: 'confirm',
           organization_id: organizationId,
           import_job_id: jobId || importJobId || 'current',
@@ -312,8 +308,6 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
           payload,
         },
       });
-
-      if (error) throw new Error(error.message);
 
       const result = data as ConfirmResult;
       if (!result?.ok) throw new Error(parseEdgeFunctionError(null, result));
@@ -357,8 +351,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     }
 
     try {
-      const { data, error } = await supabase.functions.invoke<ApplyStatusResult>('import-normalize', {
-        body: {
+      const data = await invokeOrThrow<ApplyStatusResult>('import-normalize', {
           op: 'apply_status',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
@@ -366,8 +359,6 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
           run_id: currentRunId,
         },
       });
-
-      if (error) throw new Error(error.message);
 
       const result = data as ApplyStatusResult;
       
@@ -421,16 +412,13 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     if (actions.length === 0) return null;
     setConfirmingType('BATCH');
     try {
-      const { data, error } = await supabase.functions.invoke('import-normalize', {
-        body: {
+      const data = await invokeOrThrow('import-normalize', {
           op: 'confirm',
           organization_id: organizationId,
           import_job_id: jobId || importJobId || 'current',
           actions,
         },
       });
-
-      if (error) throw new Error(error.message);
 
       const result = data as ConfirmResult;
       if (!result?.ok) throw new Error(parseEdgeFunctionError(null, result));
@@ -459,8 +447,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
 
   const sendAiChatV2 = useCallback(async (message: string, context?: Record<string, unknown>): Promise<AiChatV2Result | null> => {
     try {
-      const { data, error } = await supabase.functions.invoke<AiChatV2Result>('import-normalize', {
-        body: {
+      const data = await invokeOrThrow<AiChatV2Result>('import-normalize', {
           op: 'ai_chat_v2',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
@@ -469,8 +456,6 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
           context,
         },
       });
-
-      if (error) throw new Error(error.message);
 
       const result = data as AiChatV2Result;
       if (!result?.ok) {
@@ -504,8 +489,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setApplyPhase('unknown');
 
     try {
-      const { data, error } = await supabase.functions.invoke('import-normalize', {
-        body: {
+      const data = await invokeOrThrow('import-normalize', {
           op: 'apply',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
@@ -513,8 +497,6 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
           profile_hash: profileHash,
         },
       });
-
-      if (error) throw new Error(error.message);
 
       const result = data as {
         ok?: boolean;
@@ -577,8 +559,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setAnsweringQuestion(true);
 
     try {
-      const { data, error } = await supabase.functions.invoke('import-normalize', {
-        body: {
+      const data = await invokeOrThrow('import-normalize', {
           op: 'answer_question',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
@@ -587,8 +568,6 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
           value,
         },
       });
-
-      if (error) throw new Error(error.message);
 
       const result = data as { ok: boolean; error?: string; code?: string; error_code?: string };
 
@@ -619,8 +598,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   const fetchCatalogItems = useCallback(async (limit = 500) => {
     setCatalogLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke('import-normalize', {
-        body: {
+      const data = await invokeOrThrow('import-normalize', {
           op: 'preview_rows',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
@@ -628,8 +606,6 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
           offset: 0,
         },
       });
-
-      if (error) throw new Error(error.message);
 
       const result = data as {
         ok: boolean;

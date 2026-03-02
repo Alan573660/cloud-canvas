@@ -8,13 +8,13 @@
 import { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
+import { apiInvoke } from '@/lib/api-client';
 import { type PatternGroup } from './GroupsSidebar';
 import {
   MessageSquare, Send, Mic, MicOff, Loader2, ChevronUp, ChevronDown,
@@ -228,23 +228,21 @@ export function AIChatPanel({
   // AI chat mutation
   const chatMutation = useMutation({
     mutationFn: async (userMessage: string) => {
-      const { data, error } = await supabase.functions.invoke<AIChatResponse>('import-normalize', {
-        body: {
-          op: 'chat',
-          organization_id: organizationId,
-          import_job_id: importJobId || 'current',
-          message: userMessage,
-          context: activeGroup ? {
-            group_type: activeGroup.group_type,
-            group_key: activeGroup.group_key,
-            affected_count: activeGroup.affected_count,
-            examples: activeGroup.examples,
-          } : null,
-        },
+      const result = await apiInvoke<AIChatResponse>('import-normalize', {
+        op: 'chat',
+        organization_id: organizationId,
+        import_job_id: importJobId || 'current',
+        message: userMessage,
+        context: activeGroup ? {
+          group_type: activeGroup.group_type,
+          group_key: activeGroup.group_key,
+          affected_count: activeGroup.affected_count,
+          examples: activeGroup.examples,
+        } : null,
       });
 
-      if (error) throw new Error(error.message);
-      return data;
+      if (!result.ok) throw new Error(result.error.message);
+      return result.data;
     },
     onSuccess: (data) => {
       if (data) {
