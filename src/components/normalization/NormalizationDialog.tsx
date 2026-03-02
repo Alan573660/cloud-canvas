@@ -419,7 +419,7 @@ export function NormalizationDialog({
       // Poll for completion
       if (startData?.apply_id) {
         let status = 'PENDING';
-        while (status !== 'DONE' && status !== 'FAILED') {
+        while (status !== 'DONE' && status !== 'COMPLETED' && status !== 'FAILED') {
           await new Promise(r => setTimeout(r, 2000));
           const statusResult = await apiInvoke<{ status?: string }>('import-normalize', {
               op: 'apply_status',
@@ -428,7 +428,7 @@ export function NormalizationDialog({
               apply_id: startData.apply_id,
             },
           });
-          status = statusResult.ok ? (statusResult.data?.status || 'FAILED') : 'FAILED';
+          status = statusResult.ok ? String(statusResult.data?.status || 'FAILED').toUpperCase() : 'FAILED';
         }
         
         if (status === 'FAILED') {
