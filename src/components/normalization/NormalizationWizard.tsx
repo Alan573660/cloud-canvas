@@ -240,7 +240,6 @@ function QuestionCard({
 }) {
   const cfg = Q_TYPE_CONFIG[card.type] || { icon: AlertTriangle, label: card.type, color: 'bg-muted border-border text-foreground' };
   const Icon = cfg.icon;
-  const suggestedActions = relatedQuestions?.flatMap(q => q.suggestions).filter((v, i, a) => a.indexOf(v) === i).slice(0, 4) || [];
   const questionText = relatedQuestions?.[0]?.ask;
 
   return (
@@ -252,28 +251,16 @@ function QuestionCard({
         </div>
         <Badge variant="secondary" className="text-xs font-bold">{card.count} товаров</Badge>
       </div>
-      {questionText && <p className="text-xs mb-1.5">{questionText}</p>}
+      {questionText && <p className="text-xs mb-1.5 opacity-80">{questionText}</p>}
       {card.examples && card.examples.length > 0 && (
         <div className="mb-2">
           <span className="text-[10px] text-muted-foreground">Примеры: </span>
-          <span className="text-[10px] font-mono">{card.examples.slice(0, 5).join(', ')}</span>
+          <span className="text-[10px] font-mono">{card.examples.slice(0, 3).join(', ')}</span>
         </div>
       )}
-      {suggestedActions.length > 0 && (
-        <div className="flex flex-wrap gap-1 mb-2">
-          {suggestedActions.map(action => (
-            <span key={action} className="text-[10px] px-1.5 py-0.5 rounded bg-background/50 border border-border/50">{action}</span>
-          ))}
-        </div>
-      )}
-      <div className="flex gap-1.5 mt-1">
-        <Button size="sm" variant="default" className="h-6 text-[10px] px-2 flex-1" onClick={() => onResolve(card.type)}>
-          <CheckCircle2 className="h-3 w-3 mr-1" /> Подтвердить
-        </Button>
-        <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={() => onResolve(card.type)}>
-          Редактировать
-        </Button>
-      </div>
+      <Button size="sm" variant="default" className="h-6 text-[10px] px-3 w-full" onClick={() => onResolve(card.type)}>
+        <CheckCircle2 className="h-3 w-3 mr-1" /> Подтвердить
+      </Button>
     </div>
   );
 }
@@ -293,7 +280,6 @@ function QuestionAnswerForm({
   const [workMm, setWorkMm] = useState('');
   const [value, setValue] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
-  const [scope, setScope] = useState<'all' | 'selected'>('all');
 
   const handleSubmit = () => {
     let finalValue = '';
@@ -303,7 +289,7 @@ function QuestionAnswerForm({
     } else {
       finalValue = value || selected[0] || '';
     }
-    if (finalValue) onSubmit(finalValue, scope);
+    if (finalValue) onSubmit(finalValue, 'all');
   };
 
   const canSubmit = isWidth ? !!fullMm : (!!value || selected.length > 0);
@@ -311,15 +297,16 @@ function QuestionAnswerForm({
   return (
     <div className="border rounded-lg p-3 bg-muted/30 space-y-3">
       <div className="flex items-center justify-between">
-        <div>
+        <div className="flex items-center gap-2">
+          {(() => { const cfg = Q_TYPE_CONFIG[(question.type || '').toUpperCase() + '_MASTER'] || Q_TYPE_CONFIG[(question.type || '').toUpperCase() + '_MAP']; const QIcon = cfg?.icon || AlertTriangle; return <QIcon className="h-3.5 w-3.5 text-primary" />; })()}
           <span className="text-xs font-semibold">
             {Q_TYPE_CONFIG[(question.type || '').toUpperCase() + '_MASTER']?.label ||
              Q_TYPE_CONFIG[(question.type || '').toUpperCase() + '_MAP']?.label ||
              question.type}
           </span>
-          {question.token && <span className="ml-1 text-[10px] text-muted-foreground">«{question.token}»</span>}
+          {question.token && <Badge variant="secondary" className="text-[10px]">{question.token}</Badge>}
         </div>
-        <button onClick={onClose} className="text-muted-foreground hover:text-foreground p-0.5">
+        <button onClick={onClose} className="text-muted-foreground hover:text-foreground p-1 rounded hover:bg-muted transition-colors">
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
@@ -329,14 +316,14 @@ function QuestionAnswerForm({
       {question.affected_count > 0 && (
         <div className="flex items-center gap-2 text-[10px] text-muted-foreground bg-primary/5 rounded px-2 py-1">
           <FileText className="h-3 w-3 shrink-0" />
-          Затронуто товаров: <strong className="text-foreground">{question.affected_count}</strong>
+          Затронуто: <strong className="text-foreground">{question.affected_count}</strong> товаров
         </div>
       )}
 
       {question.examples.length > 0 && (
         <div className="text-[10px]">
           <span className="text-muted-foreground">Примеры: </span>
-          <span className="font-mono">{question.examples.slice(0, 5).join(' · ')}</span>
+          <span className="font-mono">{question.examples.slice(0, 3).join(' · ')}</span>
         </div>
       )}
 
@@ -377,27 +364,9 @@ function QuestionAnswerForm({
         </>
       )}
 
-      <div className="flex items-center gap-3 text-[10px]">
-        <label className="flex items-center gap-1.5 cursor-pointer">
-          <input type="radio" checked={scope === 'all'} onChange={() => setScope('all')} className="w-3 h-3" />
-          Все совпадения ({question.affected_count})
-        </label>
-        <label className="flex items-center gap-1.5 cursor-pointer">
-          <input type="radio" checked={scope === 'selected'} onChange={() => setScope('selected')} className="w-3 h-3" />
-          Только выбранные
-        </label>
-      </div>
-
-      {canSubmit && (
-        <div className="text-[10px] bg-primary/5 rounded px-2 py-1.5 border border-primary/10">
-          <span className="font-medium">Предпросмотр:</span> Будет изменено <strong>{scope === 'all' ? question.affected_count : '—'}</strong> строк.
-          Значение: <code className="bg-background px-1 rounded">{isWidth ? (workMm ? `${fullMm}:${workMm}` : fullMm) : (value || selected[0])}</code>
-        </div>
-      )}
-
       <Button size="sm" onClick={handleSubmit} disabled={loading || !canSubmit} className="h-7 text-xs w-full">
         {loading ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
-        Подтвердить и применить
+        Подтвердить
       </Button>
     </div>
   );
@@ -825,16 +794,31 @@ export function NormalizationWizard({
 
     // WIDTH_MASTER always needs profile + numeric fields
     if (backendType === 'WIDTH_MASTER') {
-      // Try to extract profile from multiple sources
+      // Extract profile from multiple sources with aggressive fallbacks
       let widthProfile = profileToken;
+      
+      // Fallback 1: extract from examples
       if (!widthProfile && activeQuestionForm.examples?.length) {
-        // Try to extract profile name from examples like "МП40 0.45 Agneta RAL5005"
-        const firstEx = activeQuestionForm.examples[0] || '';
-        const profileMatch = firstEx.match(/^([A-Za-zА-Яа-яЁё]+\d+)/);
-        if (profileMatch) widthProfile = profileMatch[1];
+        for (const ex of activeQuestionForm.examples) {
+          // Match patterns like "МП40", "С8", "Н60", "HC35", "Профнастил МП40 ..."
+          const profileMatch = ex.match(/(?:Профнастил[и]?\s+)?([A-Za-zА-Яа-яЁё]{1,4}\d{1,3})/i);
+          if (profileMatch) { widthProfile = profileMatch[1]; break; }
+        }
       }
+      
+      // Fallback 2: extract from cluster_path
+      if (!widthProfile && activeQuestionForm.cluster_path?.profile) {
+        widthProfile = activeQuestionForm.cluster_path.profile;
+      }
+      
+      // Fallback 3: from ask text (e.g., "Ширина для МП40")
+      if (!widthProfile && activeQuestionForm.ask) {
+        const askMatch = activeQuestionForm.ask.match(/для\s+([A-Za-zА-Яа-яЁё]{1,4}\d{1,3})/i);
+        if (askMatch) widthProfile = askMatch[1];
+      }
+      
       if (!widthProfile) {
-        toast({ title: 'Не удалось определить профиль', description: 'Выберите конкретный вопрос из списка «Детали вопросов» ниже', variant: 'destructive' });
+        toast({ title: 'Не удалось определить профиль', description: 'Выберите конкретный профиль из списка «Детали вопросов»', variant: 'destructive' });
         return;
       }
       const payload: Record<string, unknown> = { profile: widthProfile };
@@ -845,11 +829,17 @@ export function NormalizationWizard({
       } else {
         payload.full_mm = parseInt(value, 10) || 0;
       }
+      
+      console.log('[NormWizard] WIDTH_MASTER confirm payload:', payload);
       const action: ConfirmAction = { type: backendType, payload };
       const result = await confirmBatch([action]);
       if (result?.ok) {
+        toast({ title: 'Ширина подтверждена', description: `Профиль: ${widthProfile}` });
         setActiveQuestionForm(null);
         void startScan({ aiSuggest: true, limit: 2000 });
+      } else {
+        const errMsg = (result as any)?.error?.message || 'Ошибка подтверждения';
+        toast({ title: 'Ошибка подтверждения', description: errMsg, variant: 'destructive' });
       }
       return;
     }
@@ -1120,14 +1110,19 @@ export function NormalizationWizard({
               {/* RIGHT: Questions / Chat */}
               <ResizablePanel defaultSize={30} minSize={20} maxSize={45}>
               <Tabs value={rightTab} onValueChange={v => setRightTab(v as typeof rightTab)} className="flex flex-col h-full">
-                <TabsList className="rounded-none border-b shrink-0 h-9 px-0 bg-transparent justify-start gap-0">
-                  <TabsTrigger value="questions" className="rounded-none text-xs px-4 h-9 border-b-2 data-[state=active]:border-primary data-[state=inactive]:border-transparent">
-                    Вопросы {aiQuestions.length > 0 && <Badge variant="destructive" className="ml-1 text-[10px] h-4 px-1">{aiQuestions.length}</Badge>}
-                  </TabsTrigger>
-                  <TabsTrigger value="chat" className="rounded-none text-xs px-4 h-9 border-b-2 data-[state=active]:border-primary data-[state=inactive]:border-transparent">
-                    ИИ-чат <Sparkles className="h-3 w-3 ml-1 text-primary" />
-                  </TabsTrigger>
-                </TabsList>
+                <div className="flex items-center border-b shrink-0">
+                  <TabsList className="rounded-none h-9 px-0 bg-transparent justify-start gap-0 flex-1">
+                    <TabsTrigger value="questions" className="rounded-none text-xs px-4 h-9 border-b-2 data-[state=active]:border-primary data-[state=inactive]:border-transparent">
+                      Вопросы {aiQuestions.length > 0 && <Badge variant="destructive" className="ml-1 text-[10px] h-4 px-1">{aiQuestions.length}</Badge>}
+                    </TabsTrigger>
+                    <TabsTrigger value="chat" className="rounded-none text-xs px-4 h-9 border-b-2 data-[state=active]:border-primary data-[state=inactive]:border-transparent">
+                      ИИ-чат <Sparkles className="h-3 w-3 ml-1 text-primary" />
+                    </TabsTrigger>
+                  </TabsList>
+                  <button onClick={() => setRightPanelOpen(false)} className="p-2 text-muted-foreground hover:text-foreground hover:bg-muted rounded transition-colors mr-1" title="Закрыть панель">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
 
                 {/* QUESTIONS */}
                 <TabsContent value="questions" className="flex-1 min-h-0 m-0 flex flex-col">
