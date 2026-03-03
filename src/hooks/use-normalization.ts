@@ -59,6 +59,7 @@ import { normalizeApplyStatus } from '@/lib/contract-types';
 const POLL_INTERVAL_MS = 3000;
 const POLL_MAX_DURATION_MS = 7 * 60 * 1000;
 const POLL_MAX_REQUESTS = 300;
+const POLL_MAX_CONSECUTIVE_ERRORS = 3;
 
 // ─── Hook ─────────────────────────────────────────────────────
 
@@ -113,6 +114,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollStartRef = useRef<number>(0);
   const pollCountRef = useRef<number>(0);
+  const pollErrorCountRef = useRef<number>(0);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -375,6 +377,8 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       const normalized = normalizeApplyStatus(result);
       const status = String(normalized.status).toUpperCase();
 
+      pollErrorCountRef.current = 0;
+
       if (status === 'DONE' || status === 'COMPLETED') {
         setApplyState('DONE');
         setApplyProgress(100);
@@ -400,9 +404,12 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       }
     } catch (err) {
       console.error('[polling] error:', err);
-      setApplyState('ERROR');
-      setApplyError(parseEdgeFunctionError(err));
-      stopPolling();
+      pollErrorCountRef.current += 1;
+      if (pollErrorCountRef.current >= POLL_MAX_CONSECUTIVE_ERRORS) {
+        setApplyState('ERROR');
+        setApplyError(parseEdgeFunctionError(err));
+        stopPolling();
+      }
     }
   }, [organizationId, importJobId, stopPolling]);
 
@@ -414,6 +421,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setApplyPhase('unknown');
     pollStartRef.current = Date.now();
     pollCountRef.current = 0;
+    pollErrorCountRef.current = 0;
     pollingRef.current = setInterval(() => {
       pollApplyStatus(newApplyId, rid);
     }, POLL_INTERVAL_MS);
