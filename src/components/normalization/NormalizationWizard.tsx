@@ -113,11 +113,10 @@ function extractZincLabel(notes?: string): string | undefined {
 
 function patchToCanonical(item: DryRunPatch): CanonicalProduct {
   const category = categorizeItem({ profile: item.profile, title: item.title, sheet_kind: item.sheet_kind, family_key: item.family_key });
-  const productType: ProductType = category === 'PROFNASTIL' ? 'PROFNASTIL' : category === 'METALLOCHEREPICA' ? 'METALLOCHEREPICA' : category as ProductType;
   return {
     id: item.id,
     organization_id: '',
-    product_type: productType,
+    product_type: category === 'ALL' ? 'OTHER' : category,
     profile: item.profile || '',
     thickness_mm: typeof item.thickness_mm === 'string' ? parseFloat(item.thickness_mm) : (item.thickness_mm || 0),
     coating: item.coating || '',
@@ -138,11 +137,10 @@ function catalogRowToCanonical(row: CatalogRow): CanonicalProduct {
   const extra = (row.extra_params || {}) as Record<string, unknown>;
   const sheetKind = (extra.sheet_kind as string) || '';
   const category = categorizeItem({ profile: row.profile || '', title: row.title || '', sheet_kind: sheetKind });
-  const productType: ProductType = category === 'PROFNASTIL' ? 'PROFNASTIL' : category === 'METALLOCHEREPICA' ? 'METALLOCHEREPICA' : category as ProductType;
   return {
     id: row.id,
     organization_id: '',
-    product_type: productType,
+    product_type: category === 'ALL' ? 'OTHER' : category,
     profile: row.profile || '',
     thickness_mm: row.thickness_mm || 0,
     coating: row.coating || '',
@@ -373,77 +371,169 @@ function QuestionAnswerForm({
   );
 }
 
-// ─── AI Chat Panel ────────────────────────────────────────────
+// ─── AI Chat Panel (Lovable AI Gateway Streaming) ─────────────
+
+const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/normalization-chat`;
 
 const CHAT_EXAMPLES = [
   'Установи покрытие MattPE → Матовый полиэстер',
-  'Установи покрытие Plastisol → Пластизол',
-  'Установи цвет RAL9003 → белый',
-  'Какие товары с неизвестным профилем?',
+  'Какие профили металлочерепицы есть в каталоге?',
+  'Установи ширину для С8: полная 1200, рабочая 1150',
+  'Почему товары попадают в категорию "Прочее"?',
 ];
 
+type ChatMsg = { role: 'user' | 'assistant'; content: string };
+
+function parseActionsFromText(text: string): AiChatV2Action[] {
+  const match = text.match(/```actions\s*\n([\s\S]*?)\n```/);
+  if (!match) return [];
+  try {
+    const parsed = JSON.parse(match[1]);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
 function AIChatPanel({
-  onApplyActions, confirmActions: confirmActionsFn, sendAiChatV2Fn,
+  onApplyActions, confirmActions: confirmActionsFn, items, aiQuestions: pendingQuestions, categoryStats: catStats,
 }: {
   onApplyActions?: (actions: AiChatV2Action[]) => void;
   confirmActions?: (actions: ConfirmAction[]) => Promise<unknown>;
-  sendAiChatV2Fn: (message: string, context?: Record<string, unknown>) => Promise<import('@/lib/contract-types').AiChatV2Result | null>;
+  items: CanonicalProduct[];
+  aiQuestions?: AIQuestion[];
+  categoryStats?: Record<string, { total: number; ready: number; needsAttention: number }>;
 }) {
-  const [messages, setMessages] = useState<Array<{
-    role: 'user' | 'ai'; text: string; isError?: boolean; actions?: AiChatV2Action[]; actionsApplied?: boolean;
-  }>>([]);
+  const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [applyingIdx, setApplyingIdx] = useState<number | null>(null);
+  const [pendingActions, setPendingActions] = useState<AiChatV2Action[]>([]);
+  const [applyingActions, setApplyingActions] = useState(false);
   const [showExamples, setShowExamples] = useState(true);
   const scrollEndRef = useRef<HTMLDivElement>(null);
+
+  const buildContext = useCallback(() => ({
+    total_items: items.length,
+    category_stats: catStats,
+    pending_questions: pendingQuestions?.slice(0, 10).map(q => ({
+      type: q.type,
+      token: q.token,
+      affected_count: q.affected_count,
+      examples: q.examples?.slice(0, 3),
+    })),
+    sample_items: items.slice(0, 10).map(i => ({
+      title: i.title,
+      profile: i.profile,
+      thickness_mm: i.thickness_mm,
+      coating: i.coating,
+      color_or_ral: i.color_or_ral,
+      product_type: i.product_type,
+    })),
+  }), [items, catStats, pendingQuestions]);
 
   const sendMessage = useCallback(async (overrideMsg?: string) => {
     const msg = (overrideMsg || input).trim();
     if (!msg || loading) return;
     setInput('');
     setShowExamples(false);
-    setMessages(prev => [...prev, { role: 'user', text: msg }]);
+    setPendingActions([]);
+
+    const userMsg: ChatMsg = { role: 'user', content: msg };
+    const allMessages = [...messages, userMsg];
+    setMessages(allMessages);
     setLoading(true);
 
+    let assistantSoFar = '';
+
     try {
-      const result = await sendAiChatV2Fn(msg, {});
-      if (!result || result.ok === false) {
-        let errMsg = result?.error || 'Ошибка ИИ';
-        if (result?.code === 'TIMEOUT') errMsg = '⏱ ИИ не ответил вовремя. Попробуйте ещё раз.';
-        if (result?.ai_disabled) errMsg = `ИИ отключён: ${result.ai_skip_reason || 'неизвестная причина'}`;
-        setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${errMsg}`, isError: true }]);
-        return;
+      const resp = await fetch(CHAT_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({
+          messages: allMessages.map(m => ({ role: m.role, content: m.content })),
+          context: buildContext(),
+        }),
+      });
+
+      if (!resp.ok) {
+        const errBody = await resp.json().catch(() => ({ error: 'Ошибка сети' }));
+        throw new Error(errBody.error || `HTTP ${resp.status}`);
       }
-      const reply = result.assistant_message || '';
-      const actions = result.actions || [];
-      if (!reply && actions.length === 0) {
-        setMessages(prev => [...prev, { role: 'ai', text: '💡 Попробуйте: «Установи покрытие MattPE → Матовый полиэстер»' }]);
-        return;
+
+      if (!resp.body) throw new Error('No response body');
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let textBuffer = '';
+      let streamDone = false;
+
+      const upsertAssistant = (nextChunk: string) => {
+        assistantSoFar += nextChunk;
+        setMessages(prev => {
+          const last = prev[prev.length - 1];
+          if (last?.role === 'assistant') {
+            return prev.map((m, i) => i === prev.length - 1 ? { ...m, content: assistantSoFar } : m);
+          }
+          return [...prev, { role: 'assistant', content: assistantSoFar }];
+        });
+      };
+
+      while (!streamDone) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        textBuffer += decoder.decode(value, { stream: true });
+
+        let newlineIndex: number;
+        while ((newlineIndex = textBuffer.indexOf('\n')) !== -1) {
+          let line = textBuffer.slice(0, newlineIndex);
+          textBuffer = textBuffer.slice(newlineIndex + 1);
+          if (line.endsWith('\r')) line = line.slice(0, -1);
+          if (line.startsWith(':') || line.trim() === '') continue;
+          if (!line.startsWith('data: ')) continue;
+          const jsonStr = line.slice(6).trim();
+          if (jsonStr === '[DONE]') { streamDone = true; break; }
+          try {
+            const parsed = JSON.parse(jsonStr);
+            const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+            if (content) upsertAssistant(content);
+          } catch {
+            textBuffer = line + '\n' + textBuffer;
+            break;
+          }
+        }
       }
-      setMessages(prev => [...prev, { role: 'ai', text: reply, actions: actions.length > 0 ? actions : undefined }]);
+
+      // Parse actions from completed text
+      const actions = parseActionsFromText(assistantSoFar);
+      if (actions.length > 0) {
+        setPendingActions(actions);
+      }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Ошибка подключения';
-      setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${errMsg}`, isError: true }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${errMsg}` }]);
     } finally {
       setLoading(false);
       setTimeout(() => scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     }
-  }, [input, loading, sendAiChatV2Fn]);
+  }, [input, loading, messages, buildContext]);
 
-  const handleApplyActions = useCallback(async (actions: AiChatV2Action[], msgIndex: number) => {
-    setApplyingIdx(msgIndex);
+  const handleApplyActions = useCallback(async () => {
+    if (pendingActions.length === 0) return;
+    setApplyingActions(true);
     try {
-      const confirmPayload: ConfirmAction[] = actions.map(a => ({ type: a.type, payload: a.payload }));
+      const confirmPayload: ConfirmAction[] = pendingActions.map(a => ({ type: a.type, payload: a.payload }));
       if (confirmActionsFn) await confirmActionsFn(confirmPayload);
-      setMessages(prev => prev.map((m, i) => i === msgIndex ? { ...m, actionsApplied: true } : m));
-      if (onApplyActions) onApplyActions(actions);
+      if (onApplyActions) onApplyActions(pendingActions);
+      setMessages(prev => [...prev, { role: 'assistant', content: `✅ Применено ${pendingActions.length} действий` }]);
+      setPendingActions([]);
     } catch (err) {
       console.error('[AIChatPanel] Apply error:', err);
+      setMessages(prev => [...prev, { role: 'assistant', content: '⚠️ Ошибка при применении действий' }]);
     } finally {
-      setApplyingIdx(null);
+      setApplyingActions(false);
     }
-  }, [confirmActionsFn, onApplyActions]);
+  }, [pendingActions, confirmActionsFn, onApplyActions]);
 
   return (
     <div className="flex flex-col h-full">
@@ -454,7 +544,7 @@ function AIChatPanel({
               <div className="text-center py-4 text-muted-foreground">
                 <Sparkles className="h-8 w-8 mx-auto mb-2 opacity-30" />
                 <p className="text-xs font-medium">ИИ-ассистент нормализации</p>
-                <p className="text-[10px] mt-0.5 opacity-70">Задайте вопрос или команду</p>
+                <p className="text-[10px] mt-0.5 opacity-70">Powered by Gemini — задайте вопрос или команду</p>
               </div>
               <div className="space-y-1">
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Примеры</p>
@@ -472,35 +562,39 @@ function AIChatPanel({
             <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[90%] rounded-lg px-3 py-2 text-xs whitespace-pre-line ${
                 m.role === 'user' ? 'bg-primary text-primary-foreground'
-                  : m.isError ? 'bg-destructive/10 text-destructive border border-destructive/20'
+                  : m.content.startsWith('⚠️') ? 'bg-destructive/10 text-destructive border border-destructive/20'
                   : 'bg-muted text-foreground'
               }`}>
-                {m.text}
-                {m.actions && m.actions.length > 0 && !m.actionsApplied && (
-                  <div className="mt-2 p-2 bg-background rounded border border-primary/20 space-y-1.5">
-                    <div className="flex items-center gap-1 mb-1">
-                      <AlertTriangle className="h-3 w-3 text-primary" />
-                      <span className="text-[10px] font-semibold">{m.actions.length} действий ожидает</span>
-                    </div>
-                    {m.actions.map((action, j) => (
-                      <div key={j} className="text-[10px] font-mono bg-muted/50 rounded px-2 py-1 truncate">
-                        <span className="text-primary font-semibold">{action.type}</span>: {JSON.stringify(action.payload).substring(0, 80)}
-                      </div>
-                    ))}
-                    <Button size="sm" className="h-6 text-[10px] w-full" onClick={() => handleApplyActions(m.actions!, i)} disabled={applyingIdx === i}>
-                      {applyingIdx === i ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Play className="h-3 w-3 mr-1" />}
-                      Применить ко всему прайсу
-                    </Button>
-                  </div>
-                )}
-                {m.actionsApplied && (
-                  <div className="mt-1 text-[10px] text-primary flex items-center gap-1">
-                    <CheckCircle2 className="h-3 w-3" /> Применено!
-                  </div>
-                )}
+                {/* Remove action blocks from displayed text */}
+                {m.content.replace(/```actions\s*\n[\s\S]*?\n```/g, '').trim()}
               </div>
             </div>
           ))}
+
+          {/* Pending actions preview */}
+          {pendingActions.length > 0 && (
+            <div className="p-2 bg-primary/5 rounded-lg border border-primary/20 space-y-2">
+              <div className="flex items-center gap-1 mb-1">
+                <AlertTriangle className="h-3 w-3 text-primary" />
+                <span className="text-[10px] font-semibold">{pendingActions.length} действий ожидает подтверждения</span>
+              </div>
+              {pendingActions.map((action, j) => (
+                <div key={j} className="text-[10px] font-mono bg-background rounded px-2 py-1 truncate">
+                  <span className="text-primary font-semibold">{action.type}</span>: {JSON.stringify(action.payload).substring(0, 80)}
+                </div>
+              ))}
+              <div className="flex gap-2">
+                <Button size="sm" className="h-6 text-[10px] flex-1" onClick={handleApplyActions} disabled={applyingActions}>
+                  {applyingActions ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Play className="h-3 w-3 mr-1" />}
+                  Применить ко всему прайсу
+                </Button>
+                <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => setPendingActions([])}>
+                  <X className="h-3 w-3" />
+                </Button>
+              </div>
+            </div>
+          )}
+
           {loading && (
             <div className="flex justify-start">
               <div className="bg-muted rounded-lg px-3 py-2"><Loader2 className="h-3 w-3 animate-spin text-muted-foreground" /></div>
@@ -596,7 +690,7 @@ export function NormalizationWizard({
   const [selectedCluster, setSelectedCluster] = useState<ClusterPath | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [onlyProblematic, setOnlyProblematic] = useState(false);
-  const [rightTab, setRightTab] = useState<'questions' | 'rules' | 'chat'>('questions');
+  const [rightTab, setRightTab] = useState<'questions' | 'chat'>('questions');
   const [activeQuestionForm, setActiveQuestionForm] = useState<AIQuestion | null>(null);
   const [confirmApplyOpen, setConfirmApplyOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -1027,7 +1121,7 @@ export function NormalizationWizard({
 
             <ResizableHandle withHandle />
 
-            {/* RIGHT: Questions / Chat / Rules */}
+            {/* RIGHT: Questions / Chat */}
             <ResizablePanel defaultSize={30} minSize={20} maxSize={45}>
               <Tabs value={rightTab} onValueChange={v => setRightTab(v as typeof rightTab)} className="flex flex-col h-full">
                 <TabsList className="rounded-none border-b shrink-0 h-9 px-0 bg-transparent justify-start gap-0">
@@ -1035,10 +1129,7 @@ export function NormalizationWizard({
                     Вопросы {aiQuestions.length > 0 && <Badge variant="destructive" className="ml-1 text-[10px] h-4 px-1">{aiQuestions.length}</Badge>}
                   </TabsTrigger>
                   <TabsTrigger value="chat" className="rounded-none text-xs px-4 h-9 border-b-2 data-[state=active]:border-primary data-[state=inactive]:border-transparent">
-                    ИИ-чат
-                  </TabsTrigger>
-                  <TabsTrigger value="rules" className="rounded-none text-xs px-4 h-9 border-b-2 data-[state=active]:border-primary data-[state=inactive]:border-transparent">
-                    Правила
+                    ИИ-чат <Sparkles className="h-3 w-3 ml-1 text-primary" />
                   </TabsTrigger>
                 </TabsList>
 
@@ -1123,23 +1214,15 @@ export function NormalizationWizard({
                 {/* CHAT */}
                 <TabsContent value="chat" className="flex-1 min-h-0 m-0 flex flex-col">
                   <AIChatPanel
-                    sendAiChatV2Fn={flow.sendChat}
                     confirmActions={flow.confirmBatch}
+                    items={items}
+                    aiQuestions={aiQuestions}
+                    categoryStats={categoryStats}
                     onApplyActions={(actions) => {
                       toast({ title: 'Применено из чата', description: `${actions.length} правил` });
                       flow.startScan({ aiSuggest: true, limit: 2000 });
                     }}
                   />
-                </TabsContent>
-
-                {/* RULES */}
-                <TabsContent value="rules" className="flex-1 min-h-0 m-0">
-                  <ScrollArea className="h-full">
-                    <div className="p-3">
-                      <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Подтверждённые правила</div>
-                      <ConfirmedSettingsEditor onSave={norm.saveConfirmedSettings} saving={norm.savingSettings} />
-                    </div>
-                  </ScrollArea>
                 </TabsContent>
               </Tabs>
             </ResizablePanel>
