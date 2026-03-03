@@ -58,10 +58,13 @@ export interface DryRunPatch {
   width_work_mm?: number;
   width_full_mm?: number;
   price_rub_m2?: number;
+  /** Enricher often returns price as string in `cur` field */
+  cur?: string | number;
   unit?: string;
   sheet_kind?: string;
   notes?: string;
   family_key?: string;
+  cat_name?: string;
 }
 
 export interface DryRunResult {
