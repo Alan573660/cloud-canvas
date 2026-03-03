@@ -382,7 +382,11 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       
       // Use canonical normalizer from contract-types
       const normalized = normalizeApplyStatus(result);
- dc1a953 (fix(normalization): treat COMPLETED as terminal apply_status and avoid silent polling failures)
+      const status = String(normalized.status).toUpperCase();
+
+      pollErrorCountRef.current = 0;
+
+      if (status === 'DONE' || status === 'COMPLETED') {
         setApplyState('DONE');
         setApplyProgress(100);
         setApplyPhase('done');
@@ -391,11 +395,11 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
         }
         stopPolling();
         toast({ title: 'Нормализация завершена' });
-      } else if (normalized.status === 'ERROR' || normalized.status === 'FAILED') {
+      } else if (status === 'ERROR' || status === 'FAILED') {
         setApplyState('ERROR');
         setApplyError(normalized.lastError || 'Неизвестная ошибка');
         stopPolling();
-      } else if (normalized.status === 'NOT_FOUND' || normalized.status === 'NOT_FOUND_FOR_APPLY_ID') {
+      } else if (status === 'NOT_FOUND' || status === 'NOT_FOUND_FOR_APPLY_ID') {
         setApplyState('ERROR');
         setApplyError('Задача не найдена. Попробуйте запустить заново.');
         stopPolling();
@@ -407,7 +411,12 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       }
     } catch (err) {
       console.error('[polling] error:', err);
- dc1a953 (fix(normalization): treat COMPLETED as terminal apply_status and avoid silent polling failures)
+      pollErrorCountRef.current += 1;
+      if (pollErrorCountRef.current >= POLL_MAX_CONSECUTIVE_ERRORS) {
+        setApplyState('ERROR');
+        setApplyError(parseEdgeFunctionError(err));
+        stopPolling();
+      }
     }
   }, [organizationId, importJobId, stopPolling]);
 
