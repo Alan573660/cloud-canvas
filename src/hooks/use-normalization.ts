@@ -382,14 +382,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       
       // Use canonical normalizer from contract-types
       const normalized = normalizeApplyStatus(result);
-
-<<<<<<< HEAD
-      if (normalized.status === 'DONE') {
-=======
-      pollErrorCountRef.current = 0;
-
-      if (status === 'DONE' || status === 'COMPLETED') {
->>>>>>> dc1a953 (fix(normalization): treat COMPLETED as terminal apply_status and avoid silent polling failures)
+ dc1a953 (fix(normalization): treat COMPLETED as terminal apply_status and avoid silent polling failures)
         setApplyState('DONE');
         setApplyProgress(100);
         setApplyPhase('done');
@@ -414,15 +407,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       }
     } catch (err) {
       console.error('[polling] error:', err);
-<<<<<<< HEAD
-=======
-      pollErrorCountRef.current += 1;
-      if (pollErrorCountRef.current >= POLL_MAX_CONSECUTIVE_ERRORS) {
-        setApplyState('ERROR');
-        setApplyError(parseEdgeFunctionError(err));
-        stopPolling();
-      }
->>>>>>> dc1a953 (fix(normalization): treat COMPLETED as terminal apply_status and avoid silent polling failures)
+ dc1a953 (fix(normalization): treat COMPLETED as terminal apply_status and avoid silent polling failures)
     }
   }, [organizationId, importJobId, stopPolling]);
 
