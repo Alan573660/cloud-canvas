@@ -59,6 +59,7 @@ import { normalizeApplyStatus } from '@/lib/contract-types';
 const POLL_INTERVAL_MS = 3000;
 const POLL_MAX_DURATION_MS = 7 * 60 * 1000;
 const POLL_MAX_REQUESTS = 300;
+const POLL_MAX_CONSECUTIVE_ERRORS = 3;
 
 
 async function invokeOrThrow<TData = unknown>(
@@ -144,6 +145,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollStartRef = useRef<number>(0);
   const pollCountRef = useRef<number>(0);
+  const pollErrorCountRef = useRef<number>(0);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -380,8 +382,11 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       
       // Use canonical normalizer from contract-types
       const normalized = normalizeApplyStatus(result);
+      const status = String(normalized.status).toUpperCase();
 
-      if (normalized.status === 'DONE') {
+      pollErrorCountRef.current = 0;
+
+      if (status === 'DONE' || status === 'COMPLETED') {
         setApplyState('DONE');
         setApplyProgress(100);
         setApplyPhase('done');
@@ -390,11 +395,11 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
         }
         stopPolling();
         toast({ title: 'Нормализация завершена' });
-      } else if (normalized.status === 'ERROR' || normalized.status === 'FAILED') {
+      } else if (status === 'ERROR' || status === 'FAILED') {
         setApplyState('ERROR');
         setApplyError(normalized.lastError || 'Неизвестная ошибка');
         stopPolling();
-      } else if (normalized.status === 'NOT_FOUND' || normalized.status === 'NOT_FOUND_FOR_APPLY_ID') {
+      } else if (status === 'NOT_FOUND' || status === 'NOT_FOUND_FOR_APPLY_ID') {
         setApplyState('ERROR');
         setApplyError('Задача не найдена. Попробуйте запустить заново.');
         stopPolling();
@@ -406,6 +411,12 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       }
     } catch (err) {
       console.error('[polling] error:', err);
+      pollErrorCountRef.current += 1;
+      if (pollErrorCountRef.current >= POLL_MAX_CONSECUTIVE_ERRORS) {
+        setApplyState('ERROR');
+        setApplyError(parseEdgeFunctionError(err));
+        stopPolling();
+      }
     }
   }, [organizationId, importJobId, stopPolling]);
 
@@ -417,6 +428,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setApplyPhase('unknown');
     pollStartRef.current = Date.now();
     pollCountRef.current = 0;
+    pollErrorCountRef.current = 0;
     pollingRef.current = setInterval(() => {
       pollApplyStatus(newApplyId, rid);
     }, POLL_INTERVAL_MS);
