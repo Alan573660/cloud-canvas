@@ -27,7 +27,8 @@ import { toast } from '@/hooks/use-toast';
 import {
   Sparkles, Loader2, RefreshCw, Play, CheckCircle2,
   AlertTriangle, Ruler, Layers, Palette, BarChart3, TrendingUp,
-  Activity, MessageSquare, Settings2, Send, X, AlertCircle, FileText, Filter
+  Activity, MessageSquare, Settings2, Send, X, AlertCircle, FileText, Filter,
+  PanelRightClose, PanelRightOpen
 } from 'lucide-react';
 
 import { ClusterTree } from './ClusterTree';
@@ -668,6 +669,7 @@ export function NormalizationWizard({
   const [activeQuestionForm, setActiveQuestionForm] = useState<AIQuestion | null>(null);
   const [confirmApplyOpen, setConfirmApplyOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [rightPanelOpen, setRightPanelOpen] = useState(true);
 
   const flow = useNormalizationFlow({ organizationId, importJobId: effectiveJobId });
   const norm = flow.norm;
@@ -784,15 +786,23 @@ export function NormalizationWizard({
   }, []);
 
   const handleResolveQuestionType = useCallback((type: string) => {
-    const q = aiQuestions.find(aq => {
+    // For WIDTH_MASTER: find first question with a non-empty token/profile
+    const matchingQs = aiQuestions.filter(aq => {
       const t = (aq.type || '').toUpperCase();
       if (type === 'WIDTH_MASTER' && t === 'WIDTH') return true;
       if (type === 'COATING_MAP' && t === 'COATING') return true;
       if (type === 'COLOR_MAP' && t === 'COLOR') return true;
       return t === type;
     });
-    if (q) { setActiveQuestionForm(q); setRightTab('questions'); }
-    else toast({ title: 'Нет вопросов этого типа' });
+    // Prefer question with non-empty token (= profile name)
+    const q = matchingQs.find(aq => aq.token && aq.token.trim()) || matchingQs[0];
+    if (q) {
+      setActiveQuestionForm(q);
+      setRightTab('questions');
+      setRightPanelOpen(true);
+    } else {
+      toast({ title: 'Нет вопросов этого типа' });
+    }
   }, [aiQuestions]);
 
   const handleAnswerQuestion = useCallback(async (value: string, scope?: 'all' | 'selected') => {
@@ -815,7 +825,19 @@ export function NormalizationWizard({
 
     // WIDTH_MASTER always needs profile + numeric fields
     if (backendType === 'WIDTH_MASTER') {
-      const payload: Record<string, unknown> = { profile: profileToken };
+      // Try to extract profile from multiple sources
+      let widthProfile = profileToken;
+      if (!widthProfile && activeQuestionForm.examples?.length) {
+        // Try to extract profile name from examples like "МП40 0.45 Agneta RAL5005"
+        const firstEx = activeQuestionForm.examples[0] || '';
+        const profileMatch = firstEx.match(/^([A-Za-zА-Яа-яЁё]+\d+)/);
+        if (profileMatch) widthProfile = profileMatch[1];
+      }
+      if (!widthProfile) {
+        toast({ title: 'Не удалось определить профиль', description: 'Выберите конкретный вопрос из списка «Детали вопросов» ниже', variant: 'destructive' });
+        return;
+      }
+      const payload: Record<string, unknown> = { profile: widthProfile };
       if (value.includes(':')) {
         const [full, work] = value.split(':');
         payload.full_mm = parseInt(full, 10) || 0;
@@ -911,6 +933,10 @@ export function NormalizationWizard({
               )}
               <Button size="sm" variant="ghost" onClick={() => setShowSettings(v => !v)} className="h-7 text-xs gap-1">
                 <Settings2 className="h-3.5 w-3.5" />
+              </Button>
+              <Button size="sm" variant={rightPanelOpen ? 'secondary' : 'outline'} onClick={() => setRightPanelOpen(v => !v)} className="h-7 text-xs gap-1" title={rightPanelOpen ? 'Скрыть панель' : 'Показать вопросы/чат'}>
+                {rightPanelOpen ? <PanelRightClose className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
+                {!rightPanelOpen && aiQuestions.length > 0 && <Badge variant="destructive" className="text-[10px] h-4 px-1">{aiQuestions.length}</Badge>}
               </Button>
               <Button size="sm" variant="outline" onClick={handleRunScan} disabled={flow.state === 'SCANNING' || isApplying} className="h-7 text-xs">
                 {flow.state === 'SCANNING' ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
@@ -1036,7 +1062,7 @@ export function NormalizationWizard({
             <ResizableHandle withHandle />
 
             {/* CENTER: Clusters / Table */}
-            <ResizablePanel defaultSize={56} minSize={30}>
+            <ResizablePanel defaultSize={rightPanelOpen ? 56 : 86} minSize={30}>
               <div className="flex flex-col h-full">
                 {/* Center toolbar */}
                 <div className="px-3 py-2 border-b flex items-center gap-2 shrink-0 bg-muted/30">
@@ -1087,10 +1113,12 @@ export function NormalizationWizard({
               </div>
             </ResizablePanel>
 
-            <ResizableHandle withHandle />
+            {rightPanelOpen && (
+              <>
+              <ResizableHandle withHandle />
 
-            {/* RIGHT: Questions / Chat */}
-            <ResizablePanel defaultSize={30} minSize={20} maxSize={45}>
+              {/* RIGHT: Questions / Chat */}
+              <ResizablePanel defaultSize={30} minSize={20} maxSize={45}>
               <Tabs value={rightTab} onValueChange={v => setRightTab(v as typeof rightTab)} className="flex flex-col h-full">
                 <TabsList className="rounded-none border-b shrink-0 h-9 px-0 bg-transparent justify-start gap-0">
                   <TabsTrigger value="questions" className="rounded-none text-xs px-4 h-9 border-b-2 data-[state=active]:border-primary data-[state=inactive]:border-transparent">
@@ -1195,6 +1223,8 @@ export function NormalizationWizard({
                 </TabsContent>
               </Tabs>
             </ResizablePanel>
+              </>
+            )}
           </ResizablePanelGroup>
         </div>
       </DialogContent>
