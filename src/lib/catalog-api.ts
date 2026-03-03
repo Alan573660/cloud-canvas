@@ -3,9 +3,12 @@
  * 
  * All requests go through Supabase Edge Function `catalog-proxy`.
  * Direct browser access to pricing-api-saas is prohibited.
+ * 
+ * Migrated to unified invokeEdge shim for consistent error handling
+ * and correlation IDs.
  */
 
-import { supabase } from '@/integrations/supabase/client';
+import { invokeEdge } from '@/lib/api-client';
 
 // ============= Types =============
 
@@ -95,22 +98,11 @@ export async function fetchCatalogItems(
   if (rest.cat_name) proxyParams.cat_name = rest.cat_name;
   if (rest.sort) proxyParams.sort = rest.sort;
 
-  const { data, error } = await supabase.functions.invoke('catalog-proxy', {
-    body: {
-      endpoint: '/api/catalog/items',
-      organization_id,
-      params: proxyParams,
-    },
+  return invokeEdge<CatalogItemsResponse>('catalog-proxy', {
+    endpoint: '/api/catalog/items',
+    organization_id,
+    params: proxyParams,
   });
-
-  if (error) throw new Error(`Catalog proxy error: ${error.message}`);
-
-  const result = data as CatalogItemsResponse & { ok?: boolean; error?: string };
-  if (result?.ok === false) {
-    throw new Error(result.error || 'Catalog proxy returned error');
-  }
-
-  return result;
 }
 
 /**
@@ -119,20 +111,11 @@ export async function fetchCatalogItems(
 export async function fetchCatalogFacets(
   params: CatalogFacetsRequest
 ): Promise<CatalogFacets> {
-  const { data, error } = await supabase.functions.invoke('catalog-proxy', {
-    body: {
-      endpoint: '/api/catalog/facets',
-      organization_id: params.organization_id,
-      params: {},
-    },
+  const result = await invokeEdge<CatalogFacetsResponse>('catalog-proxy', {
+    endpoint: '/api/catalog/facets',
+    organization_id: params.organization_id,
+    params: {},
   });
-
-  if (error) throw new Error(`Catalog facets proxy error: ${error.message}`);
-
-  const result = data as CatalogFacetsResponse & { error?: string };
-  if (result?.ok === false) {
-    throw new Error((result as { error?: string }).error || 'Facets proxy returned error');
-  }
 
   // Return facets with cnt preserved for UI display
   return {

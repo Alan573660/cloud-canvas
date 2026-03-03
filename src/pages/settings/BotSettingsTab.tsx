@@ -155,12 +155,15 @@ export function BotSettingsTab() {
     mutationFn: async (json: Json) => {
       if (!profile?.organization_id) throw new Error('No org');
 
-      const { error } = await supabase
-        .from('bot_settings')
-        .update({ settings_json: json, updated_at: new Date().toISOString() })
-        .eq('organization_id', profile.organization_id);
+      // Use settings-merge Edge Function for safe deep merge
+      // instead of raw .update() which overwrites entire settings_json
+      const { invokeEdge } = await import('@/lib/api-client');
+      const result = await invokeEdge<{ ok: boolean; error?: string }>('settings-merge', {
+        organization_id: profile.organization_id,
+        patch: json as Record<string, unknown>,
+      });
 
-      if (error) throw error;
+      if (!result.ok) throw new Error(result.error || 'Settings merge failed');
     },
     onSuccess: () => {
       toast({ title: t('common.success') });

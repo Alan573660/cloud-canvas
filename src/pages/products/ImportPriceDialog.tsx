@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { apiInvoke } from '@/lib/api-client';
 import {
   Dialog,
   DialogContent,
@@ -262,28 +263,26 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
 
       setStep('validating');
 
-      const { data, error } = await supabase.functions.invoke<ValidateResponse>(ImportGatewayApi.validate, {
-        body: {
-          organization_id: profile.organization_id,
-          import_job_id: job.id,
-          file_path: job.storagePath,
-          file_format: job.fileFormat,
-          mapping: mapping || null,
-          options: {
-            transform: { sanitize_id: true, normalize_price: true, trim_text: true },
-          },
+      const result = await apiInvoke<ValidateResponse>(ImportGatewayApi.validate, {
+        organization_id: profile.organization_id,
+        import_job_id: job.id,
+        file_path: job.storagePath,
+        file_format: job.fileFormat,
+        mapping: mapping || null,
+        options: {
+          transform: { sanitize_id: true, normalize_price: true, trim_text: true },
         },
       });
 
-      if (error) {
-        console.error('[ImportPriceDialog] Validate error:', error);
-        throw new Error(error.message || 'Validation failed');
+      if (!result.ok) {
+        console.error('[ImportPriceDialog] Validate error:', result.error);
+        throw new Error(result.error.message || 'Validation failed');
       }
 
-      console.info('[ImportPriceDialog] Validate result:', data);
-      return data;
+      console.info('[ImportPriceDialog] Validate result:', result.data);
+      return result.data;
     },
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       if (!data) return;
 
       // Mapping required
@@ -303,11 +302,38 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
         return;
       }
 
-      setValidationStats({
-        totalRows: data.total_rows || 0,
-        validRows: data.valid_rows || 0,
-        invalidRows: data.invalid_rows || 0,
-      });
+      // Poll stats from import_jobs table (Contract v1: don't read from response)
+      if (data.import_job_id && profile?.organization_id) {
+        try {
+          const { data: jobRow } = await supabase
+            .from('import_jobs')
+            .select('total_rows, valid_rows, invalid_rows')
+            .eq('id', data.import_job_id)
+            .eq('organization_id', profile.organization_id)
+            .single();
+
+          if (jobRow) {
+            setValidationStats({
+              totalRows: jobRow.total_rows || 0,
+              validRows: jobRow.valid_rows || 0,
+              invalidRows: jobRow.invalid_rows || 0,
+            });
+          }
+        } catch (pollErr) {
+          console.warn('[ImportPriceDialog] Stats poll failed, using response data:', pollErr);
+          setValidationStats({
+            totalRows: data.total_rows || 0,
+            validRows: data.valid_rows || 0,
+            invalidRows: data.invalid_rows || 0,
+          });
+        }
+      } else {
+        setValidationStats({
+          totalRows: data.total_rows || 0,
+          validRows: data.valid_rows || 0,
+          invalidRows: data.invalid_rows || 0,
+        });
+      }
 
       setStep('validated');
       queryClient.invalidateQueries({ queryKey: ['import-jobs'] });
@@ -351,27 +377,25 @@ export function ImportPriceDialog({ open, onOpenChange, onSuccess }: ImportPrice
 
       setStep('publishing');
 
-      const { data, error } = await supabase.functions.invoke(ImportGatewayApi.publish, {
-        body: {
-          organization_id: profile.organization_id,
-          import_job_id: createdJob.id,
-          file_path: createdJob.storagePath,
-          file_format: createdJob.fileFormat,
-          archive_before_replace: true,
-          mapping: Object.keys(columnMapping).length > 0 ? columnMapping : null,
-          options: {
-            transform: { sanitize_id: true, normalize_price: true, trim_text: true },
-          },
-          allow_partial: true,
+      const result = await apiInvoke(ImportGatewayApi.publish, {
+        organization_id: profile.organization_id,
+        import_job_id: createdJob.id,
+        file_path: createdJob.storagePath,
+        file_format: createdJob.fileFormat,
+        archive_before_replace: true,
+        mapping: Object.keys(columnMapping).length > 0 ? columnMapping : null,
+        options: {
+          transform: { sanitize_id: true, normalize_price: true, trim_text: true },
         },
+        allow_partial: true,
       });
 
-      if (error) throw new Error(error.message || 'Publish failed');
-      if (data?.ok === false && data?.error) throw new Error(data.error);
+      // import-publish returns 202 with status: "APPLYING" — apiInvoke treats 202+data as success
+      if (!result.ok) throw new Error(result.error.message || 'Publish failed');
 
-      console.info('[ImportPriceDialog] Publish dispatched (async):', data);
+      console.info('[ImportPriceDialog] Publish dispatched (async):', result.data);
       await pollJobStatus(createdJob.id);
-      return data;
+      return result.data;
     },
     onSuccess: () => {
       setStep('done');
