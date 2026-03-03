@@ -43,7 +43,7 @@ import type {
 } from './types';
 import { validateProduct } from './types';
 import { useNormalizationFlow } from '@/hooks/use-normalization-flow';
-import type { DryRunPatch, BackendQuestion, CatalogRow, DashboardQuestionCard, AiChatV2Action, ConfirmAction } from '@/lib/contract-types';
+import type { DryRunPatch, BackendQuestion, CatalogRow, DashboardQuestionCard, AiChatV2Action, AiChatV2Result, ConfirmAction } from '@/lib/contract-types';
 
 // ─── Props ────────────────────────────────────────────────────
 
@@ -78,10 +78,28 @@ const CAT_LABELS: Record<string, string> = {
 // ─── Helpers ──────────────────────────────────────────────────
 
 const RE_PROFNASTIL_PROFILE = /^(NS|НС|С|C|Н|H|НС|HC|МП|MP|Н)-?\d/i;
-const RE_METALLOCHEREPICA_TITLE = /металлочерепица|monterrey|монтеррей|cascade|каскад|adamante|адаманте|quadro|квадро|genesis|dimos|luxury|supermonterey|супермонтеррей|modern|vintage|country/i;
+const RE_METALLOCHEREPICA_TITLE = /металлочерепица|monterrey|монтеррей|cascade|каскад|adamante|адаманте|quadro|квадро|genesis|dimos|luxury|supermonterey|супермонтеррей|modern|vintage|country|finnera|banga|decorrey|kredo|classic/i;
 const RE_PROFNASTIL_TITLE = /профнастил|профлист/i;
 const RE_DOBOR_TITLE = /планка|конёк|конек|ендова|карниз|ветровая|заглушка|шуруп|саморез|кронштейн|крепёж|крепеж|болт|гайка|шайба|доборн/i;
 const RE_SANDWICH_TITLE = /сэндвич|sandwich|панель утеплен/i;
+
+// Metal tile profile extraction from title: "Металлочерепица Adamante 0.4 ..." → "Adamante"
+const METAL_TILE_PROFILES = [
+  'Monterrey', 'Монтеррей', 'SuperMonterrey', 'Супермонтеррей',
+  'Cascade', 'Каскад', 'Adamante', 'Адаманте',
+  'Quadro', 'Квадро', 'Classic', 'Классик',
+  'Genesis', 'Dimos', 'Modern', 'Модерн',
+  'Vintage', 'Country', 'Finnera', 'Banga', 'Банга',
+  'Decorrey', 'Декоррей', 'Kredo', 'Кредо',
+  'Luxury', 'Макси', 'Maxi',
+];
+const RE_METAL_TILE_PROFILE = new RegExp(`(?:металлочерепица|metal\\s*tile)\\s+(${METAL_TILE_PROFILES.join('|')})`, 'i');
+
+function extractMetalTileProfile(title?: string): string {
+  if (!title) return '';
+  const m = RE_METAL_TILE_PROFILE.exec(title);
+  return m ? m[1] : '';
+}
 
 function categorizeItem(item: { profile?: string; title?: string; sheet_kind?: string; family_key?: string }): ProductCategory {
   const sheetKind = (item.sheet_kind || '').toUpperCase();
@@ -113,11 +131,24 @@ function extractZincLabel(notes?: string): string | undefined {
 
 function patchToCanonical(item: DryRunPatch): CanonicalProduct {
   const category = categorizeItem({ profile: item.profile, title: item.title, sheet_kind: item.sheet_kind, family_key: item.family_key });
+  
+  // Extract profile for metal tiles from title if backend didn't provide it
+  let profile = item.profile || '';
+  if (!profile && category === 'METALLOCHEREPICA') {
+    profile = extractMetalTileProfile(item.title);
+  }
+  
+  // Price: prefer price_rub_m2, fallback to cur (string from enricher)
+  let price = item.price_rub_m2 ?? 0;
+  if (!price && item.cur != null) {
+    price = typeof item.cur === 'number' ? item.cur : parseFloat(String(item.cur)) || 0;
+  }
+  
   return {
     id: item.id,
     organization_id: '',
     product_type: category === 'ALL' ? 'OTHER' : category,
-    profile: item.profile || '',
+    profile,
     thickness_mm: typeof item.thickness_mm === 'string' ? parseFloat(item.thickness_mm) : (item.thickness_mm || 0),
     coating: item.coating || '',
     color_or_ral: item.color_code || '',
@@ -126,7 +157,7 @@ function patchToCanonical(item: DryRunPatch): CanonicalProduct {
     zinc_label: extractZincLabel(item.notes),
     work_width_mm: item.width_work_mm || 0,
     full_width_mm: item.width_full_mm || 0,
-    price: item.price_rub_m2 ?? 0,
+    price,
     unit: item.unit === 'm2' ? 'm2' : 'sht',
     title: item.title,
     notes: item.notes,
@@ -371,9 +402,7 @@ function QuestionAnswerForm({
   );
 }
 
-// ─── AI Chat Panel (Lovable AI Gateway Streaming) ─────────────
-
-const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/normalization-chat`;
+// ─── AI Chat Panel (via import-normalize ai_chat_v2 → Cloud Run backend) ─────
 
 const CHAT_EXAMPLES = [
   'Установи покрытие MattPE → Матовый полиэстер',
@@ -382,22 +411,15 @@ const CHAT_EXAMPLES = [
   'Почему товары попадают в категорию "Прочее"?',
 ];
 
-type ChatMsg = { role: 'user' | 'assistant'; content: string };
-
-function parseActionsFromText(text: string): AiChatV2Action[] {
-  const match = text.match(/```actions\s*\n([\s\S]*?)\n```/);
-  if (!match) return [];
-  try {
-    const parsed = JSON.parse(match[1]);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch { return []; }
-}
+type ChatMsg = { role: 'user' | 'assistant'; content: string; actions?: AiChatV2Action[]; actionsApplied?: boolean };
 
 function AIChatPanel({
   onApplyActions, confirmActions: confirmActionsFn, items, aiQuestions: pendingQuestions, categoryStats: catStats,
+  sendChat,
 }: {
   onApplyActions?: (actions: AiChatV2Action[]) => void;
   confirmActions?: (actions: ConfirmAction[]) => Promise<unknown>;
+  sendChat: (message: string, context?: Record<string, unknown>) => Promise<AiChatV2Result | null>;
   items: CanonicalProduct[];
   aiQuestions?: AIQuestion[];
   categoryStats?: Record<string, { total: number; ready: number; needsAttention: number }>;
@@ -405,8 +427,7 @@ function AIChatPanel({
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [pendingActions, setPendingActions] = useState<AiChatV2Action[]>([]);
-  const [applyingActions, setApplyingActions] = useState(false);
+  const [applyingIdx, setApplyingIdx] = useState<number | null>(null);
   const [showExamples, setShowExamples] = useState(true);
   const scrollEndRef = useRef<HTMLDivElement>(null);
 
@@ -426,6 +447,7 @@ function AIChatPanel({
       coating: i.coating,
       color_or_ral: i.color_or_ral,
       product_type: i.product_type,
+      price: i.price,
     })),
   }), [items, catStats, pendingQuestions]);
 
@@ -434,81 +456,31 @@ function AIChatPanel({
     if (!msg || loading) return;
     setInput('');
     setShowExamples(false);
-    setPendingActions([]);
 
     const userMsg: ChatMsg = { role: 'user', content: msg };
-    const allMessages = [...messages, userMsg];
-    setMessages(allMessages);
+    setMessages(prev => [...prev, userMsg]);
     setLoading(true);
 
-    let assistantSoFar = '';
-
     try {
-      const resp = await fetch(CHAT_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-        },
-        body: JSON.stringify({
-          messages: allMessages.map(m => ({ role: m.role, content: m.content })),
-          context: buildContext(),
-        }),
-      });
+      const result = await sendChat(msg, buildContext());
 
-      if (!resp.ok) {
-        const errBody = await resp.json().catch(() => ({ error: 'Ошибка сети' }));
-        throw new Error(errBody.error || `HTTP ${resp.status}`);
+      if (!result) {
+        setMessages(prev => [...prev, { role: 'assistant', content: '⚠️ Нет ответа от сервера. Попробуйте ещё раз.' }]);
+        return;
       }
 
-      if (!resp.body) throw new Error('No response body');
+      if (!result.ok) {
+        const errMsg = result.error || 'Ошибка AI';
+        setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${errMsg}` }]);
+        return;
+      }
 
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let textBuffer = '';
-      let streamDone = false;
-
-      const upsertAssistant = (nextChunk: string) => {
-        assistantSoFar += nextChunk;
-        setMessages(prev => {
-          const last = prev[prev.length - 1];
-          if (last?.role === 'assistant') {
-            return prev.map((m, i) => i === prev.length - 1 ? { ...m, content: assistantSoFar } : m);
-          }
-          return [...prev, { role: 'assistant', content: assistantSoFar }];
-        });
+      const assistantMsg: ChatMsg = {
+        role: 'assistant',
+        content: result.assistant_message || 'Готово.',
+        actions: result.actions && result.actions.length > 0 ? result.actions : undefined,
       };
-
-      while (!streamDone) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        textBuffer += decoder.decode(value, { stream: true });
-
-        let newlineIndex: number;
-        while ((newlineIndex = textBuffer.indexOf('\n')) !== -1) {
-          let line = textBuffer.slice(0, newlineIndex);
-          textBuffer = textBuffer.slice(newlineIndex + 1);
-          if (line.endsWith('\r')) line = line.slice(0, -1);
-          if (line.startsWith(':') || line.trim() === '') continue;
-          if (!line.startsWith('data: ')) continue;
-          const jsonStr = line.slice(6).trim();
-          if (jsonStr === '[DONE]') { streamDone = true; break; }
-          try {
-            const parsed = JSON.parse(jsonStr);
-            const content = parsed.choices?.[0]?.delta?.content as string | undefined;
-            if (content) upsertAssistant(content);
-          } catch {
-            textBuffer = line + '\n' + textBuffer;
-            break;
-          }
-        }
-      }
-
-      // Parse actions from completed text
-      const actions = parseActionsFromText(assistantSoFar);
-      if (actions.length > 0) {
-        setPendingActions(actions);
-      }
+      setMessages(prev => [...prev, assistantMsg]);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : 'Ошибка подключения';
       setMessages(prev => [...prev, { role: 'assistant', content: `⚠️ ${errMsg}` }]);
@@ -516,24 +488,22 @@ function AIChatPanel({
       setLoading(false);
       setTimeout(() => scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     }
-  }, [input, loading, messages, buildContext]);
+  }, [input, loading, sendChat, buildContext]);
 
-  const handleApplyActions = useCallback(async () => {
-    if (pendingActions.length === 0) return;
-    setApplyingActions(true);
+  const handleApplyActions = useCallback(async (actions: AiChatV2Action[], msgIdx: number) => {
+    setApplyingIdx(msgIdx);
     try {
-      const confirmPayload: ConfirmAction[] = pendingActions.map(a => ({ type: a.type, payload: a.payload }));
+      const confirmPayload: ConfirmAction[] = actions.map(a => ({ type: a.type, payload: a.payload }));
       if (confirmActionsFn) await confirmActionsFn(confirmPayload);
-      if (onApplyActions) onApplyActions(pendingActions);
-      setMessages(prev => [...prev, { role: 'assistant', content: `✅ Применено ${pendingActions.length} действий` }]);
-      setPendingActions([]);
+      if (onApplyActions) onApplyActions(actions);
+      setMessages(prev => prev.map((m, i) => i === msgIdx ? { ...m, actionsApplied: true } : m));
     } catch (err) {
       console.error('[AIChatPanel] Apply error:', err);
       setMessages(prev => [...prev, { role: 'assistant', content: '⚠️ Ошибка при применении действий' }]);
     } finally {
-      setApplyingActions(false);
+      setApplyingIdx(null);
     }
-  }, [pendingActions, confirmActionsFn, onApplyActions]);
+  }, [confirmActionsFn, onApplyActions]);
 
   return (
     <div className="flex flex-col h-full">
@@ -544,7 +514,7 @@ function AIChatPanel({
               <div className="text-center py-4 text-muted-foreground">
                 <Sparkles className="h-8 w-8 mx-auto mb-2 opacity-30" />
                 <p className="text-xs font-medium">ИИ-ассистент нормализации</p>
-                <p className="text-[10px] mt-0.5 opacity-70">Powered by Gemini — задайте вопрос или команду</p>
+                <p className="text-[10px] mt-0.5 opacity-70">Cloud Run Gemini — задайте вопрос или команду</p>
               </div>
               <div className="space-y-1">
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Примеры</p>
@@ -565,35 +535,41 @@ function AIChatPanel({
                   : m.content.startsWith('⚠️') ? 'bg-destructive/10 text-destructive border border-destructive/20'
                   : 'bg-muted text-foreground'
               }`}>
-                {/* Remove action blocks from displayed text */}
-                {m.content.replace(/```actions\s*\n[\s\S]*?\n```/g, '').trim()}
+                {m.content}
+
+                {/* Pending actions */}
+                {m.actions && m.actions.length > 0 && !m.actionsApplied && (
+                  <div className="mt-2 p-2 bg-background/50 rounded border space-y-1">
+                    <div className="flex items-center gap-1 mb-1">
+                      <AlertTriangle className="h-3 w-3 text-primary" />
+                      <span className="text-[10px] font-semibold">{m.actions.length} действий</span>
+                    </div>
+                    {m.actions.slice(0, 4).map((action, j) => (
+                      <div key={j} className="text-[10px] font-mono bg-muted/50 rounded px-2 py-0.5 truncate">
+                        <span className="text-primary font-semibold">{action.type}</span>: {JSON.stringify(action.payload).substring(0, 80)}
+                      </div>
+                    ))}
+                    {m.actions.length > 4 && <span className="text-[10px] text-muted-foreground">+{m.actions.length - 4} ещё</span>}
+                    <div className="flex gap-2 mt-1">
+                      <Button size="sm" className="h-6 text-[10px] flex-1" onClick={() => handleApplyActions(m.actions!, i)} disabled={applyingIdx === i}>
+                        {applyingIdx === i ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Play className="h-3 w-3 mr-1" />}
+                        Применить
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => setMessages(prev => prev.map((msg, idx) => idx === i ? { ...msg, actions: undefined } : msg))}>
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {m.actionsApplied && (
+                  <div className="mt-1 text-[10px] text-primary flex items-center gap-1">
+                    <CheckCircle2 className="h-3 w-3" /> Применено!
+                  </div>
+                )}
               </div>
             </div>
           ))}
-
-          {/* Pending actions preview */}
-          {pendingActions.length > 0 && (
-            <div className="p-2 bg-primary/5 rounded-lg border border-primary/20 space-y-2">
-              <div className="flex items-center gap-1 mb-1">
-                <AlertTriangle className="h-3 w-3 text-primary" />
-                <span className="text-[10px] font-semibold">{pendingActions.length} действий ожидает подтверждения</span>
-              </div>
-              {pendingActions.map((action, j) => (
-                <div key={j} className="text-[10px] font-mono bg-background rounded px-2 py-1 truncate">
-                  <span className="text-primary font-semibold">{action.type}</span>: {JSON.stringify(action.payload).substring(0, 80)}
-                </div>
-              ))}
-              <div className="flex gap-2">
-                <Button size="sm" className="h-6 text-[10px] flex-1" onClick={handleApplyActions} disabled={applyingActions}>
-                  {applyingActions ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Play className="h-3 w-3 mr-1" />}
-                  Применить ко всему прайсу
-                </Button>
-                <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => setPendingActions([])}>
-                  <X className="h-3 w-3" />
-                </Button>
-              </div>
-            </div>
-          )}
 
           {loading && (
             <div className="flex justify-start">
@@ -629,7 +605,6 @@ function CategorySidebar({
   onToggleProblematic: (v: boolean) => void;
 }) {
   const cats: ProductCategory[] = ['ALL', 'PROFNASTIL', 'METALLOCHEREPICA', 'DOBOR', 'SANDWICH', 'OTHER'];
-
   return (
     <div className="flex flex-col h-full">
       <div className="p-3 border-b">
@@ -685,7 +660,6 @@ export function NormalizationWizard({
   const [inputJobId, setInputJobId] = useState(propJobId || '');
   const effectiveJobId = propJobId || inputJobId || undefined;
 
-  // UI state
   const [activeCategory, setActiveCategory] = useState<ProductCategory>('PROFNASTIL');
   const [selectedCluster, setSelectedCluster] = useState<ClusterPath | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
@@ -696,7 +670,7 @@ export function NormalizationWizard({
   const [showSettings, setShowSettings] = useState(false);
 
   const flow = useNormalizationFlow({ organizationId, importJobId: effectiveJobId });
-  const norm = flow.norm; // read-only data access (catalogItems, dryRunResult, dashboard, etc.)
+  const norm = flow.norm;
 
   const fetchDashboard = norm.fetchDashboard;
   const fetchCatalogItems = norm.fetchCatalogItems;
@@ -704,7 +678,6 @@ export function NormalizationWizard({
   const confirmBatch = flow.confirmBatch;
   const startApply = flow.startApply;
 
-  // Auto-load on open
   const autoStartedRef = useRef(false);
   useEffect(() => {
     if (!open || !organizationId) return;
@@ -718,15 +691,11 @@ export function NormalizationWizard({
 
     void fetchDashboard(effectiveJobId);
     void fetchCatalogItems(500);
-
-    if (effectiveJobId) {
-      void startScan({ aiSuggest: true, limit: 2000 });
-    }
+    void startScan({ aiSuggest: true, limit: 2000 });
   }, [open, organizationId, effectiveJobId, fetchDashboard, fetchCatalogItems, startScan]);
 
   useEffect(() => { if (!open) autoStartedRef.current = false; }, [open]);
 
-  // Build items
   const items = useMemo(() => {
     const patches = norm.dryRunResult?.patches_sample || [];
     if (patches.length > 0) return patches.map(patchToCanonical);
@@ -751,7 +720,6 @@ export function NormalizationWizard({
     return Object.values(grouped);
   }, [norm.dashboardResult, aiQuestions]);
 
-  // Category stats
   const categoryStats = useMemo(() => {
     const stats: Record<string, { total: number; ready: number; needsAttention: number }> = {};
     const cats: ProductCategory[] = ['ALL', 'PROFNASTIL', 'METALLOCHEREPICA', 'DOBOR', 'SANDWICH', 'OTHER'];
@@ -1214,6 +1182,7 @@ export function NormalizationWizard({
                 {/* CHAT */}
                 <TabsContent value="chat" className="flex-1 min-h-0 m-0 flex flex-col">
                   <AIChatPanel
+                    sendChat={flow.sendChat}
                     confirmActions={flow.confirmBatch}
                     items={items}
                     aiQuestions={aiQuestions}
