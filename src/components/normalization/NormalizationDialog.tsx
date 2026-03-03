@@ -365,7 +365,6 @@ export function NormalizationDialog({
       const result = await apiInvoke<{ ok: boolean; error?: string }>('settings-merge', {
           organization_id: organizationId,
           patch,
-        },
       });
 
       if (!result.ok || !result.data?.ok) throw new Error(result.ok ? (result.data?.error || 'Failed to save') : result.error.message);
@@ -409,7 +408,6 @@ export function NormalizationDialog({
           import_job_id: importJobId || 'current',
           run_id: runId,
           profile_hash: profileHash,
-        },
       });
 
       if (!startResult.ok) throw new Error(startResult.error.message);

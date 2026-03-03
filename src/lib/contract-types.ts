@@ -277,12 +277,14 @@ export interface ApiInvokeSuccess<TData = unknown> {
   ok: true;
   data: TData;
   correlationId: string;
+  error?: undefined;
 }
 
 export interface ApiInvokeFailure {
   ok: false;
   error: ApiErrorInfo;
   correlationId: string;
+  data?: undefined;
 }
 
 export type ApiInvokeResult<TData = unknown> = ApiInvokeSuccess<TData> | ApiInvokeFailure;
