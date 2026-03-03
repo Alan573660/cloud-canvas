@@ -8,8 +8,8 @@
 // =========================================
 // Product Types (only these are normalized)
 // =========================================
-export type ProductType = 'PROFNASTIL' | 'METALLOCHEREPICA';
-export type ProductCategory = 'ALL' | ProductType | 'DOBOR' | 'SANDWICH' | 'OTHER';
+export type ProductType = 'PROFNASTIL' | 'METALLOCHEREPICA' | 'DOBOR' | 'SANDWICH' | 'OTHER';
+export type ProductCategory = 'ALL' | ProductType;
 
 // =========================================
 // Fixed Canonical Schema

@@ -284,7 +284,8 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       return result;
     } catch (err) {
       const msg = parseEdgeFunctionError(err);
-      toast({ title: 'Ошибка загрузки дашборда', description: msg, variant: 'destructive' });
+      console.warn('[fetchDashboard] error (non-blocking):', msg);
+      // Don't show toast for dashboard errors - it's non-critical
       return null;
     } finally {
       setDashboardLoading(false);
