@@ -171,15 +171,25 @@ function mapQuestionType(backendType?: string): AIQuestionType {
   return 'color';
 }
 
+function suggestedActionToString(s: unknown): string {
+  if (typeof s === 'string') return s;
+  if (typeof s === 'number') return String(s);
+  if (s && typeof s === 'object') {
+    const obj = s as Record<string, unknown>;
+    return (obj.label || obj.value || obj.canonical || obj.name || JSON.stringify(s)) as string;
+  }
+  return String(s);
+}
+
 function backendQuestionToAI(q: BackendQuestion, index: number): AIQuestion {
   const suggestedActions = q.suggested_actions || q.suggested_variants || [];
   return {
     type: mapQuestionType(q.type),
     cluster_path: { profile: q.profile || q.token || `q-${index}` },
-    token: q.token || '',
+    token: q.token || q.profile || '',
     examples: q.examples || [],
     affected_count: q.affected_rows_count ?? q.affected_count ?? 0,
-    suggestions: Array.isArray(suggestedActions) ? suggestedActions.map(String) : q.suggested ? [String(q.suggested)] : [],
+    suggestions: Array.isArray(suggestedActions) ? suggestedActions.map(suggestedActionToString) : q.suggested ? [suggestedActionToString(q.suggested)] : [],
     confidence: q.confidence || 0.5,
     ask: q.question_text || q.ask,
   };
@@ -728,32 +738,66 @@ export function NormalizationWizard({
     const questionType = activeQuestionForm.type.toUpperCase();
     const backendType = questionType === 'WIDTH' ? 'WIDTH_MASTER' : questionType === 'COATING' ? 'COATING_MAP' : questionType === 'COLOR' ? 'COLOR_MAP'
       : questionType === 'THICKNESS' ? 'THICKNESS_SET' : questionType === 'PROFILE' ? 'PROFILE_MAP' : questionType === 'CATEGORY' ? 'CATEGORY_FIX' : questionType;
-    const payload: Record<string, unknown> = { token: activeQuestionForm.token, canonical: value };
-    if (backendType === 'WIDTH_MASTER' && value.includes(':')) {
-      const [full, work] = value.split(':');
-      payload.profile = activeQuestionForm.token;
-      payload.full_mm = parseInt(full, 10) || 0;
-      payload.work_mm = parseInt(work, 10) || 0;
-      delete payload.canonical;
+    
+    const profileToken = activeQuestionForm.token || activeQuestionForm.cluster_path?.profile || '';
+
+    // THICKNESS_SET is not supported by batch confirm — use legacy answerQuestion
+    if (backendType === 'THICKNESS_SET') {
+      const success = await norm.answerQuestion('THICKNESS_SET', profileToken, value);
+      if (success) {
+        setActiveQuestionForm(null);
+        void startScan({ aiSuggest: true, limit: 2000 });
+      }
+      return;
     }
+
+    // WIDTH_MASTER always needs profile + numeric fields
+    if (backendType === 'WIDTH_MASTER') {
+      const payload: Record<string, unknown> = { profile: profileToken };
+      if (value.includes(':')) {
+        const [full, work] = value.split(':');
+        payload.full_mm = parseInt(full, 10) || 0;
+        payload.work_mm = parseInt(work, 10) || 0;
+      } else {
+        payload.full_mm = parseInt(value, 10) || 0;
+      }
+      const action: ConfirmAction = { type: backendType, payload };
+      const result = await confirmBatch([action]);
+      if (result?.ok) {
+        setActiveQuestionForm(null);
+        void startScan({ aiSuggest: true, limit: 2000 });
+      }
+      return;
+    }
+
+    // Default: token + canonical
+    const payload: Record<string, unknown> = { token: profileToken, canonical: value };
     const action: ConfirmAction = { type: backendType, payload };
     const result = await confirmBatch([action]);
     if (result?.ok) {
       setActiveQuestionForm(null);
       void startScan({ aiSuggest: true, limit: 2000 });
     }
-  }, [confirmBatch, startScan, activeQuestionForm]);
+  }, [confirmBatch, startScan, activeQuestionForm, norm]);
 
   const handleAnswerFromCluster = useCallback(async (questionId: string, value: string | number) => {
     const question = aiQuestions.find((q, i) => `q-${i}` === questionId || q.token === questionId);
     const questionType = question?.type || questionId;
     const backendType = questionType.toUpperCase() === 'WIDTH' ? 'WIDTH_MASTER' : questionType.toUpperCase() === 'COATING' ? 'COATING_MAP'
-      : questionType.toUpperCase() === 'COLOR' ? 'COLOR_MAP' : questionType.toUpperCase();
-    const token = question?.token || questionId;
+      : questionType.toUpperCase() === 'COLOR' ? 'COLOR_MAP' : questionType.toUpperCase() === 'THICKNESS' ? 'THICKNESS_SET' : questionType.toUpperCase();
+    const token = question?.token || question?.cluster_path?.profile || questionId;
+
+    // THICKNESS_SET — use legacy path
+    if (backendType === 'THICKNESS_SET') {
+      const success = await norm.answerQuestion('THICKNESS_SET', token, value);
+      if (success) void startScan({ aiSuggest: true, limit: 2000 });
+      return;
+    }
+
     const action: ConfirmAction = { type: backendType, payload: { token, canonical: value } };
     const result = await confirmBatch([action]);
     if (result?.ok) void startScan({ aiSuggest: true, limit: 2000 });
-  }, [confirmBatch, startScan, aiQuestions]);
+  }, [confirmBatch, startScan, aiQuestions, norm]);
 
   const getApplyStatusLabel = () => {
     const phaseLabel = norm.applyPhase && norm.applyPhase !== 'unknown'
