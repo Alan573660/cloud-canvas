@@ -7,7 +7,7 @@
  */
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { invokeEdge } from '@/lib/api-client';
 import { useTranslation } from 'react-i18next';
 import {
   Dialog,
@@ -607,11 +607,9 @@ export function NormalizationWizard({
     if (autoStartedRef.current) return;
     autoStartedRef.current = true;
 
-    supabase.functions.invoke('settings-merge', {
-      body: {
-        organization_id: organizationId,
-        patch: { ai_policy: { ai_enabled: true, shadow_mode: true, autopatch_after_confirm: true, max_questions_per_run: 40 } },
-      },
+    invokeEdge('settings-merge', {
+      organization_id: organizationId,
+      patch: { ai_policy: { ai_enabled: true, shadow_mode: true, autopatch_after_confirm: true, max_questions_per_run: 40 } },
     }).catch(err => console.warn('[NormWizard] ai_policy seed failed:', err));
 
     void fetchDashboard(effectiveJobId);

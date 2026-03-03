@@ -414,23 +414,53 @@ export function NormalizationDialog({
 
       const startData = startResult.data;
 
-      // Poll for completion
+      // Poll for completion with safety guards
       if (startData?.apply_id) {
+        const POLL_MAX_MS = 7 * 60 * 1000; // 7 minutes
+        const POLL_MAX_REQUESTS = 300;
+        const POLL_INTERVAL_MS = 3000;
+        const pollStart = Date.now();
+        let pollCount = 0;
+        let consecutiveErrors = 0;
         let status = 'PENDING';
-        while (status !== 'DONE' && status !== 'COMPLETED' && status !== 'FAILED') {
-          await new Promise(r => setTimeout(r, 2000));
-          const statusResult = await apiInvoke<{ status?: string; error?: string }>('import-normalize', {
-            op: 'apply_status',
-            organization_id: organizationId,
-            import_job_id: importJobId || 'current',
-            apply_id: startData.apply_id,
-          });
 
-          if (!statusResult.ok) {
-            throw new Error(statusResult.error.message);
+        while (status !== 'DONE' && status !== 'COMPLETED' && status !== 'FAILED') {
+          // Safety guards
+          if (Date.now() - pollStart > POLL_MAX_MS) {
+            throw new Error('Polling timeout — apply is still running. Check status manually.');
+          }
+          if (pollCount >= POLL_MAX_REQUESTS) {
+            throw new Error('Polling limit exceeded. Apply may still be running.');
           }
 
-          status = String(statusResult.data?.status || 'FAILED').toUpperCase();
+          await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+          pollCount++;
+
+          try {
+            const statusResult = await apiInvoke<{ status?: string; error?: string }>('import-normalize', {
+              op: 'apply_status',
+              organization_id: organizationId,
+              import_job_id: importJobId || 'current',
+              apply_id: startData.apply_id,
+              run_id: runId,
+            });
+
+            if (!statusResult.ok) {
+              consecutiveErrors++;
+              if (consecutiveErrors >= 3) {
+                throw new Error(statusResult.error.message);
+              }
+              continue;
+            }
+
+            consecutiveErrors = 0;
+            status = String(statusResult.data?.status || 'FAILED').toUpperCase();
+          } catch (pollErr) {
+            consecutiveErrors++;
+            if (consecutiveErrors >= 3) {
+              throw pollErr;
+            }
+          }
         }
         
         if (status === 'FAILED') {
@@ -601,10 +631,12 @@ export function NormalizationDialog({
               onOpenChange={setChatOpen}
               organizationId={organizationId}
               importJobId={importJobId}
+              runId={runId || undefined}
               activeGroup={activeGroup}
-              onApplyPatch={(patch) => {
-                // Handle AI-generated patch
-                console.log('AI patch:', patch);
+              onApplyPatch={(actions) => {
+                console.log('AI actions applied:', actions);
+                // Re-run dry_run to reflect changes
+                dryRunMutation.mutate({ limit: dryRunLimit, aiSuggest: aiEnabled });
               }}
             />
           </div>
