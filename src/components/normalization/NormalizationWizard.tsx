@@ -352,7 +352,7 @@ function QuestionAnswerForm({
       )}
 
       {isWidth ? (
-        <div className="space-y-2">
+      <div className="space-y-2">
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="text-[10px] text-muted-foreground block mb-1">Полная, мм *</label>
@@ -490,6 +490,13 @@ function AIChatPanel({
   }, [input, loading, sendChat, buildContext]);
 
   const handleApplyActions = useCallback(async (actions: AiChatV2Action[], msgIdx: number) => {
+    // PR2: Validate WIDTH_MASTER actions have profile before sending
+    const invalidWidth = actions.find(a => a.type === 'WIDTH_MASTER' && !a.payload?.profile);
+    if (invalidWidth) {
+      setMessages(prev => [...prev, { role: 'assistant', content: '⚠️ Действие WIDTH_MASTER не содержит профиль. Уточните профиль в запросе.' }]);
+      return;
+    }
+
     setApplyingIdx(msgIdx);
     try {
       const confirmPayload: ConfirmAction[] = actions.map(a => ({ type: a.type, payload: a.payload }));
@@ -542,18 +549,25 @@ function AIChatPanel({
                 {m.content}
 
                 {/* Pending actions */}
-                {m.actions && m.actions.length > 0 && !m.actionsApplied && (
+                {m.actions && m.actions.length > 0 && !m.actionsApplied && (() => {
+                  const hasInvalidWidth = m.actions!.some(a => a.type === 'WIDTH_MASTER' && !a.payload?.profile);
+                  return (
                   <div className="mt-2 p-2 bg-background/50 rounded border space-y-1">
                     <div className="flex items-center gap-1 mb-1">
                       <AlertTriangle className="h-3 w-3 text-primary" />
-                      <span className="text-[10px] font-semibold">{m.actions.length} действий</span>
+                      <span className="text-[10px] font-semibold">{m.actions!.length} действий</span>
                     </div>
-                    {m.actions.slice(0, 4).map((action, j) => (
+                    {m.actions!.slice(0, 4).map((action, j) => (
                       <div key={j} className="text-[10px] font-mono bg-muted/50 rounded px-2 py-0.5 truncate">
                         <span className="text-primary font-semibold">{action.type}</span>: {JSON.stringify(action.payload).substring(0, 80)}
                       </div>
                     ))}
-                    {m.actions.length > 4 && <span className="text-[10px] text-muted-foreground">+{m.actions.length - 4} ещё</span>}
+                    {m.actions!.length > 4 && <span className="text-[10px] text-muted-foreground">+{m.actions!.length - 4} ещё</span>}
+                    {hasInvalidWidth && (
+                      <div className="flex items-center gap-1 text-[10px] text-destructive bg-destructive/5 rounded px-2 py-0.5">
+                        <AlertCircle className="h-3 w-3 shrink-0" /> WIDTH_MASTER: профиль не указан
+                      </div>
+                    )}
                     <div className="flex gap-2 mt-1">
                       <Button
                         size="sm"
@@ -569,7 +583,8 @@ function AIChatPanel({
                       </Button>
                     </div>
                   </div>
-                )}
+                  );
+                })()}
 
                 {m.actionsApplied && (
                   <div className="mt-1 text-[10px] text-primary flex items-center gap-1">
@@ -686,12 +701,13 @@ export function NormalizationWizard({
   const [inputJobId, setInputJobId] = useState(propJobId || '');
   const effectiveJobId = propJobId || inputJobId || undefined;
 
-  const [activeCategory, setActiveCategory] = useState<ProductCategory>('PROFNASTIL');
+  const [activeCategory, setActiveCategory] = useState<ProductCategory>('ALL');
   const [selectedCluster, setSelectedCluster] = useState<ClusterPath | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [onlyProblematic, setOnlyProblematic] = useState(false);
   const [rightTab, setRightTab] = useState<'questions' | 'chat'>('questions');
   const [activeQuestionForm, setActiveQuestionForm] = useState<AIQuestion | null>(null);
+  const [confirmedTypes, setConfirmedTypes] = useState<Set<string>>(new Set());
   const [confirmApplyOpen, setConfirmApplyOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
@@ -741,18 +757,56 @@ export function NormalizationWizard({
 
   const questionCards = useMemo((): DashboardQuestionCard[] => {
     const dbCards = norm.dashboardResult?.question_cards || [];
-    if (dbCards.length > 0) return dbCards;
-    const grouped: Record<string, DashboardQuestionCard> = {};
-    for (const q of aiQuestions) {
-      const backendType = q.type.toUpperCase() === 'WIDTH' ? 'WIDTH_MASTER' : q.type.toUpperCase() === 'COATING' ? 'COATING_MAP' : q.type.toUpperCase() === 'COLOR' ? 'COLOR_MAP' : q.type.toUpperCase() + '_MAP';
-      if (!grouped[backendType]) {
-        grouped[backendType] = { type: backendType, label: Q_TYPE_CONFIG[backendType]?.label || backendType, count: 0, examples: [] };
+    let cards: DashboardQuestionCard[];
+    if (dbCards.length > 0) {
+      cards = dbCards;
+    } else {
+      const grouped: Record<string, DashboardQuestionCard> = {};
+      for (const q of aiQuestions) {
+        const backendType = q.type.toUpperCase() === 'WIDTH' ? 'WIDTH_MASTER' : q.type.toUpperCase() === 'COATING' ? 'COATING_MAP' : q.type.toUpperCase() === 'COLOR' ? 'COLOR_MAP' : q.type.toUpperCase() + '_MAP';
+        if (!grouped[backendType]) {
+          grouped[backendType] = { type: backendType, label: Q_TYPE_CONFIG[backendType]?.label || backendType, count: 0, examples: [] };
+        }
+        grouped[backendType].count += q.affected_count;
+        grouped[backendType].examples = [...(grouped[backendType].examples || []), ...(q.examples || [])].slice(0, 5);
       }
-      grouped[backendType].count += q.affected_count;
-      grouped[backendType].examples = [...(grouped[backendType].examples || []), ...(q.examples || [])].slice(0, 5);
+      cards = Object.values(grouped);
     }
-    return Object.values(grouped);
-  }, [norm.dashboardResult, aiQuestions]);
+    // Filter out types that the user already confirmed in this session
+    return cards.filter(c => !confirmedTypes.has(c.type));
+  }, [norm.dashboardResult, aiQuestions, confirmedTypes]);
+
+  const filteredQuestionCards = useMemo(() => {
+    let cards = [...questionCards].sort((a, b) => (b.count || 0) - (a.count || 0));
+    const q = questionQuery.trim().toLowerCase();
+    if (q) {
+      cards = cards.filter((c) =>
+        (c.label || '').toLowerCase().includes(q) ||
+        (c.type || '').toLowerCase().includes(q) ||
+        (c.examples || []).some((e) => e.toLowerCase().includes(q))
+      );
+    }
+    if (highImpactOnly) {
+      cards = cards.filter((c) => (c.count || 0) >= 10);
+    }
+    return cards;
+  }, [questionCards, questionQuery, highImpactOnly]);
+
+  const filteredQuestionDetails = useMemo(() => {
+    let list = [...aiQuestions];
+    const q = questionQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter((item) =>
+        (item.token || '').toLowerCase().includes(q) ||
+        (item.ask || '').toLowerCase().includes(q) ||
+        (item.examples || []).some((ex) => ex.toLowerCase().includes(q))
+      );
+    }
+    if (highImpactOnly) {
+      list = list.filter((item) => (item.affected_count || 0) >= 10);
+    }
+    return list;
+  }, [aiQuestions, questionQuery, highImpactOnly]);
 
   const filteredQuestionCards = useMemo(() => {
     let cards = [...questionCards].sort((a, b) => (b.count || 0) - (a.count || 0));
@@ -1006,7 +1060,7 @@ export function NormalizationWizard({
 
             <div className="flex items-center gap-2">
               {DEV_MODE && !propJobId && (
-                <Input value={inputJobId} onChange={e => setInputJobId(e.target.value)} placeholder="Job ID" className="h-7 w-40 text-xs" />
+                <Input value={inputJobId} onChange={e => setInputJobId(e.target.value)} placeholder="ID задачи импорта" className="h-7 w-40 text-xs" />
               )}
               <Button size="sm" variant="ghost" onClick={() => setShowSettings(v => !v)} className="h-7 text-xs gap-1">
                 <Settings2 className="h-3.5 w-3.5" />
@@ -1046,7 +1100,7 @@ export function NormalizationWizard({
 
             <div className="hidden lg:block h-8 border-l" />
 
-            {/* Status indicators */}
+            {/* Status indicators — explicit PENDING/RUNNING/DONE/FAILED */}
             <div className="flex items-center gap-3 flex-1 min-w-0">
               {flow.state === 'SCANNING' && (
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground rounded-full border px-2 py-1">
@@ -1058,18 +1112,17 @@ export function NormalizationWizard({
                   <Loader2 className="h-3.5 w-3.5 animate-spin" /> Загрузка…
                 </div>
               )}
-              {(flow.state === 'APPLY_STARTING' || flow.state === 'APPLY_RUNNING' || flow.state === 'APPLY_DONE' || flow.state === 'ERROR') && (
+
+              {/* Apply state: PENDING / RUNNING with phase + progress */}
+              {(flow.state === 'APPLY_STARTING' || flow.state === 'APPLY_RUNNING') && (
                 <div className="flex items-center gap-3">
-                  <Badge variant={flow.state === 'APPLY_DONE' ? 'default' : flow.state === 'ERROR' ? 'destructive' : 'secondary'} className="text-xs">
-                    {isApplying && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
-                    {getApplyStatusLabel()}
+                  <Badge variant="secondary" className="text-xs">
+                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    {flow.state === 'APPLY_STARTING' ? 'PENDING' : 'RUNNING'}
+                    {norm.applyPhase && norm.applyPhase !== 'unknown' && ` · ${norm.applyPhase}`}
                   </Badge>
-                  {isApplying && (
-                    <div className="flex items-center gap-2">
-                      <Progress value={norm.applyProgress} className="h-1.5 w-24" />
-                      <span className="text-[10px] text-muted-foreground tabular-nums">{norm.applyProgress}%</span>
-                    </div>
-                  )}
+                  <Progress value={norm.applyProgress} className="h-1.5 w-24" />
+                  <span className="text-[10px] text-muted-foreground tabular-nums">{norm.applyProgress}%</span>
                 </div>
               )}
               {!isApplying && flow.state !== 'SCANNING' && (
@@ -1078,7 +1131,9 @@ export function NormalizationWizard({
                   <strong className="text-foreground">{questionCards.reduce((s, c) => s + c.count, 0).toLocaleString('ru')}</strong>
                 </div>
               )}
-              {norm.dryRunResult?.stats && flow.state !== 'SCANNING' && (
+
+              {/* Patches ready */}
+              {norm.dryRunResult?.stats && flow.state !== 'SCANNING' && flow.state !== 'ERROR' && (
                 <span className="text-xs text-muted-foreground ml-auto">
                   Исправлений: <strong className="text-foreground">{norm.dryRunResult.stats.patches_ready}</strong>
                 </span>
@@ -1108,8 +1163,8 @@ export function NormalizationWizard({
         </div>
 
         {/* ═══ BODY: Resizable 3-Panel Layout ═══ */}
-        <div className="flex-1 min-h-0 overflow-hidden">
-          <ResizablePanelGroup direction="horizontal" className="h-full">
+        <div className="flex-1 min-h-0 overflow-hidden relative">
+          <ResizablePanelGroup direction="horizontal" className="absolute inset-0">
             {/* LEFT: Categories */}
             <ResizablePanel defaultSize={14} minSize={10} maxSize={22} className="bg-card/60">
               <CategorySidebar
