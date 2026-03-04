@@ -439,6 +439,16 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
 
   const confirmActions = useCallback(async (actions: ConfirmAction[], jobId?: string): Promise<ConfirmResult | null> => {
     if (actions.length === 0) return null;
+
+    // ─── PR2 GUARD: Validate WIDTH_MASTER payloads before send ───
+    for (const action of actions) {
+      if (action.type === 'WIDTH_MASTER' && !action.payload?.profile) {
+        console.error('[confirmActions] WIDTH_MASTER rejected: missing profile', action.payload);
+        toast({ title: 'Ошибка: профиль не указан', description: 'WIDTH_MASTER требует обязательное поле profile', variant: 'destructive' });
+        return null;
+      }
+    }
+
     setConfirmingType('BATCH');
     try {
       const data = await invokeOrThrow('import-normalize', {

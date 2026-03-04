@@ -68,6 +68,9 @@ function ActionPreview({
 }) {
   const { t } = useTranslation();
   const isBlocked = missingFields && missingFields.length > 0;
+  // PR2: Also block if any WIDTH_MASTER action lacks profile
+  const hasInvalidWidth = actions.some(a => a.type === 'WIDTH_MASTER' && !a.payload?.profile);
+  const isDisabled = isBlocked || hasInvalidWidth;
 
   return (
     <div className="mt-2 p-2 bg-muted/50 rounded-lg border">
@@ -95,11 +98,14 @@ function ActionPreview({
         )}
       </div>
 
-      {/* Missing fields warning */}
-      {isBlocked && (
+      {/* Missing fields / invalid WIDTH warning */}
+      {(isBlocked || hasInvalidWidth) && (
         <div className="flex items-center gap-1 text-xs text-destructive mb-2 bg-destructive/5 rounded px-2 py-1">
           <AlertTriangle className="h-3 w-3 shrink-0" />
-          {t('normalize.missingFields', 'Требуется уточнение')}: {missingFields!.join(', ')}
+          {isBlocked
+            ? <>{t('normalize.missingFields', 'Требуется уточнение')}: {missingFields!.join(', ')}</>
+            : <>WIDTH_MASTER: {t('normalize.profileRequired', 'профиль не указан')}</>
+          }
         </div>
       )}
 
@@ -108,7 +114,7 @@ function ActionPreview({
         <Button 
           size="sm" variant="default" className="flex-1 h-7 text-xs" 
           onClick={onApply}
-          disabled={isBlocked || applying}
+          disabled={isDisabled || applying}
         >
           {applying ? (
             <Loader2 className="h-3 w-3 mr-1 animate-spin" />
@@ -233,6 +239,13 @@ export function AIChatPanel({
 
   // Handle actions apply via confirmActions batch
   const handleApplyActions = async (actions: AiChatV2Action[], msgIndex: number) => {
+    // PR2: Validate WIDTH_MASTER actions have profile
+    const invalidWidth = actions.find(a => a.type === 'WIDTH_MASTER' && !a.payload?.profile);
+    if (invalidWidth) {
+      console.error('[AIChatPanel] WIDTH_MASTER rejected: missing profile', invalidWidth.payload);
+      return;
+    }
+
     setApplyingIdx(msgIndex);
     try {
       const confirmPayload: ConfirmAction[] = actions.map(a => ({ type: a.type, payload: a.payload }));

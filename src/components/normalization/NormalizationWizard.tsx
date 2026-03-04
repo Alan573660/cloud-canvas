@@ -462,6 +462,13 @@ function AIChatPanel({
   }, [input, loading, sendChat, buildContext]);
 
   const handleApplyActions = useCallback(async (actions: AiChatV2Action[], msgIdx: number) => {
+    // PR2: Validate WIDTH_MASTER actions have profile before sending
+    const invalidWidth = actions.find(a => a.type === 'WIDTH_MASTER' && !a.payload?.profile);
+    if (invalidWidth) {
+      setMessages(prev => [...prev, { role: 'assistant', content: '⚠️ Действие WIDTH_MASTER не содержит профиль. Уточните профиль в запросе.' }]);
+      return;
+    }
+
     setApplyingIdx(msgIdx);
     try {
       const confirmPayload: ConfirmAction[] = actions.map(a => ({ type: a.type, payload: a.payload }));
@@ -509,20 +516,27 @@ function AIChatPanel({
                 {m.content}
 
                 {/* Pending actions */}
-                {m.actions && m.actions.length > 0 && !m.actionsApplied && (
+                {m.actions && m.actions.length > 0 && !m.actionsApplied && (() => {
+                  const hasInvalidWidth = m.actions!.some(a => a.type === 'WIDTH_MASTER' && !a.payload?.profile);
+                  return (
                   <div className="mt-2 p-2 bg-background/50 rounded border space-y-1">
                     <div className="flex items-center gap-1 mb-1">
                       <AlertTriangle className="h-3 w-3 text-primary" />
-                      <span className="text-[10px] font-semibold">{m.actions.length} действий</span>
+                      <span className="text-[10px] font-semibold">{m.actions!.length} действий</span>
                     </div>
-                    {m.actions.slice(0, 4).map((action, j) => (
+                    {m.actions!.slice(0, 4).map((action, j) => (
                       <div key={j} className="text-[10px] font-mono bg-muted/50 rounded px-2 py-0.5 truncate">
                         <span className="text-primary font-semibold">{action.type}</span>: {JSON.stringify(action.payload).substring(0, 80)}
                       </div>
                     ))}
-                    {m.actions.length > 4 && <span className="text-[10px] text-muted-foreground">+{m.actions.length - 4} ещё</span>}
+                    {m.actions!.length > 4 && <span className="text-[10px] text-muted-foreground">+{m.actions!.length - 4} ещё</span>}
+                    {hasInvalidWidth && (
+                      <div className="flex items-center gap-1 text-[10px] text-destructive bg-destructive/5 rounded px-2 py-0.5">
+                        <AlertCircle className="h-3 w-3 shrink-0" /> WIDTH_MASTER: профиль не указан
+                      </div>
+                    )}
                     <div className="flex gap-2 mt-1">
-                      <Button size="sm" className="h-6 text-[10px] flex-1" onClick={() => handleApplyActions(m.actions!, i)} disabled={applyingIdx === i}>
+                      <Button size="sm" className="h-6 text-[10px] flex-1" onClick={() => handleApplyActions(m.actions!, i)} disabled={applyingIdx === i || hasInvalidWidth}>
                         {applyingIdx === i ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Play className="h-3 w-3 mr-1" />}
                         Применить
                       </Button>
@@ -531,7 +545,8 @@ function AIChatPanel({
                       </Button>
                     </div>
                   </div>
-                )}
+                  );
+                })()}
 
                 {m.actionsApplied && (
                   <div className="mt-1 text-[10px] text-primary flex items-center gap-1">
@@ -866,6 +881,29 @@ export function NormalizationWizard({
     if (backendType === 'THICKNESS_SET') {
       const success = await norm.answerQuestion('THICKNESS_SET', token, value);
       if (success) void startScan({ aiSuggest: true, limit: 2000 });
+      return;
+    }
+
+    // PR2: WIDTH_MASTER needs profile + numeric payload, not token/canonical
+    if (backendType === 'WIDTH_MASTER') {
+      const profile = token;
+      if (!profile) {
+        toast({ title: 'Профиль не определён', description: 'Невозможно подтвердить ширину без профиля', variant: 'destructive' });
+        return;
+      }
+      const strVal = String(value);
+      const payload: Record<string, unknown> = { profile };
+      if (strVal.includes(':')) {
+        const [full, work] = strVal.split(':');
+        payload.full_mm = parseInt(full, 10) || 0;
+        payload.work_mm = parseInt(work, 10) || 0;
+      } else {
+        payload.full_mm = parseInt(strVal, 10) || 0;
+      }
+      console.log('[NormWizard] WIDTH_MASTER cluster confirm payload:', payload);
+      const action: ConfirmAction = { type: backendType, payload };
+      const result = await confirmBatch([action]);
+      if (result?.ok) void startScan({ aiSuggest: true, limit: 2000 });
       return;
     }
 
