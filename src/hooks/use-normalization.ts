@@ -142,8 +142,9 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   const [answeringQuestion, setAnsweringQuestion] = useState(false);
   const answerLocksRef = useRef<Set<string>>(new Set());
 
-  // Polling ref + counters
+  // Polling ref + counters — single-flight lock via pollingApplyIdRef
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollingApplyIdRef = useRef<string | null>(null); // single-flight: tracks which apply_id is being polled
   const pollStartRef = useRef<number>(0);
   const pollCountRef = useRef<number>(0);
   const pollErrorCountRef = useRef<number>(0);
@@ -152,6 +153,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   useEffect(() => {
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
+      pollingApplyIdRef.current = null;
     };
   }, []);
 
@@ -351,6 +353,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       clearInterval(pollingRef.current);
       pollingRef.current = null;
     }
+    pollingApplyIdRef.current = null;
     pollCountRef.current = 0;
     pollStartRef.current = 0;
     pollErrorCountRef.current = 0;
@@ -359,6 +362,12 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   // ─── Poll Apply Status (Contract v1: normalized fields) ───
 
   const pollApplyStatus = useCallback(async (currentApplyId: string, currentRunId: string) => {
+    // Single-flight guard: abort if this timer is for a stale apply_id
+    if (pollingApplyIdRef.current && pollingApplyIdRef.current !== currentApplyId) {
+      console.warn('[polling] stale apply_id, skipping', currentApplyId);
+      return;
+    }
+
     if (!pollStartRef.current) {
       pollStartRef.current = Date.now();
     }
@@ -428,17 +437,22 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     }
   }, [organizationId, importJobId, stopPolling]);
 
-  // ─── Start Polling Helper ─────────────────────────────────
+  // ─── Start Polling Helper (single-flight: kills existing poll) ──
 
   const startPolling = useCallback((newApplyId: string, rid: string) => {
+    // Kill any existing polling cycle
     if (pollingRef.current) {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
     }
 
+    // Set single-flight lock
+    pollingApplyIdRef.current = newApplyId;
+
     setApplyId(newApplyId);
     setApplyState('PENDING');
     setApplyPhase('unknown');
+    setApplyError(null);
     pollStartRef.current = Date.now();
     pollCountRef.current = 0;
     pollErrorCountRef.current = 0;
@@ -447,9 +461,22 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     void pollApplyStatus(newApplyId, rid);
 
     pollingRef.current = setInterval(() => {
+      // Single-flight: if apply_id changed between ticks, skip
+      if (pollingApplyIdRef.current !== newApplyId) return;
       pollApplyStatus(newApplyId, rid);
     }, POLL_INTERVAL_MS);
   }, [pollApplyStatus]);
+
+  // ─── Restart Polling (for "Повторить" button) ─────────────
+
+  const restartPolling = useCallback(() => {
+    const currentApplyId = applyId;
+    const currentRunId = runId;
+    if (currentApplyId && currentRunId) {
+      console.log('[restartPolling] Restarting poll for apply_id:', currentApplyId);
+      startPolling(currentApplyId, currentRunId);
+    }
+  }, [applyId, runId, startPolling]);
 
   // ─── Confirm Actions (Contract v1: batch) ─────────────────
 
@@ -778,5 +805,6 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
 
     // Utils
     reset,
+    restartPolling,
   };
 }

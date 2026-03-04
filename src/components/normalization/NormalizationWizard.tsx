@@ -981,19 +981,6 @@ export function NormalizationWizard({
     if (result?.ok) runScan();
   }, [confirmBatch, runScan, aiQuestions, norm]);
 
-  const getApplyStatusLabel = () => {
-    const phaseLabel = norm.applyPhase && norm.applyPhase !== 'unknown'
-      ? ` (${norm.applyPhase === 'materialize' ? 'подготовка' : norm.applyPhase === 'merge' ? 'слияние' : norm.applyPhase})`
-      : '';
-    switch (flow.state) {
-      case 'APPLY_STARTING': return `Запуск${phaseLabel}…`;
-      case 'APPLY_RUNNING': return `Применяем${phaseLabel}… ${norm.applyProgress > 0 ? norm.applyProgress + '%' : ''}`;
-      case 'APPLY_DONE': return '✓ Готово';
-      case 'ERROR': return flow.context.lastError || 'Ошибка';
-      default: return '';
-    }
-  };
-
   // ═══════════════════════════════════════════════════════════════
   // RENDER
   // ═══════════════════════════════════════════════════════════════
@@ -1067,39 +1054,62 @@ export function NormalizationWizard({
 
             <div className="hidden lg:block h-8 border-l" />
 
-            {/* Status indicators */}
+            {/* Status indicators — explicit PENDING/RUNNING/DONE/FAILED */}
             <div className="flex items-center gap-3 flex-1 min-w-0">
               {flow.state === 'SCANNING' && (
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground rounded-full border px-2 py-1">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Сканирование…
-                </div>
+                <Badge variant="secondary" className="text-xs">
+                  <Loader2 className="h-3 w-3 mr-1 animate-spin" /> Сканирование…
+                </Badge>
               )}
               {norm.catalogLoading && flow.state !== 'SCANNING' && (
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground rounded-full border px-2 py-1">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Загрузка…
-                </div>
+                <Badge variant="outline" className="text-xs">
+                  <Loader2 className="h-3 w-3 mr-1 animate-spin" /> Загрузка…
+                </Badge>
               )}
-              {(flow.state === 'APPLY_STARTING' || flow.state === 'APPLY_RUNNING' || flow.state === 'APPLY_DONE' || flow.state === 'ERROR') && (
+
+              {/* Apply state: PENDING / RUNNING with phase + progress */}
+              {(flow.state === 'APPLY_STARTING' || flow.state === 'APPLY_RUNNING') && (
                 <div className="flex items-center gap-3">
-                  <Badge variant={flow.state === 'APPLY_DONE' ? 'default' : flow.state === 'ERROR' ? 'destructive' : 'secondary'} className="text-xs">
-                    {isApplying && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
-                    {getApplyStatusLabel()}
+                  <Badge variant="secondary" className="text-xs">
+                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    {flow.state === 'APPLY_STARTING' ? 'PENDING' : 'RUNNING'}
+                    {norm.applyPhase && norm.applyPhase !== 'unknown' && ` · ${norm.applyPhase}`}
                   </Badge>
-                  {isApplying && (
-                    <div className="flex items-center gap-2">
-                      <Progress value={norm.applyProgress} className="h-1.5 w-24" />
-                      <span className="text-[10px] text-muted-foreground tabular-nums">{norm.applyProgress}%</span>
-                    </div>
-                  )}
+                  <Progress value={norm.applyProgress} className="h-1.5 w-24" />
+                  <span className="text-[10px] text-muted-foreground tabular-nums">{norm.applyProgress}%</span>
                 </div>
               )}
-              {!isApplying && flow.state !== 'SCANNING' && (
-                <div className="hidden md:flex items-center gap-2 text-[11px] text-muted-foreground rounded-full border px-2 py-1">
-                  <span>В работе:</span>
-                  <strong className="text-foreground">{questionCards.reduce((s, c) => s + c.count, 0).toLocaleString('ru')}</strong>
+
+              {/* Apply DONE */}
+              {flow.state === 'APPLY_DONE' && (
+                <Badge variant="default" className="text-xs">
+                  <CheckCircle2 className="h-3 w-3 mr-1" /> DONE
+                </Badge>
+              )}
+
+              {/* Error / POLL_EXCEEDED — single consolidated message */}
+              {flow.state === 'ERROR' && flow.context.lastError && (
+                <div className="flex items-center gap-2 text-xs text-destructive max-w-lg">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{flow.context.lastError}</span>
+                  <Button
+                    size="sm" variant="outline"
+                    className="h-6 text-[10px] px-2 shrink-0 border-destructive/30 text-destructive hover:bg-destructive/10"
+                    onClick={() => {
+                      if (norm.applyId && norm.runId) {
+                        norm.restartPolling();
+                      } else {
+                        handleRunScan();
+                      }
+                    }}
+                  >
+                    <RefreshCw className="h-3 w-3 mr-1" /> Повторить
+                  </Button>
                 </div>
               )}
-              {norm.dryRunResult?.stats && flow.state !== 'SCANNING' && (
+
+              {/* Patches ready */}
+              {norm.dryRunResult?.stats && flow.state !== 'SCANNING' && flow.state !== 'ERROR' && (
                 <span className="text-xs text-muted-foreground ml-auto">
                   Исправлений: <strong className="text-foreground">{norm.dryRunResult.stats.patches_ready}</strong>
                 </span>
