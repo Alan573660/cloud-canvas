@@ -98,7 +98,7 @@ function ActionPreview({
       </div>
 
       {/* Missing fields / invalid WIDTH warning */}
-      {(isBlocked || hasInvalidWidth) && (
+      {(isBlocked || hasInvalidActions) && (
         <div className="flex items-center gap-1 text-xs text-destructive mb-2 bg-destructive/5 rounded px-2 py-1">
           <AlertTriangle className="h-3 w-3 shrink-0" />
           {isBlocked

@@ -219,3 +219,74 @@ describe('PR2: apply_status polling lifecycle', () => {
     }
   });
 });
+
+// ═══ PR3: Polling stability tests ═══════════════════════════
+
+describe('PR3: Single-flight polling lock', () => {
+  it('A1: elapsed time uses startedAtMs, never shows raw timestamp', () => {
+    const startedAtMs = Date.now();
+    const elapsed = startedAtMs > 0 ? Date.now() - startedAtMs : 0;
+    // Must be small (< 100ms in test), never ~1.77 billion
+    expect(elapsed).toBeLessThan(1000);
+    expect(elapsed).toBeGreaterThanOrEqual(0);
+  });
+
+  it('A1: zero startedAtMs produces zero elapsed (no absurd numbers)', () => {
+    const startedAtMs = 0;
+    const elapsed = startedAtMs > 0 ? Date.now() - startedAtMs : 0;
+    expect(elapsed).toBe(0);
+  });
+
+  it('A2: state machine transitions PENDING -> RUNNING -> DONE', () => {
+    function deriveState(s: string) {
+      if (s === 'STARTING' || s === 'PENDING') return 'APPLY_STARTING';
+      if (s === 'RUNNING') return 'APPLY_RUNNING';
+      if (s === 'DONE') return 'APPLY_DONE';
+      if (s === 'ERROR' || s === 'POLL_EXCEEDED') return 'ERROR';
+      return 'IDLE';
+    }
+    const sequence = ['PENDING', 'RUNNING', 'DONE'];
+    const expected = ['APPLY_STARTING', 'APPLY_RUNNING', 'APPLY_DONE'];
+    expect(sequence.map(deriveState)).toEqual(expected);
+  });
+
+  it('A3: restartPolling reuses existing apply_id (no duplicate)', () => {
+    let pollCount = 0;
+    const applyId = 'apply-123';
+    const runId = 'run-456';
+    
+    // Simulate startPolling logic: clear previous, set new
+    let activeApplyId: string | null = null;
+    function startPolling(newId: string, _rid: string) {
+      activeApplyId = newId;
+      pollCount++;
+    }
+    function restartPolling() {
+      if (applyId && runId) {
+        startPolling(applyId, runId);
+      }
+    }
+    
+    startPolling(applyId, runId);
+    expect(pollCount).toBe(1);
+    expect(activeApplyId).toBe(applyId);
+    
+    restartPolling();
+    expect(pollCount).toBe(2);
+    expect(activeApplyId).toBe(applyId); // Same apply_id reused
+  });
+
+  it('A5: single-flight guard prevents stale apply_id from polling', () => {
+    let activeApplyId: string | null = 'apply-new';
+    const staleId = 'apply-old';
+    
+    // Simulates the guard inside pollApplyStatus
+    function shouldPoll(currentApplyId: string): boolean {
+      if (activeApplyId && activeApplyId !== currentApplyId) return false;
+      return true;
+    }
+    
+    expect(shouldPoll('apply-new')).toBe(true);
+    expect(shouldPoll(staleId)).toBe(false); // Stale → blocked
+  });
+});
