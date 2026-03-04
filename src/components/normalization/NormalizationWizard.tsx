@@ -253,10 +253,11 @@ function backendQuestionToAI(q: BackendQuestion, index: number): AIQuestion {
 // ─── Question Card ────────────────────────────────────────────
 
 function QuestionCard({
-  card, onResolve, relatedQuestions,
+  card, onResolve, onSkip, relatedQuestions,
 }: {
   card: DashboardQuestionCard;
   onResolve: (type: string) => void;
+  onSkip: (type: string) => void;
   relatedQuestions?: AIQuestion[];
 }) {
   const cfg = Q_TYPE_CONFIG[card.type] || { icon: AlertTriangle, label: card.type, color: 'bg-muted border-border text-foreground' };
@@ -264,26 +265,31 @@ function QuestionCard({
   const questionText = relatedQuestions?.[0]?.ask;
 
   return (
-    <div className={`w-full text-left p-3.5 rounded-xl border transition-all duration-200 hover:shadow-md hover:scale-[1.01] ${cfg.color}`}>
+    <div className={`w-full text-left p-4 rounded-xl border transition-all duration-200 hover:shadow-md ${cfg.color}`}>
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <div className="h-6 w-6 rounded-md bg-background/70 border flex items-center justify-center">
-            <Icon className="h-3.5 w-3.5" />
+          <div className="h-7 w-7 rounded-md bg-background/70 border flex items-center justify-center">
+            <Icon className="h-4 w-4" />
           </div>
-          <span className="font-semibold text-xs tracking-tight">{card.label || cfg.label}</span>
+          <span className="font-semibold text-sm tracking-tight">{card.label || cfg.label}</span>
         </div>
-        <Badge variant="secondary" className="text-xs font-bold rounded-full">{card.count} товаров</Badge>
+        <Badge variant="secondary" className="text-xs font-bold rounded-full px-2.5">{card.count} товаров</Badge>
       </div>
-      {questionText && <p className="text-xs mb-2 opacity-85 leading-relaxed">{questionText}</p>}
+      {questionText && <p className="text-sm mb-2.5 opacity-85 leading-relaxed">{questionText}</p>}
       {card.examples && card.examples.length > 0 && (
-        <div className="mb-2.5 bg-background/50 border rounded-lg p-1.5">
-          <span className="text-[10px] text-muted-foreground">Примеры: </span>
-          <span className="text-[10px] font-mono">{card.examples.slice(0, 3).join(', ')}</span>
+        <div className="mb-3 bg-background/50 border rounded-lg p-2">
+          <span className="text-xs text-muted-foreground">Примеры: </span>
+          <span className="text-xs font-mono">{card.examples.slice(0, 4).join(', ')}</span>
         </div>
       )}
-      <Button size="sm" variant="default" className="h-7 text-[10px] px-3 w-full rounded-lg" onClick={() => onResolve(card.type)}>
-        <CheckCircle2 className="h-3 w-3 mr-1" /> Открыть и подтвердить
-      </Button>
+      <div className="flex gap-2">
+        <Button size="sm" variant="default" className="h-8 text-xs px-4 flex-1 rounded-lg" onClick={() => onResolve(card.type)}>
+          <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" /> Открыть и подтвердить
+        </Button>
+        <Button size="sm" variant="ghost" className="h-8 text-xs px-3 rounded-lg text-muted-foreground hover:text-foreground" onClick={() => onSkip(card.type)}>
+          Пропустить
+        </Button>
+      </div>
     </div>
   );
 }
@@ -291,11 +297,12 @@ function QuestionCard({
 // ─── Question Answer Form ─────────────────────────────────────
 
 function QuestionAnswerForm({
-  question, onSubmit, onClose, loading,
+  question, onSubmit, onClose, onSkip, loading,
 }: {
   question: AIQuestion;
   onSubmit: (value: string, scope?: 'all' | 'selected') => void;
   onClose: () => void;
+  onSkip?: () => void;
   loading: boolean;
 }) {
   const isWidth = question.type === 'width';
@@ -393,10 +400,17 @@ function QuestionAnswerForm({
         </>
       )}
 
-      <Button size="sm" onClick={handleSubmit} disabled={loading || !canSubmit} className="h-7 text-xs w-full">
-        {loading ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
-        Подтвердить
-      </Button>
+      <div className="flex gap-2">
+        <Button size="sm" onClick={handleSubmit} disabled={loading || !canSubmit} className="h-8 text-xs flex-1">
+          {loading ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5 mr-1" />}
+          Подтвердить
+        </Button>
+        {onSkip && (
+          <Button size="sm" variant="ghost" onClick={onSkip} className="h-8 text-xs text-muted-foreground">
+            Пропустить
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
@@ -741,17 +755,42 @@ export function NormalizationWizard({
     }).catch(err => console.warn('[NormWizard] ai_policy seed failed:', err));
 
     void fetchDashboard(effectiveJobId);
-    void fetchCatalogItems(2000);
+    void fetchCatalogItems(10000);
     runScan();
   }, [open, organizationId, effectiveJobId, fetchDashboard, fetchCatalogItems, runScan]);
 
   useEffect(() => { if (!open) autoStartedRef.current = false; }, [open]);
 
+  // Merge: catalog items as base, patches overlay on top by id
   const items = useMemo(() => {
     const patches = norm.dryRunResult?.patches_sample || [];
-    if (patches.length > 0) return patches.map(patchToCanonical);
-    if (norm.catalogItems.length > 0) return norm.catalogItems.map(catalogRowToCanonical);
-    return [];
+    const catalogRows = norm.catalogItems || [];
+    
+    if (patches.length === 0 && catalogRows.length === 0) return [];
+    
+    // Build patch map for fast lookup
+    const patchMap = new Map<string, CanonicalProduct>();
+    for (const p of patches) {
+      const canonical = patchToCanonical(p);
+      patchMap.set(canonical.id, canonical);
+    }
+    
+    // If we have catalog items, merge with patches (patches take priority)
+    if (catalogRows.length > 0) {
+      const merged = new Map<string, CanonicalProduct>();
+      for (const row of catalogRows) {
+        const canonical = catalogRowToCanonical(row);
+        merged.set(canonical.id, patchMap.get(canonical.id) || canonical);
+      }
+      // Also add patches that aren't in catalog (new items from enricher)
+      for (const [id, p] of patchMap) {
+        if (!merged.has(id)) merged.set(id, p);
+      }
+      return Array.from(merged.values());
+    }
+    
+    // Fallback: only patches
+    return patches.map(patchToCanonical);
   }, [norm.dryRunResult, norm.catalogItems]);
 
   // Filter out questions about DOBOR items (they don't need WIDTH/PROFILE normalization)
@@ -1191,7 +1230,7 @@ export function NormalizationWizard({
             <ResizableHandle withHandle />
 
             {/* CENTER: Clusters / Table */}
-            <ResizablePanel defaultSize={rightPanelOpen ? 56 : 86} minSize={30} className="bg-background">
+            <ResizablePanel defaultSize={rightPanelOpen ? 51 : 86} minSize={30} className="bg-background">
               <div className="flex flex-col h-full">
                 {/* Center toolbar */}
                 <div className="px-3 py-2 border-b flex items-center gap-2 shrink-0 bg-gradient-to-r from-muted/50 to-background">
@@ -1283,7 +1322,7 @@ export function NormalizationWizard({
               <ResizableHandle withHandle />
 
               {/* RIGHT: Questions / Chat */}
-              <ResizablePanel defaultSize={30} minSize={20} maxSize={45} className="border-l bg-card/40">
+              <ResizablePanel defaultSize={35} minSize={22} maxSize={50} className="border-l bg-card/40">
               <Tabs value={rightTab} onValueChange={v => setRightTab(v as typeof rightTab)} className="flex flex-col h-full">
                 <div className="flex items-center border-b shrink-0 bg-gradient-to-r from-background to-muted/20">
                   <TabsList className="rounded-none h-9 px-0 bg-transparent justify-start gap-0 flex-1">
@@ -1341,7 +1380,7 @@ export function NormalizationWizard({
                       </div>
 
                       {activeQuestionForm && (
-                        <QuestionAnswerForm question={activeQuestionForm} onSubmit={handleAnswerQuestion} onClose={() => setActiveQuestionForm(null)} loading={norm.answeringQuestion} />
+                        <QuestionAnswerForm question={activeQuestionForm} onSubmit={handleAnswerQuestion} onClose={() => setActiveQuestionForm(null)} onSkip={() => { setActiveQuestionForm(null); toast({ title: 'Пропущено' }); }} loading={norm.answeringQuestion} />
                       )}
 
                       {filteredQuestionCards.length > 0 ? (
@@ -1356,7 +1395,7 @@ export function NormalizationWizard({
                                 if (card.type === 'COLOR_MAP' && t === 'COLOR') return true;
                                 return t === card.type;
                               });
-                              return <QuestionCard key={card.type} card={card} onResolve={handleResolveQuestionType} relatedQuestions={relatedQs} />;
+                              return <QuestionCard key={card.type} card={card} onResolve={handleResolveQuestionType} onSkip={(type) => { setConfirmedTypes(prev => new Set(prev).add(type)); toast({ title: 'Пропущено' }); }} relatedQuestions={relatedQs} />;
                             })}
                           </div>
                         </>
