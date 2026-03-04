@@ -15,6 +15,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { toast } from '@/hooks/use-toast';
 import { parseEdgeFunctionError, isHashMismatch } from '@/lib/edge-error-utils';
 import { apiInvoke } from '@/lib/api-client';
+import { normalizeAndValidateConfirmActions } from '@/lib/confirm-action-guards';
 
 // ─── Re-export all Contract v1 types from canonical source ────
 export type {
@@ -352,11 +353,16 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     }
     pollCountRef.current = 0;
     pollStartRef.current = 0;
+    pollErrorCountRef.current = 0;
   }, []);
 
   // ─── Poll Apply Status (Contract v1: normalized fields) ───
 
   const pollApplyStatus = useCallback(async (currentApplyId: string, currentRunId: string) => {
+    if (!pollStartRef.current) {
+      pollStartRef.current = Date.now();
+    }
+
     pollCountRef.current += 1;
     const elapsed = Date.now() - pollStartRef.current;
 
@@ -415,7 +421,8 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       pollErrorCountRef.current += 1;
       if (pollErrorCountRef.current >= POLL_MAX_CONSECUTIVE_ERRORS) {
         setApplyState('ERROR');
-        setApplyError(parseEdgeFunctionError(err));
+        const elapsedSec = Math.round((Date.now() - pollStartRef.current) / 1000);
+        setApplyError(`[apply_status] ${parseEdgeFunctionError(err)} (после ${pollCountRef.current} запросов / ${elapsedSec}с)`);
         stopPolling();
       }
     }
@@ -424,12 +431,21 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   // ─── Start Polling Helper ─────────────────────────────────
 
   const startPolling = useCallback((newApplyId: string, rid: string) => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+
     setApplyId(newApplyId);
     setApplyState('PENDING');
     setApplyPhase('unknown');
     pollStartRef.current = Date.now();
     pollCountRef.current = 0;
     pollErrorCountRef.current = 0;
+
+    // First check immediately (do not wait first interval tick)
+    void pollApplyStatus(newApplyId, rid);
+
     pollingRef.current = setInterval(() => {
       pollApplyStatus(newApplyId, rid);
     }, POLL_INTERVAL_MS);
@@ -439,13 +455,24 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
 
   const confirmActions = useCallback(async (actions: ConfirmAction[], jobId?: string): Promise<ConfirmResult | null> => {
     if (actions.length === 0) return null;
+    const guarded = normalizeAndValidateConfirmActions(actions);
+    if (guarded.issues.length > 0) {
+      const firstIssue = guarded.issues[0];
+      toast({
+        title: 'Неполное действие подтверждения',
+        description: `${firstIssue.type}: ${firstIssue.reason}`,
+        variant: 'destructive',
+      });
+      return null;
+    }
+
     setConfirmingType('BATCH');
     try {
       const data = await invokeOrThrow('import-normalize', {
         op: 'confirm',
         organization_id: organizationId,
         import_job_id: jobId || importJobId || 'current',
-          actions,
+          actions: guarded.actions,
       });
 
       const result = data as ConfirmResult;
@@ -453,7 +480,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
 
       toast({
         title: 'Правила применены',
-        description: `${result.stats?.updates || actions.length} обновлений${result.apply_started ? ', применение запущено' : ''}`,
+        description: `${result.stats?.updates || guarded.actions.length} обновлений${result.apply_started ? ', применение запущено' : ''}`,
       });
 
       // If apply was auto-started, begin polling
