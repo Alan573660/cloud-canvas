@@ -59,12 +59,13 @@ interface NormalizationWizardProps {
 // ─── Question type config ─────────────────────────────────────
 
 const Q_TYPE_CONFIG: Record<string, { icon: React.ElementType; label: string; color: string }> = {
-  WIDTH_MASTER:  { icon: Ruler,      label: 'Ширины',     color: 'bg-blue-500/10 border-blue-500/30 text-blue-700' },
-  COATING_MAP:   { icon: Layers,     label: 'Покрытия',   color: 'bg-orange-500/10 border-orange-500/30 text-orange-700' },
-  COLOR_MAP:     { icon: Palette,    label: 'Цвета',      color: 'bg-purple-500/10 border-purple-500/30 text-purple-700' },
-  THICKNESS_SET: { icon: BarChart3,  label: 'Толщины',    color: 'bg-green-500/10 border-green-500/30 text-green-700' },
-  PROFILE_MAP:   { icon: TrendingUp, label: 'Профили',    color: 'bg-cyan-500/10 border-cyan-500/30 text-cyan-700' },
-  CATEGORY_FIX:  { icon: Activity,   label: 'Категории',  color: 'bg-destructive/10 border-destructive/30 text-destructive' },
+  WIDTH_MASTER:      { icon: Ruler,      label: 'Ширины',         color: 'bg-blue-500/10 border-blue-500/30 text-blue-700' },
+  COATING_MAP:       { icon: Layers,     label: 'Покрытия',       color: 'bg-orange-500/10 border-orange-500/30 text-orange-700' },
+  COLOR_MAP:         { icon: Palette,    label: 'Цвета',          color: 'bg-purple-500/10 border-purple-500/30 text-purple-700' },
+  THICKNESS_SET:     { icon: BarChart3,  label: 'Толщины',        color: 'bg-green-500/10 border-green-500/30 text-green-700' },
+  PROFILE_MAP:       { icon: TrendingUp, label: 'Профили',        color: 'bg-cyan-500/10 border-cyan-500/30 text-cyan-700' },
+  CATEGORY_FIX:      { icon: Activity,   label: 'Категории',      color: 'bg-destructive/10 border-destructive/30 text-destructive' },
+  PRODUCT_KIND_MAP:  { icon: Activity,   label: 'Тип продукции',  color: 'bg-amber-500/10 border-amber-500/30 text-amber-700' },
 };
 
 const CAT_LABELS: Record<string, string> = {
@@ -328,7 +329,7 @@ function QuestionAnswerForm({
       )}
 
       {isWidth ? (
-        <div className="space-y-2">
+      <div className="space-y-2">
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="text-[10px] text-muted-foreground block mb-1">Полная, мм *</label>
@@ -919,7 +920,7 @@ export function NormalizationWizard({
 
             <div className="flex items-center gap-2">
               {DEV_MODE && !propJobId && (
-                <Input value={inputJobId} onChange={e => setInputJobId(e.target.value)} placeholder="Job ID" className="h-7 w-40 text-xs" />
+                <Input value={inputJobId} onChange={e => setInputJobId(e.target.value)} placeholder="ID задачи импорта" className="h-7 w-40 text-xs" />
               )}
               <Button size="sm" variant="ghost" onClick={() => setShowSettings(v => !v)} className="h-7 text-xs gap-1">
                 <Settings2 className="h-3.5 w-3.5" />
