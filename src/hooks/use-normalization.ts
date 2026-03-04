@@ -351,16 +351,17 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       pollingRef.current = null;
     }
     pollCountRef.current = 0;
-    pollStartRef.current = 0;
+    // NOTE: Do NOT reset pollStartRef to 0 — race condition causes
+    // pollApplyStatus to compute elapsed = Date.now() - 0 = absurd number
   }, []);
 
   // ─── Poll Apply Status (Contract v1: normalized fields) ───
 
   const pollApplyStatus = useCallback(async (currentApplyId: string, currentRunId: string) => {
     pollCountRef.current += 1;
-    const elapsed = Date.now() - pollStartRef.current;
+    const elapsed = pollStartRef.current > 0 ? Date.now() - pollStartRef.current : 0;
 
-    if (elapsed > POLL_MAX_DURATION_MS || pollCountRef.current > POLL_MAX_REQUESTS) {
+    if ((pollStartRef.current > 0 && elapsed > POLL_MAX_DURATION_MS) || pollCountRef.current > POLL_MAX_REQUESTS) {
       setApplyState('POLL_EXCEEDED');
       setApplyError(
         `Polling превысил лимит (${Math.round(elapsed / 1000)}с / ${pollCountRef.current} запросов). ` +
