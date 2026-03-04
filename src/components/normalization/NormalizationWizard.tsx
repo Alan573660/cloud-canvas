@@ -808,37 +808,6 @@ export function NormalizationWizard({
     return list;
   }, [aiQuestions, questionQuery, highImpactOnly]);
 
-  const filteredQuestionCards = useMemo(() => {
-    let cards = [...questionCards].sort((a, b) => (b.count || 0) - (a.count || 0));
-    const q = questionQuery.trim().toLowerCase();
-    if (q) {
-      cards = cards.filter((c) =>
-        (c.label || '').toLowerCase().includes(q) ||
-        (c.type || '').toLowerCase().includes(q) ||
-        (c.examples || []).some((e) => e.toLowerCase().includes(q))
-      );
-    }
-    if (highImpactOnly) {
-      cards = cards.filter((c) => (c.count || 0) >= 10);
-    }
-    return cards;
-  }, [questionCards, questionQuery, highImpactOnly]);
-
-  const filteredQuestionDetails = useMemo(() => {
-    let list = [...aiQuestions];
-    const q = questionQuery.trim().toLowerCase();
-    if (q) {
-      list = list.filter((item) =>
-        (item.token || '').toLowerCase().includes(q) ||
-        (item.ask || '').toLowerCase().includes(q) ||
-        (item.examples || []).some((ex) => ex.toLowerCase().includes(q))
-      );
-    }
-    if (highImpactOnly) {
-      list = list.filter((item) => (item.affected_count || 0) >= 10);
-    }
-    return list;
-  }, [aiQuestions, questionQuery, highImpactOnly]);
 
   const categoryStats = useMemo(() => {
     const stats: Record<string, { total: number; ready: number; needsAttention: number }> = {};
