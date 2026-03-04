@@ -415,7 +415,7 @@ export function ClusterDetailPanel({
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full overflow-hidden">
       {clusterPath && <ClusterHeader clusterPath={clusterPath} readyCount={readyCount} needsAttentionCount={needsAttentionCount} />}
 
       {/* AI Questions for this cluster */}
@@ -439,9 +439,9 @@ export function ClusterDetailPanel({
       )}
 
       {/* Items Table */}
-      <ScrollArea className="flex-1">
+      <div className="flex-1 min-h-0 overflow-auto">
         <Table>
-          <TableHeader className="sticky top-0 bg-background z-10">
+          <TableHeader className="sticky top-0 bg-background z-10 shadow-sm">
             <TableRow>
               <TableHead className="w-[40px]"></TableHead>
               <TableHead className="w-[100px]">ID</TableHead>
@@ -511,7 +511,7 @@ export function ClusterDetailPanel({
             )}
           </TableBody>
         </Table>
-      </ScrollArea>
+      </div>
     </div>
   );
 }
