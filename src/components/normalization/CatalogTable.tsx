@@ -293,9 +293,9 @@ export function CatalogTable({
       </div>
 
       {/* Table */}
-      <ScrollArea className="flex-1">
+      <div className="flex-1 min-h-0 overflow-auto">
         <Table>
-          <TableHeader className="sticky top-0 bg-background z-10">
+          <TableHeader className="sticky top-0 bg-background z-10 shadow-sm">
             <TableRow>
               <TableHead className="w-[120px]">ID</TableHead>
               <TableHead className="min-w-[200px]">{t('products.title', 'Название')}</TableHead>
@@ -410,7 +410,7 @@ export function CatalogTable({
             )}
           </TableBody>
         </Table>
-      </ScrollArea>
+      </div>
 
       {/* Pagination */}
       {totalCount > 0 && (

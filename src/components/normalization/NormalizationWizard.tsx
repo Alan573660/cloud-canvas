@@ -893,7 +893,7 @@ export function NormalizationWizard({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[98vw] w-[1700px] h-[95vh] flex flex-col p-0 gap-0">
+      <DialogContent className="max-w-[98vw] w-[1700px] h-[92vh] max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
 
         {/* ═══ TOP STICKY BAR ═══ */}
         <div className="shrink-0 border-b bg-background">
@@ -1036,8 +1036,8 @@ export function NormalizationWizard({
         </div>
 
         {/* ═══ BODY: Resizable 3-Panel Layout ═══ */}
-        <div className="flex-1 min-h-0 overflow-hidden">
-          <ResizablePanelGroup direction="horizontal" className="h-full">
+        <div className="flex-1 min-h-0 overflow-hidden relative">
+          <ResizablePanelGroup direction="horizontal" className="absolute inset-0">
             {/* LEFT: Categories */}
             <ResizablePanel defaultSize={14} minSize={10} maxSize={22}>
               <CategorySidebar
@@ -1054,7 +1054,7 @@ export function NormalizationWizard({
 
             {/* CENTER: Clusters / Table */}
             <ResizablePanel defaultSize={rightPanelOpen ? 56 : 86} minSize={30}>
-              <div className="flex flex-col h-full">
+              <div className="flex flex-col h-full overflow-hidden">
                 {/* Center toolbar */}
                 <div className="px-3 py-2 border-b flex items-center gap-2 shrink-0 bg-muted/30">
                   <span className="text-xs font-semibold text-muted-foreground">
@@ -1067,8 +1067,8 @@ export function NormalizationWizard({
                 </div>
 
                 {isNormalizable ? (
-                  <div className="flex-1 flex min-h-0">
-                    <div className="w-72 border-r shrink-0">
+                  <div className="flex-1 flex min-h-0 overflow-hidden">
+                    <div className="w-64 border-r shrink-0 overflow-hidden">
                       <ClusterTree
                         items={filteredItems}
                         selectedCluster={selectedCluster}
@@ -1077,7 +1077,7 @@ export function NormalizationWizard({
                         onToggleNode={handleToggleNode}
                       />
                     </div>
-                    <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0 overflow-hidden">
                       <ClusterDetailPanel
                         items={filteredItems}
                         clusterPath={selectedCluster}
@@ -1089,7 +1089,7 @@ export function NormalizationWizard({
                     </div>
                   </div>
                 ) : (
-                  <div className="flex-1 min-w-0">
+                  <div className="flex-1 min-w-0 overflow-hidden">
                     <ClusterDetailPanel
                       items={filteredItems}
                       clusterPath={null}
