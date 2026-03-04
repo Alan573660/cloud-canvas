@@ -61,13 +61,12 @@ interface NormalizationWizardProps {
 // ─── Question type config ─────────────────────────────────────
 
 const Q_TYPE_CONFIG: Record<string, { icon: React.ElementType; label: string; color: string }> = {
-  WIDTH_MASTER:      { icon: Ruler,      label: 'Ширины',         color: 'bg-blue-500/10 border-blue-500/30 text-blue-700' },
-  COATING_MAP:       { icon: Layers,     label: 'Покрытия',       color: 'bg-orange-500/10 border-orange-500/30 text-orange-700' },
-  COLOR_MAP:         { icon: Palette,    label: 'Цвета',          color: 'bg-purple-500/10 border-purple-500/30 text-purple-700' },
-  THICKNESS_SET:     { icon: BarChart3,  label: 'Толщины',        color: 'bg-green-500/10 border-green-500/30 text-green-700' },
-  PROFILE_MAP:       { icon: TrendingUp, label: 'Профили',        color: 'bg-cyan-500/10 border-cyan-500/30 text-cyan-700' },
-  CATEGORY_FIX:      { icon: Activity,   label: 'Категории',      color: 'bg-destructive/10 border-destructive/30 text-destructive' },
-  PRODUCT_KIND_MAP:  { icon: Activity,   label: 'Тип продукции',  color: 'bg-amber-500/10 border-amber-500/30 text-amber-700' },
+  WIDTH_MASTER:  { icon: Ruler,      label: 'Ширины',     color: 'bg-gradient-to-r from-blue-500/20 to-indigo-500/10 border-blue-500/40 text-blue-800 dark:text-blue-300' },
+  COATING_MAP:   { icon: Layers,     label: 'Покрытия',   color: 'bg-gradient-to-r from-amber-500/20 to-orange-500/10 border-orange-500/40 text-orange-800 dark:text-orange-300' },
+  COLOR_MAP:     { icon: Palette,    label: 'Цвета',      color: 'bg-gradient-to-r from-violet-500/20 to-purple-500/10 border-purple-500/40 text-purple-800 dark:text-purple-300' },
+  THICKNESS_SET: { icon: BarChart3,  label: 'Толщины',    color: 'bg-gradient-to-r from-emerald-500/20 to-green-500/10 border-green-500/40 text-emerald-800 dark:text-emerald-300' },
+  PROFILE_MAP:   { icon: TrendingUp, label: 'Профили',    color: 'bg-gradient-to-r from-cyan-500/20 to-sky-500/10 border-cyan-500/40 text-cyan-800 dark:text-cyan-300' },
+  CATEGORY_FIX:  { icon: Activity,   label: 'Категории',  color: 'bg-gradient-to-r from-rose-500/20 to-red-500/10 border-destructive/50 text-destructive' },
 };
 
 const CAT_LABELS: Record<string, string> = {
@@ -265,23 +264,25 @@ function QuestionCard({
   const questionText = relatedQuestions?.[0]?.ask;
 
   return (
-    <div className={`w-full text-left p-3 rounded-lg border transition-all hover:shadow-sm ${cfg.color}`}>
-      <div className="flex items-center justify-between mb-1.5">
+    <div className={`w-full text-left p-3.5 rounded-xl border transition-all duration-200 hover:shadow-md hover:scale-[1.01] ${cfg.color}`}>
+      <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <Icon className="h-3.5 w-3.5" />
-          <span className="font-medium text-xs">{card.label || cfg.label}</span>
+          <div className="h-6 w-6 rounded-md bg-background/70 border flex items-center justify-center">
+            <Icon className="h-3.5 w-3.5" />
+          </div>
+          <span className="font-semibold text-xs tracking-tight">{card.label || cfg.label}</span>
         </div>
-        <Badge variant="secondary" className="text-xs font-bold">{card.count} товаров</Badge>
+        <Badge variant="secondary" className="text-xs font-bold rounded-full">{card.count} товаров</Badge>
       </div>
-      {questionText && <p className="text-xs mb-1.5 opacity-80">{questionText}</p>}
+      {questionText && <p className="text-xs mb-2 opacity-85 leading-relaxed">{questionText}</p>}
       {card.examples && card.examples.length > 0 && (
-        <div className="mb-2">
+        <div className="mb-2.5 bg-background/50 border rounded-lg p-1.5">
           <span className="text-[10px] text-muted-foreground">Примеры: </span>
           <span className="text-[10px] font-mono">{card.examples.slice(0, 3).join(', ')}</span>
         </div>
       )}
-      <Button size="sm" variant="default" className="h-6 text-[10px] px-3 w-full" onClick={() => onResolve(card.type)}>
-        <CheckCircle2 className="h-3 w-3 mr-1" /> Подтвердить
+      <Button size="sm" variant="default" className="h-7 text-[10px] px-3 w-full rounded-lg" onClick={() => onResolve(card.type)}>
+        <CheckCircle2 className="h-3 w-3 mr-1" /> Открыть и подтвердить
       </Button>
     </div>
   );
@@ -318,10 +319,10 @@ function QuestionAnswerForm({
   const canSubmit = isWidth ? (!!fullMm && !!widthProfile) : (!!value || selected.length > 0);
 
   return (
-    <div className="border rounded-lg p-3 bg-muted/30 space-y-3">
+    <div className="border rounded-xl p-3.5 bg-gradient-to-b from-background to-muted/40 space-y-3 shadow-sm">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          {(() => { const cfg = Q_TYPE_CONFIG[(question.type || '').toUpperCase() + '_MASTER'] || Q_TYPE_CONFIG[(question.type || '').toUpperCase() + '_MAP']; const QIcon = cfg?.icon || AlertTriangle; return <QIcon className="h-3.5 w-3.5 text-primary" />; })()}
+          {(() => { const cfg = Q_TYPE_CONFIG[(question.type || '').toUpperCase() + '_MASTER'] || Q_TYPE_CONFIG[(question.type || '').toUpperCase() + '_MAP']; const QIcon = cfg?.icon || AlertTriangle; return <div className="h-6 w-6 rounded-md border bg-primary/10 flex items-center justify-center"><QIcon className="h-3.5 w-3.5 text-primary" /></div>; })()}
           <span className="text-xs font-semibold">
             {Q_TYPE_CONFIG[(question.type || '').toUpperCase() + '_MASTER']?.label ||
              Q_TYPE_CONFIG[(question.type || '').toUpperCase() + '_MAP']?.label ||
@@ -334,17 +335,17 @@ function QuestionAnswerForm({
         </button>
       </div>
 
-      {question.ask && <p className="text-xs text-muted-foreground">{question.ask}</p>}
+      {question.ask && <p className="text-xs text-muted-foreground leading-relaxed">{question.ask}</p>}
 
       {question.affected_count > 0 && (
-        <div className="flex items-center gap-2 text-[10px] text-muted-foreground bg-primary/5 rounded px-2 py-1">
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground bg-primary/5 rounded-lg px-2 py-1.5 border border-primary/10">
           <FileText className="h-3 w-3 shrink-0" />
           Затронуто: <strong className="text-foreground">{question.affected_count}</strong> товаров
         </div>
       )}
 
       {question.examples.length > 0 && (
-        <div className="text-[10px]">
+        <div className="text-[10px] bg-background border rounded-lg p-2">
           <span className="text-muted-foreground">Примеры: </span>
           <span className="font-mono">{question.examples.slice(0, 3).join(' · ')}</span>
         </div>
@@ -630,7 +631,7 @@ function CategorySidebar({
   const cats: ProductCategory[] = ['ALL', 'PROFNASTIL', 'METALLOCHEREPICA', 'DOBOR', 'SANDWICH', 'OTHER'];
   return (
     <div className="flex flex-col h-full">
-      <div className="p-3 border-b">
+      <div className="p-3 border-b bg-gradient-to-r from-primary/10 via-primary/5 to-transparent">
         <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Категории</span>
       </div>
       <ScrollArea className="flex-1 min-h-0">
@@ -641,7 +642,7 @@ function CategorySidebar({
             return (
               <button key={cat} onClick={() => onSelect(cat)}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-xs transition-colors ${
-                  isActive ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-foreground'
+                  isActive ? 'bg-gradient-to-r from-primary to-primary/80 text-primary-foreground shadow-sm' : 'hover:bg-muted text-foreground'
                 }`}>
                 <span className="font-medium truncate">{CAT_LABELS[cat]}</span>
                 <div className="flex items-center gap-1 shrink-0 ml-2">
@@ -657,7 +658,7 @@ function CategorySidebar({
           })}
         </div>
       </ScrollArea>
-      <div className="p-3 border-t space-y-2">
+      <div className="p-3 border-t space-y-2 bg-muted/20">
         <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1">
           <Filter className="h-3 w-3" /> Фильтры
         </span>
@@ -774,6 +775,38 @@ export function NormalizationWizard({
     // Filter out types that the user already confirmed in this session
     return cards.filter(c => !confirmedTypes.has(c.type));
   }, [norm.dashboardResult, aiQuestions, confirmedTypes]);
+
+  const filteredQuestionCards = useMemo(() => {
+    let cards = [...questionCards].sort((a, b) => (b.count || 0) - (a.count || 0));
+    const q = questionQuery.trim().toLowerCase();
+    if (q) {
+      cards = cards.filter((c) =>
+        (c.label || '').toLowerCase().includes(q) ||
+        (c.type || '').toLowerCase().includes(q) ||
+        (c.examples || []).some((e) => e.toLowerCase().includes(q))
+      );
+    }
+    if (highImpactOnly) {
+      cards = cards.filter((c) => (c.count || 0) >= 10);
+    }
+    return cards;
+  }, [questionCards, questionQuery, highImpactOnly]);
+
+  const filteredQuestionDetails = useMemo(() => {
+    let list = [...aiQuestions];
+    const q = questionQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter((item) =>
+        (item.token || '').toLowerCase().includes(q) ||
+        (item.ask || '').toLowerCase().includes(q) ||
+        (item.examples || []).some((ex) => ex.toLowerCase().includes(q))
+      );
+    }
+    if (highImpactOnly) {
+      list = list.filter((item) => (item.affected_count || 0) >= 10);
+    }
+    return list;
+  }, [aiQuestions, questionQuery, highImpactOnly]);
 
   const filteredQuestionCards = useMemo(() => {
     let cards = [...questionCards].sort((a, b) => (b.count || 0) - (a.count || 0));
@@ -981,13 +1014,26 @@ export function NormalizationWizard({
     if (result?.ok) runScan();
   }, [confirmBatch, runScan, aiQuestions, norm]);
 
+  const getApplyStatusLabel = () => {
+    const phaseLabel = norm.applyPhase && norm.applyPhase !== 'unknown'
+      ? ` (${norm.applyPhase === 'materialize' ? 'подготовка' : norm.applyPhase === 'merge' ? 'слияние' : norm.applyPhase})`
+      : '';
+    switch (flow.state) {
+      case 'APPLY_STARTING': return `Запуск${phaseLabel}…`;
+      case 'APPLY_RUNNING': return `Применяем${phaseLabel}… ${norm.applyProgress > 0 ? norm.applyProgress + '%' : ''}`;
+      case 'APPLY_DONE': return '✓ Готово';
+      case 'ERROR': return flow.context.lastError || 'Ошибка';
+      default: return '';
+    }
+  };
+
   // ═══════════════════════════════════════════════════════════════
   // RENDER
   // ═══════════════════════════════════════════════════════════════
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[98vw] w-[1700px] h-[92vh] max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
+      <DialogContent className="max-w-[98vw] w-[1720px] h-[95vh] flex flex-col p-0 gap-0 rounded-2xl border shadow-2xl overflow-hidden">
 
         {/* ═══ TOP STICKY BAR ═══ */}
         <div className="shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85 sticky top-0 z-10">
@@ -1057,14 +1103,14 @@ export function NormalizationWizard({
             {/* Status indicators — explicit PENDING/RUNNING/DONE/FAILED */}
             <div className="flex items-center gap-3 flex-1 min-w-0">
               {flow.state === 'SCANNING' && (
-                <Badge variant="secondary" className="text-xs">
-                  <Loader2 className="h-3 w-3 mr-1 animate-spin" /> Сканирование…
-                </Badge>
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground rounded-full border px-2 py-1">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Сканирование…
+                </div>
               )}
               {norm.catalogLoading && flow.state !== 'SCANNING' && (
-                <Badge variant="outline" className="text-xs">
-                  <Loader2 className="h-3 w-3 mr-1 animate-spin" /> Загрузка…
-                </Badge>
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground rounded-full border px-2 py-1">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Загрузка…
+                </div>
               )}
 
               {/* Apply state: PENDING / RUNNING with phase + progress */}
@@ -1079,32 +1125,10 @@ export function NormalizationWizard({
                   <span className="text-[10px] text-muted-foreground tabular-nums">{norm.applyProgress}%</span>
                 </div>
               )}
-
-              {/* Apply DONE */}
-              {flow.state === 'APPLY_DONE' && (
-                <Badge variant="default" className="text-xs">
-                  <CheckCircle2 className="h-3 w-3 mr-1" /> DONE
-                </Badge>
-              )}
-
-              {/* Error / POLL_EXCEEDED — single consolidated message */}
-              {flow.state === 'ERROR' && flow.context.lastError && (
-                <div className="flex items-center gap-2 text-xs text-destructive max-w-lg">
-                  <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">{flow.context.lastError}</span>
-                  <Button
-                    size="sm" variant="outline"
-                    className="h-6 text-[10px] px-2 shrink-0 border-destructive/30 text-destructive hover:bg-destructive/10"
-                    onClick={() => {
-                      if (norm.applyId && norm.runId) {
-                        norm.restartPolling();
-                      } else {
-                        handleRunScan();
-                      }
-                    }}
-                  >
-                    <RefreshCw className="h-3 w-3 mr-1" /> Повторить
-                  </Button>
+              {!isApplying && flow.state !== 'SCANNING' && (
+                <div className="hidden md:flex items-center gap-2 text-[11px] text-muted-foreground rounded-full border px-2 py-1">
+                  <span>В работе:</span>
+                  <strong className="text-foreground">{questionCards.reduce((s, c) => s + c.count, 0).toLocaleString('ru')}</strong>
                 </div>
               )}
 
@@ -1142,7 +1166,7 @@ export function NormalizationWizard({
         <div className="flex-1 min-h-0 overflow-hidden relative">
           <ResizablePanelGroup direction="horizontal" className="absolute inset-0">
             {/* LEFT: Categories */}
-            <ResizablePanel defaultSize={14} minSize={10} maxSize={22}>
+            <ResizablePanel defaultSize={14} minSize={10} maxSize={22} className="bg-card/60">
               <CategorySidebar
                 activeCategory={activeCategory}
                 onSelect={setActiveCategory}
@@ -1156,10 +1180,10 @@ export function NormalizationWizard({
             <ResizableHandle withHandle />
 
             {/* CENTER: Clusters / Table */}
-            <ResizablePanel defaultSize={rightPanelOpen ? 56 : 86} minSize={30}>
-              <div className="flex flex-col h-full overflow-hidden">
+            <ResizablePanel defaultSize={rightPanelOpen ? 56 : 86} minSize={30} className="bg-background">
+              <div className="flex flex-col h-full">
                 {/* Center toolbar */}
-                <div className="px-3 py-2 border-b flex items-center gap-2 shrink-0 bg-muted/30">
+                <div className="px-3 py-2 border-b flex items-center gap-2 shrink-0 bg-gradient-to-r from-muted/50 to-background">
                   <span className="text-xs font-semibold text-muted-foreground">
                     {CAT_LABELS[activeCategory]}
                     {filteredItems.length > 0 && <span className="ml-2 font-normal">({filteredItems.length})</span>}
@@ -1247,9 +1271,9 @@ export function NormalizationWizard({
               <ResizableHandle withHandle />
 
               {/* RIGHT: Questions / Chat */}
-              <ResizablePanel defaultSize={30} minSize={20} maxSize={45}>
+              <ResizablePanel defaultSize={30} minSize={20} maxSize={45} className="border-l bg-card/40">
               <Tabs value={rightTab} onValueChange={v => setRightTab(v as typeof rightTab)} className="flex flex-col h-full">
-                <div className="flex items-center border-b shrink-0">
+                <div className="flex items-center border-b shrink-0 bg-gradient-to-r from-background to-muted/20">
                   <TabsList className="rounded-none h-9 px-0 bg-transparent justify-start gap-0 flex-1">
                     <TabsTrigger value="questions" className="rounded-none text-xs px-4 h-9 border-b-2 data-[state=active]:border-primary data-[state=inactive]:border-transparent">
                       Вопросы {aiQuestions.length > 0 && <Badge variant="destructive" className="ml-1 text-[10px] h-4 px-1">{aiQuestions.length}</Badge>}

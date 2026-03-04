@@ -362,12 +362,6 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   // ─── Poll Apply Status (Contract v1: normalized fields) ───
 
   const pollApplyStatus = useCallback(async (currentApplyId: string, currentRunId: string) => {
-    // Single-flight guard: abort if this timer is for a stale apply_id
-    if (pollingApplyIdRef.current && pollingApplyIdRef.current !== currentApplyId) {
-      console.warn('[polling] stale apply_id, skipping', currentApplyId);
-      return;
-    }
-
     if (!pollStartRef.current) {
       pollStartRef.current = Date.now();
     }
@@ -390,8 +384,8 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
         op: 'apply_status',
         organization_id: organizationId,
         import_job_id: importJobId || 'current',
-          apply_id: currentApplyId,
-          run_id: currentRunId,
+        apply_id: currentApplyId,
+        run_id: currentRunId,
       });
 
       const result = data as ApplyStatusResult;
@@ -440,14 +434,10 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   // ─── Start Polling Helper (single-flight: kills existing poll) ──
 
   const startPolling = useCallback((newApplyId: string, rid: string) => {
-    // Kill any existing polling cycle
     if (pollingRef.current) {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
     }
-
-    // Set single-flight lock
-    pollingApplyIdRef.current = newApplyId;
 
     setApplyId(newApplyId);
     setApplyState('PENDING');
