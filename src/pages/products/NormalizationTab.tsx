@@ -52,12 +52,13 @@ interface NormalizationSession {
 // ─── Question type icons and labels ──────────────────────────
 
 const QUESTION_TYPE_CONFIG: Record<string, { icon: React.ElementType; label: string; colorClass: string }> = {
-  WIDTH_MASTER:  { icon: Ruler,       label: 'Ширины',    colorClass: 'border-l-4 border-l-blue-500 bg-muted/50' },
-  COATING_MAP:   { icon: Layers,      label: 'Покрытия',  colorClass: 'border-l-4 border-l-orange-500 bg-muted/50' },
-  COLOR_MAP:     { icon: Palette,     label: 'Цвета',     colorClass: 'border-l-4 border-l-purple-500 bg-muted/50' },
-  THICKNESS_SET: { icon: BarChart3,   label: 'Толщины',   colorClass: 'border-l-4 border-l-green-500 bg-muted/50' },
-  PROFILE_MAP:   { icon: TrendingUp,  label: 'Профили',   colorClass: 'border-l-4 border-l-cyan-500 bg-muted/50' },
-  CATEGORY_FIX:  { icon: Activity,    label: 'Категории', colorClass: 'border-l-4 border-l-destructive bg-muted/50' },
+  WIDTH_MASTER:      { icon: Ruler,       label: 'Ширины',           colorClass: 'border-l-4 border-l-blue-500 bg-muted/50' },
+  COATING_MAP:       { icon: Layers,      label: 'Покрытия',         colorClass: 'border-l-4 border-l-orange-500 bg-muted/50' },
+  COLOR_MAP:         { icon: Palette,     label: 'Цвета',            colorClass: 'border-l-4 border-l-purple-500 bg-muted/50' },
+  THICKNESS_SET:     { icon: BarChart3,   label: 'Толщины',          colorClass: 'border-l-4 border-l-green-500 bg-muted/50' },
+  PROFILE_MAP:       { icon: TrendingUp,  label: 'Профили',          colorClass: 'border-l-4 border-l-cyan-500 bg-muted/50' },
+  CATEGORY_FIX:      { icon: Activity,    label: 'Категории',        colorClass: 'border-l-4 border-l-destructive bg-muted/50' },
+  PRODUCT_KIND_MAP:  { icon: Activity,    label: 'Тип продукции',    colorClass: 'border-l-4 border-l-amber-500 bg-muted/50' },
 };
 
 function getQuestionConfig(type: string) {
@@ -272,7 +273,7 @@ export function NormalizationTab() {
             {t('normalize.title', 'Нормализация прайса')}
           </h2>
           <p className="text-muted-foreground mt-1 text-sm">
-            {t('normalize.description', 'AI-стандартизация: профили, толщины, покрытия, цвета')}
+            {t('normalize.description', 'ИИ-стандартизация: профили, толщины, покрытия, цвета')}
           </p>
         </div>
         <Button onClick={() => handleLaunchWizard()}>
