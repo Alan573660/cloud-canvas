@@ -708,10 +708,11 @@ export function NormalizationWizard({
   const [rightTab, setRightTab] = useState<'questions' | 'chat'>('questions');
   const [activeQuestionForm, setActiveQuestionForm] = useState<AIQuestion | null>(null);
   const [confirmedTypes, setConfirmedTypes] = useState<Set<string>>(new Set());
+  const [confirmedCount, setConfirmedCount] = useState(0); // Track total confirmed rules for feedback
   const [confirmApplyOpen, setConfirmApplyOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
-  const [scanLimit, setScanLimit] = useState<500 | 2000 | 5000>(2000);
+  const [scanLimit, setScanLimit] = useState<500 | 2000 | 5000 | 10000>(2000);
   const [quickFilter, setQuickFilter] = useState('');
   const [questionQuery, setQuestionQuery] = useState('');
   const [highImpactOnly, setHighImpactOnly] = useState(false);
@@ -740,7 +741,7 @@ export function NormalizationWizard({
     }).catch(err => console.warn('[NormWizard] ai_policy seed failed:', err));
 
     void fetchDashboard(effectiveJobId);
-    void fetchCatalogItems(500);
+    void fetchCatalogItems(2000);
     runScan();
   }, [open, organizationId, effectiveJobId, fetchDashboard, fetchCatalogItems, runScan]);
 
@@ -753,13 +754,27 @@ export function NormalizationWizard({
     return [];
   }, [norm.dryRunResult, norm.catalogItems]);
 
-  const aiQuestions = useMemo(() => (norm.dryRunResult?.questions || []).map(backendQuestionToAI), [norm.dryRunResult]);
+  // Filter out questions about DOBOR items (they don't need WIDTH/PROFILE normalization)
+  const DOBOR_SKIP_TYPES = new Set(['WIDTH_MASTER', 'PROFILE_MAP']);
+  
+  const aiQuestions = useMemo(() => {
+    const raw = (norm.dryRunResult?.questions || []).map(backendQuestionToAI);
+    // Skip width/profile questions that are purely about dobor items
+    return raw.filter(q => {
+      const backendType = q.type.toUpperCase() === 'WIDTH' ? 'WIDTH_MASTER' : q.type.toUpperCase() === 'PROFILE' ? 'PROFILE_MAP' : '';
+      if (!DOBOR_SKIP_TYPES.has(backendType)) return true;
+      // If all examples look like dobor items, skip the question
+      if (q.examples?.length > 0 && q.examples.every(ex => RE_DOBOR_TITLE.test(ex))) return false;
+      return true;
+    });
+  }, [norm.dryRunResult]);
 
   const questionCards = useMemo((): DashboardQuestionCard[] => {
     const dbCards = norm.dashboardResult?.question_cards || [];
     let cards: DashboardQuestionCard[];
     if (dbCards.length > 0) {
-      cards = dbCards;
+      // Also filter dobor-only question cards from dashboard
+      cards = dbCards.filter(c => !DOBOR_SKIP_TYPES.has(c.type) || !(c.examples || []).every(ex => RE_DOBOR_TITLE.test(ex)));
     } else {
       const grouped: Record<string, DashboardQuestionCard> = {};
       for (const q of aiQuestions) {
@@ -939,7 +954,9 @@ export function NormalizationWizard({
       const action: ConfirmAction = { type: backendType, payload };
       const result = await confirmBatch([action]);
       if (result?.ok) {
-        toast({ title: 'Ширина подтверждена', description: `Профиль: ${widthProfile}` });
+        setConfirmedCount(prev => prev + 1);
+        setConfirmedTypes(prev => new Set(prev).add(backendType));
+        toast({ title: `✓ Применено правил: ${confirmedCount + 1}`, description: `Ширина для ${widthProfile} подтверждена` });
         setActiveQuestionForm(null);
         runScan();
       } else {
@@ -956,6 +973,9 @@ export function NormalizationWizard({
     const action: ConfirmAction = { type: backendType, payload };
     const result = await confirmBatch([action]);
     if (result?.ok) {
+      setConfirmedCount(prev => prev + 1);
+      setConfirmedTypes(prev => new Set(prev).add(backendType));
+      toast({ title: `✓ Применено правил: ${confirmedCount + 1}`, description: `${backendType}: ${value}` });
       setActiveQuestionForm(null);
       runScan();
     }
@@ -983,18 +1003,6 @@ export function NormalizationWizard({
     if (result?.ok) runScan();
   }, [confirmBatch, runScan, aiQuestions, norm]);
 
-  const getApplyStatusLabel = () => {
-    const phaseLabel = norm.applyPhase && norm.applyPhase !== 'unknown'
-      ? ` (${norm.applyPhase === 'materialize' ? 'подготовка' : norm.applyPhase === 'merge' ? 'слияние' : norm.applyPhase})`
-      : '';
-    switch (flow.state) {
-      case 'APPLY_STARTING': return `Запуск${phaseLabel}…`;
-      case 'APPLY_RUNNING': return `Применяем${phaseLabel}… ${norm.applyProgress > 0 ? norm.applyProgress + '%' : ''}`;
-      case 'APPLY_DONE': return '✓ Готово';
-      case 'ERROR': return flow.context.lastError || 'Ошибка';
-      default: return '';
-    }
-  };
 
   // ═══════════════════════════════════════════════════════════════
   // RENDER
@@ -1088,13 +1096,47 @@ export function NormalizationWizard({
                   <Badge variant="secondary" className="text-xs">
                     <Loader2 className="h-3 w-3 mr-1 animate-spin" />
                     {flow.state === 'APPLY_STARTING' ? 'PENDING' : 'RUNNING'}
-                    {norm.applyPhase && norm.applyPhase !== 'unknown' && ` · ${norm.applyPhase}`}
+                    {norm.applyPhase && norm.applyPhase !== 'unknown' && ` · ${norm.applyPhase === 'materialize' ? 'подготовка' : norm.applyPhase === 'merge' ? 'слияние' : norm.applyPhase}`}
                   </Badge>
                   <Progress value={norm.applyProgress} className="h-1.5 w-24" />
                   <span className="text-[10px] text-muted-foreground tabular-nums">{norm.applyProgress}%</span>
                 </div>
               )}
-              {!isApplying && flow.state !== 'SCANNING' && (
+
+              {/* DONE */}
+              {flow.state === 'APPLY_DONE' && (
+                <Badge className="text-xs bg-emerald-500/10 text-emerald-700 border-emerald-500/30" variant="outline">
+                  <CheckCircle2 className="h-3 w-3 mr-1" /> Готово
+                </Badge>
+              )}
+
+              {/* ERROR with single retry button */}
+              {flow.state === 'ERROR' && (
+                <div className="flex items-center gap-2">
+                  <Badge variant="destructive" className="text-xs">
+                    <AlertCircle className="h-3 w-3 mr-1" />
+                    {(flow.context.lastError || 'Ошибка').substring(0, 80)}
+                  </Badge>
+                  <Button size="sm" variant="outline" className="h-6 text-xs" onClick={() => {
+                    if (norm.applyId && norm.runId) {
+                      norm.restartPolling();
+                    } else {
+                      handleRunScan();
+                    }
+                  }}>
+                    <RefreshCw className="h-3 w-3 mr-1" /> Повторить
+                  </Button>
+                </div>
+              )}
+
+              {/* Confirmed rules count */}
+              {confirmedCount > 0 && !isApplying && flow.state !== 'ERROR' && (
+                <Badge variant="outline" className="text-xs text-emerald-700 border-emerald-500/30 bg-emerald-500/5">
+                  <CheckCircle2 className="h-3 w-3 mr-1" /> Применено правил: {confirmedCount}
+                </Badge>
+              )}
+
+              {!isApplying && flow.state !== 'SCANNING' && flow.state !== 'ERROR' && flow.state !== 'APPLY_DONE' && questionCards.length > 0 && (
                 <div className="hidden md:flex items-center gap-2 text-[11px] text-muted-foreground rounded-full border px-2 py-1">
                   <span>В работе:</span>
                   <strong className="text-foreground">{questionCards.reduce((s, c) => s + c.count, 0).toLocaleString('ru')}</strong>
@@ -1158,7 +1200,7 @@ export function NormalizationWizard({
                     {filteredItems.length > 0 && <span className="ml-2 font-normal">({filteredItems.length})</span>}
                   </span>
                   <Badge variant="outline" className="text-xs">
-                    Показано {filteredItems.length.toLocaleString('ru')} из {Math.max(totalScanned, filteredItems.length).toLocaleString('ru')}
+                    Показано {filteredItems.length.toLocaleString('ru')} из {Math.max(norm.catalogTotal, totalScanned, filteredItems.length).toLocaleString('ru')}
                   </Badge>
                   <div className="flex items-center gap-1 ml-auto">
                     <Input
@@ -1168,14 +1210,15 @@ export function NormalizationWizard({
                       className="h-7 w-48 text-xs"
                     />
                     <span className="text-[10px] text-muted-foreground">Лимит</span>
-                    <Select value={String(scanLimit)} onValueChange={(v) => setScanLimit(Number(v) as 500 | 2000 | 5000)}>
+                    <Select value={String(scanLimit)} onValueChange={(v) => setScanLimit(Number(v) as 500 | 2000 | 5000 | 10000)}>
                       <SelectTrigger className="h-7 w-24 text-xs">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="500">500</SelectItem>
-                        <SelectItem value="2000">2000</SelectItem>
-                        <SelectItem value="5000">5000</SelectItem>
+                        <SelectItem value="2000">2 000</SelectItem>
+                        <SelectItem value="5000">5 000</SelectItem>
+                        <SelectItem value="10000">10 000</SelectItem>
                       </SelectContent>
                     </Select>
                     {(quickFilter || onlyProblematic) && (

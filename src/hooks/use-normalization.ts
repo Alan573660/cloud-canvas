@@ -677,35 +677,49 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
 
   // ─── Fetch Catalog Items via enricher preview_rows ─────────
 
-  const fetchCatalogItems = useCallback(async (limit = 500) => {
+  const fetchCatalogItems = useCallback(async (limit = 2000) => {
     setCatalogLoading(true);
     try {
-      const data = await invokeOrThrow('import-normalize', {
-        op: 'preview_rows',
-        organization_id: organizationId,
-        import_job_id: importJobId || 'current',
-          limit: Math.min(limit, 500),
-          offset: 0,
-      });
+      // Fetch in batches to overcome backend row limits
+      const batchSize = 500;
+      const maxRows = Math.min(limit, 10000);
+      let allRows: CatalogRow[] = [];
+      let totalCount = 0;
+      let offset = 0;
+      let hasMore = true;
 
-      const result = data as {
-        ok: boolean;
-        total_count?: number;
-        rows?: CatalogRow[];
-        error?: string;
-      };
+      while (hasMore && allRows.length < maxRows) {
+        const currentBatch = Math.min(batchSize, maxRows - allRows.length);
+        const data = await invokeOrThrow('import-normalize', {
+          op: 'preview_rows',
+          organization_id: organizationId,
+          import_job_id: importJobId || 'current',
+          limit: currentBatch,
+          offset,
+        });
 
-      if (!result?.ok) {
-        console.warn('[fetchCatalogItems] preview_rows returned not ok:', result?.error);
-        setCatalogItems([]);
-        setCatalogTotal(0);
-        return [];
+        const result = data as {
+          ok: boolean;
+          total_count?: number;
+          rows?: CatalogRow[];
+          error?: string;
+        };
+
+        if (!result?.ok) {
+          console.warn('[fetchCatalogItems] preview_rows returned not ok:', result?.error);
+          break;
+        }
+
+        const rows = (result.rows || []) as CatalogRow[];
+        totalCount = result.total_count || totalCount;
+        allRows = [...allRows, ...rows];
+        offset += rows.length;
+        hasMore = rows.length === currentBatch && allRows.length < maxRows;
       }
 
-      const rows = (result.rows || []) as CatalogRow[];
-      setCatalogTotal(result.total_count || rows.length);
-      setCatalogItems(rows);
-      return rows;
+      setCatalogTotal(totalCount || allRows.length);
+      setCatalogItems(allRows);
+      return allRows;
     } catch (err) {
       const msg = parseEdgeFunctionError(err);
       console.warn('[fetchCatalogItems] preview_rows error:', msg);
