@@ -55,6 +55,7 @@ export function useNormalizationFlow({ organizationId, importJobId }: UseNormali
     confirmActions,
     executeApply,
     sendAiChatV2,
+    retryApplyStatus,
     reset,
   } = norm;
 
@@ -159,6 +160,7 @@ export function useNormalizationFlow({ organizationId, importJobId }: UseNormali
     startScan,
     confirmBatch,
     startApply,
+    retryApplyStatus,
     sendChat,
     resetFlow,
   };

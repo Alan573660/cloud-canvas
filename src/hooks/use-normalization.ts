@@ -15,6 +15,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { toast } from '@/hooks/use-toast';
 import { parseEdgeFunctionError, isHashMismatch } from '@/lib/edge-error-utils';
 import { apiInvoke } from '@/lib/api-client';
+import { normalizeAndValidateConfirmActions } from '@/lib/confirm-action-guards';
 
 // ─── Re-export all Contract v1 types from canonical source ────
 export type {
@@ -118,6 +119,8 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   const [applyPhase, setApplyPhase] = useState<string>('unknown');
   const [applyReport, setApplyReport] = useState<QualityMetrics | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
+  const [applyElapsedSec, setApplyElapsedSec] = useState(0);
+  const [pollAttempts, setPollAttempts] = useState(0);
 
   // Stats state
   const [statsLoading, setStatsLoading] = useState(false);
@@ -146,6 +149,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   const pollStartRef = useRef<number>(0);
   const pollCountRef = useRef<number>(0);
   const pollErrorCountRef = useRef<number>(0);
+  const pollInFlightRef = useRef(false);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -167,6 +171,8 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setApplyState('IDLE');
     setApplyReport(null);
     setApplyError(null);
+    setApplyElapsedSec(0);
+    setPollAttempts(0);
 
     try {
       const { data, envelope, errorMessage } = await invokeWithEnvelope<DryRunResult>('import-normalize', {
@@ -220,9 +226,9 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     try {
       const data = await invokeOrThrow<{ ok: boolean; error?: string }>('settings-merge', {
         organization_id: organizationId,
-          patch: {
-            pricing: settings,
-          },
+        patch: {
+          pricing: settings,
+        },
       });
 
       const result = data as { ok: boolean; error?: string };
@@ -325,8 +331,8 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
         op: 'confirm',
         organization_id: organizationId,
         import_job_id: jobId || importJobId || 'current',
-          type,
-          payload,
+        type,
+        payload,
       });
 
       const result = data as ConfirmResult;
@@ -352,36 +358,49 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     }
     pollCountRef.current = 0;
     pollStartRef.current = 0;
+    pollErrorCountRef.current = 0;
+    pollInFlightRef.current = false;
   }, []);
 
   // ─── Poll Apply Status (Contract v1: normalized fields) ───
 
   const pollApplyStatus = useCallback(async (currentApplyId: string, currentRunId: string) => {
-    pollCountRef.current += 1;
-    const elapsed = Date.now() - pollStartRef.current;
-
-    if (elapsed > POLL_MAX_DURATION_MS || pollCountRef.current > POLL_MAX_REQUESTS) {
-      setApplyState('POLL_EXCEEDED');
-      setApplyError(
-        `Polling превысил лимит (${Math.round(elapsed / 1000)}с / ${pollCountRef.current} запросов). ` +
-        `Нажмите «Повторить» для проверки статуса.`
-      );
-      stopPolling();
+    if (pollInFlightRef.current) {
       return;
     }
 
+    pollInFlightRef.current = true;
+
     try {
+      if (!pollStartRef.current) {
+        pollStartRef.current = Date.now();
+      }
+
+      pollCountRef.current += 1;
+      setPollAttempts(pollCountRef.current);
+
+      const elapsedMs = Date.now() - pollStartRef.current;
+      setApplyElapsedSec(Math.round(elapsedMs / 1000));
+
+      if (elapsedMs > POLL_MAX_DURATION_MS || pollCountRef.current > POLL_MAX_REQUESTS) {
+        setApplyState('POLL_EXCEEDED');
+        setApplyError(
+          `Polling превысил лимит (${Math.round(elapsedMs / 1000)}с / ${pollCountRef.current} запросов). ` +
+          `Нажмите «Повторить статус».`
+        );
+        stopPolling();
+        return;
+      }
+
       const data = await invokeOrThrow<ApplyStatusResult>('import-normalize', {
         op: 'apply_status',
         organization_id: organizationId,
         import_job_id: importJobId || 'current',
-          apply_id: currentApplyId,
-          run_id: currentRunId,
+        apply_id: currentApplyId,
+        run_id: currentRunId,
       });
 
       const result = data as ApplyStatusResult;
-      
-      // Use canonical normalizer from contract-types
       const normalized = normalizeApplyStatus(result);
       const status = String(normalized.status).toUpperCase();
 
@@ -405,7 +424,6 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
         setApplyError('Задача не найдена. Попробуйте запустить заново.');
         stopPolling();
       } else {
-        // QUEUED or RUNNING
         setApplyState('RUNNING');
         setApplyProgress(normalized.progressPercent);
         setApplyPhase(normalized.phase);
@@ -415,37 +433,74 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       pollErrorCountRef.current += 1;
       if (pollErrorCountRef.current >= POLL_MAX_CONSECUTIVE_ERRORS) {
         setApplyState('ERROR');
-        setApplyError(parseEdgeFunctionError(err));
+        const elapsedSec = Math.round((Date.now() - pollStartRef.current) / 1000);
+        setApplyError(`[apply_status] ${parseEdgeFunctionError(err)} (после ${pollCountRef.current} запросов / ${elapsedSec}с)`);
         stopPolling();
       }
+    } finally {
+      pollInFlightRef.current = false;
     }
   }, [organizationId, importJobId, stopPolling]);
 
   // ─── Start Polling Helper ─────────────────────────────────
 
   const startPolling = useCallback((newApplyId: string, rid: string) => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+
     setApplyId(newApplyId);
     setApplyState('PENDING');
     setApplyPhase('unknown');
-    pollStartRef.current = Date.now();
+    const startedAt = Date.now();
+    setApplyElapsedSec(0);
+    setPollAttempts(0);
+    pollStartRef.current = startedAt;
     pollCountRef.current = 0;
     pollErrorCountRef.current = 0;
+
+    // First check immediately (do not wait first interval tick)
+    void pollApplyStatus(newApplyId, rid);
+
     pollingRef.current = setInterval(() => {
       pollApplyStatus(newApplyId, rid);
     }, POLL_INTERVAL_MS);
   }, [pollApplyStatus]);
 
+
+  const retryApplyStatus = useCallback(() => {
+    if (!applyId || !runId) {
+      toast({ title: 'Нет активного применения', description: 'Сначала запустите «Применить».', variant: 'destructive' });
+      return;
+    }
+
+    setApplyError(null);
+    startPolling(applyId, runId);
+  }, [applyId, runId, startPolling]);
+
   // ─── Confirm Actions (Contract v1: batch) ─────────────────
 
   const confirmActions = useCallback(async (actions: ConfirmAction[], jobId?: string): Promise<ConfirmResult | null> => {
     if (actions.length === 0) return null;
+    const guarded = normalizeAndValidateConfirmActions(actions);
+    if (guarded.issues.length > 0) {
+      const firstIssue = guarded.issues[0];
+      toast({
+        title: 'Неполное действие подтверждения',
+        description: `${firstIssue.type}: ${firstIssue.reason}`,
+        variant: 'destructive',
+      });
+      return null;
+    }
+
     setConfirmingType('BATCH');
     try {
       const data = await invokeOrThrow('import-normalize', {
         op: 'confirm',
         organization_id: organizationId,
         import_job_id: jobId || importJobId || 'current',
-          actions,
+        actions: guarded.actions,
       });
 
       const result = data as ConfirmResult;
@@ -453,7 +508,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
 
       toast({
         title: 'Правила применены',
-        description: `${result.stats?.updates || actions.length} обновлений${result.apply_started ? ', применение запущено' : ''}`,
+        description: `${result.stats?.updates || guarded.actions.length} обновлений${result.apply_started ? ', применение запущено' : ''}`,
       });
 
       // If apply was auto-started, begin polling
@@ -480,8 +535,8 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
         organization_id: organizationId,
         import_job_id: importJobId || 'current',
         run_id: runId,
-          message,
-          context,
+        message,
+        context,
       });
 
       const result = (data || envelope) as AiChatV2Result | null;
@@ -517,6 +572,8 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setApplyReport(null);
     setApplyProgress(0);
     setApplyPhase('unknown');
+    setApplyElapsedSec(0);
+    setPollAttempts(0);
 
     try {
       const { data, envelope, errorMessage } = await invokeWithEnvelope<{
@@ -640,8 +697,8 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
         op: 'preview_rows',
         organization_id: organizationId,
         import_job_id: importJobId || 'current',
-          limit: Math.min(limit, 500),
-          offset: 0,
+        limit: Math.min(limit, 500),
+        offset: 0,
       });
 
       const result = data as {
@@ -684,6 +741,8 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setApplyPhase('unknown');
     setApplyReport(null);
     setApplyError(null);
+    setApplyElapsedSec(0);
+    setPollAttempts(0);
     setServerStats(null);
     setDashboardResult(null);
     setTreeResult(null);
@@ -714,7 +773,10 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     applyPhase,
     applyReport,
     applyError,
+    applyElapsedSec,
+    pollAttempts,
     executeApply,
+    retryApplyStatus,
 
     // Stats
     statsLoading,
