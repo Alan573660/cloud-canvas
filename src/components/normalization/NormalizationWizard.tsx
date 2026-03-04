@@ -646,12 +646,13 @@ export function NormalizationWizard({
   const [inputJobId, setInputJobId] = useState(propJobId || '');
   const effectiveJobId = propJobId || inputJobId || undefined;
 
-  const [activeCategory, setActiveCategory] = useState<ProductCategory>('PROFNASTIL');
+  const [activeCategory, setActiveCategory] = useState<ProductCategory>('ALL');
   const [selectedCluster, setSelectedCluster] = useState<ClusterPath | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [onlyProblematic, setOnlyProblematic] = useState(false);
   const [rightTab, setRightTab] = useState<'questions' | 'chat'>('questions');
   const [activeQuestionForm, setActiveQuestionForm] = useState<AIQuestion | null>(null);
+  const [confirmedTypes, setConfirmedTypes] = useState<Set<string>>(new Set());
   const [confirmApplyOpen, setConfirmApplyOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
@@ -694,18 +695,24 @@ export function NormalizationWizard({
 
   const questionCards = useMemo((): DashboardQuestionCard[] => {
     const dbCards = norm.dashboardResult?.question_cards || [];
-    if (dbCards.length > 0) return dbCards;
-    const grouped: Record<string, DashboardQuestionCard> = {};
-    for (const q of aiQuestions) {
-      const backendType = q.type.toUpperCase() === 'WIDTH' ? 'WIDTH_MASTER' : q.type.toUpperCase() === 'COATING' ? 'COATING_MAP' : q.type.toUpperCase() === 'COLOR' ? 'COLOR_MAP' : q.type.toUpperCase() + '_MAP';
-      if (!grouped[backendType]) {
-        grouped[backendType] = { type: backendType, label: Q_TYPE_CONFIG[backendType]?.label || backendType, count: 0, examples: [] };
+    let cards: DashboardQuestionCard[];
+    if (dbCards.length > 0) {
+      cards = dbCards;
+    } else {
+      const grouped: Record<string, DashboardQuestionCard> = {};
+      for (const q of aiQuestions) {
+        const backendType = q.type.toUpperCase() === 'WIDTH' ? 'WIDTH_MASTER' : q.type.toUpperCase() === 'COATING' ? 'COATING_MAP' : q.type.toUpperCase() === 'COLOR' ? 'COLOR_MAP' : q.type.toUpperCase() + '_MAP';
+        if (!grouped[backendType]) {
+          grouped[backendType] = { type: backendType, label: Q_TYPE_CONFIG[backendType]?.label || backendType, count: 0, examples: [] };
+        }
+        grouped[backendType].count += q.affected_count;
+        grouped[backendType].examples = [...(grouped[backendType].examples || []), ...(q.examples || [])].slice(0, 5);
       }
-      grouped[backendType].count += q.affected_count;
-      grouped[backendType].examples = [...(grouped[backendType].examples || []), ...(q.examples || [])].slice(0, 5);
+      cards = Object.values(grouped);
     }
-    return Object.values(grouped);
-  }, [norm.dashboardResult, aiQuestions]);
+    // Filter out types that the user already confirmed in this session
+    return cards.filter(c => !confirmedTypes.has(c.type));
+  }, [norm.dashboardResult, aiQuestions, confirmedTypes]);
 
   const categoryStats = useMemo(() => {
     const stats: Record<string, { total: number; ready: number; needsAttention: number }> = {};
@@ -759,6 +766,7 @@ export function NormalizationWizard({
 
   // Handlers
   const handleRunScan = useCallback(() => {
+    setConfirmedTypes(new Set()); // Reset confirmed types on new scan
     void startScan({ aiSuggest: true, limit: 2000 });
     void fetchDashboard(effectiveJobId);
   }, [startScan, fetchDashboard, effectiveJobId]);
@@ -852,6 +860,7 @@ export function NormalizationWizard({
       if (result?.ok) {
         toast({ title: 'Ширина подтверждена', description: `Профиль: ${widthProfile}` });
         setActiveQuestionForm(null);
+        setConfirmedTypes(prev => new Set(prev).add('WIDTH_MASTER'));
         void startScan({ aiSuggest: true, limit: 2000 });
       } else {
         const errMsg = (result as any)?.error?.message || 'Ошибка подтверждения';
@@ -866,6 +875,7 @@ export function NormalizationWizard({
     const result = await confirmBatch([action]);
     if (result?.ok) {
       setActiveQuestionForm(null);
+      setConfirmedTypes(prev => new Set(prev).add(backendType));
       void startScan({ aiSuggest: true, limit: 2000 });
     }
   }, [confirmBatch, startScan, activeQuestionForm, norm]);
@@ -903,13 +913,13 @@ export function NormalizationWizard({
       console.log('[NormWizard] WIDTH_MASTER cluster confirm payload:', payload);
       const action: ConfirmAction = { type: backendType, payload };
       const result = await confirmBatch([action]);
-      if (result?.ok) void startScan({ aiSuggest: true, limit: 2000 });
+      if (result?.ok) { setConfirmedTypes(prev => new Set(prev).add(backendType)); void startScan({ aiSuggest: true, limit: 2000 }); }
       return;
     }
 
     const action: ConfirmAction = { type: backendType, payload: { token, canonical: value } };
     const result = await confirmBatch([action]);
-    if (result?.ok) void startScan({ aiSuggest: true, limit: 2000 });
+    if (result?.ok) { setConfirmedTypes(prev => new Set(prev).add(backendType)); void startScan({ aiSuggest: true, limit: 2000 }); }
   }, [confirmBatch, startScan, aiQuestions, norm]);
 
   const getApplyStatusLabel = () => {
@@ -1040,8 +1050,14 @@ export function NormalizationWizard({
                 </div>
               )}
               {flow.context.lastError && (
-                <div className="flex items-center gap-1 text-xs text-destructive">
-                  <AlertCircle className="h-3 w-3" /> {flow.context.lastError}
+                <div className="flex items-center gap-2 text-xs text-destructive">
+                  <AlertCircle className="h-3 w-3 shrink-0" />
+                  <span className="truncate">{flow.context.lastError}</span>
+                  {(norm.applyState === 'POLL_EXCEEDED' || norm.applyState === 'ERROR') && (
+                    <Button size="sm" variant="outline" className="h-6 text-[10px] px-2 shrink-0 border-destructive/30 text-destructive hover:bg-destructive/10" onClick={handleRunScan}>
+                      <RefreshCw className="h-3 w-3 mr-1" /> Повторить
+                    </Button>
+                  )}
                 </div>
               )}
               {norm.dryRunResult?.stats && flow.state !== 'SCANNING' && (
