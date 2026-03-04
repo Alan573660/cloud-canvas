@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
 import { apiInvoke } from '@/lib/api-client';
+import { hasInvalidConfirmActions, normalizeAndValidateConfirmActions } from '@/lib/confirm-action-guards';
 import { type PatternGroup } from './GroupsSidebar';
 import type { AiChatV2Result, AiChatV2Action, ConfirmAction } from '@/lib/contract-types';
 import {
@@ -68,9 +69,7 @@ function ActionPreview({
 }) {
   const { t } = useTranslation();
   const isBlocked = missingFields && missingFields.length > 0;
-  // PR2: Also block if any WIDTH_MASTER action lacks profile
-  const hasInvalidWidth = actions.some(a => a.type === 'WIDTH_MASTER' && !a.payload?.profile);
-  const isDisabled = isBlocked || hasInvalidWidth;
+  const hasInvalidActions = hasInvalidConfirmActions(actions.map(a => ({ type: a.type, payload: a.payload })));
 
   return (
     <div className="mt-2 p-2 bg-muted/50 rounded-lg border">
@@ -114,7 +113,7 @@ function ActionPreview({
         <Button 
           size="sm" variant="default" className="flex-1 h-7 text-xs" 
           onClick={onApply}
-          disabled={isDisabled || applying}
+          disabled={isBlocked || applying || hasInvalidActions}
         >
           {applying ? (
             <Loader2 className="h-3 w-3 mr-1 animate-spin" />
@@ -249,8 +248,12 @@ export function AIChatPanel({
     setApplyingIdx(msgIndex);
     try {
       const confirmPayload: ConfirmAction[] = actions.map(a => ({ type: a.type, payload: a.payload }));
+      const guarded = normalizeAndValidateConfirmActions(confirmPayload);
+      if (guarded.issues.length > 0) {
+        throw new Error(`${guarded.issues[0].type}: ${guarded.issues[0].reason}`);
+      }
       if (confirmActionsFn) {
-        await confirmActionsFn(confirmPayload);
+        await confirmActionsFn(guarded.actions);
       }
       
       // Mark as applied

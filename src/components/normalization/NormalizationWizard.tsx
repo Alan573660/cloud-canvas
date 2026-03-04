@@ -21,6 +21,7 @@ import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
 import { toast } from '@/hooks/use-toast';
@@ -45,6 +46,7 @@ import type {
 import { validateProduct } from './types';
 import { useNormalizationFlow } from '@/hooks/use-normalization-flow';
 import type { DryRunPatch, BackendQuestion, CatalogRow, DashboardQuestionCard, AiChatV2Action, AiChatV2Result, ConfirmAction } from '@/lib/contract-types';
+import { hasInvalidConfirmActions, normalizeAndValidateConfirmActions } from '@/lib/confirm-action-guards';
 
 // ─── Props ────────────────────────────────────────────────────
 
@@ -212,6 +214,25 @@ function suggestedActionToString(s: unknown): string {
   return String(s);
 }
 
+function resolveWidthProfile(question: AIQuestion): string {
+  const profileToken = question.token || question.cluster_path?.profile || '';
+  if (profileToken.trim()) return profileToken.trim();
+
+  if (question.examples?.length) {
+    for (const ex of question.examples) {
+      const profileMatch = ex.match(/(?:Профнастил[и]?\s+)?([A-Za-zА-Яа-яЁё]{1,4}\d{1,3})/i);
+      if (profileMatch?.[1]) return profileMatch[1].trim();
+    }
+  }
+
+  if (question.ask) {
+    const askMatch = question.ask.match(/для\s+([A-Za-zА-Яа-яЁё]{1,4}\d{1,3})/i);
+    if (askMatch?.[1]) return askMatch[1].trim();
+  }
+
+  return '';
+}
+
 function backendQuestionToAI(q: BackendQuestion, index: number): AIQuestion {
   const suggestedActions = q.suggested_actions || q.suggested_variants || [];
   return {
@@ -277,6 +298,7 @@ function QuestionAnswerForm({
   loading: boolean;
 }) {
   const isWidth = question.type === 'width';
+  const widthProfile = isWidth ? resolveWidthProfile(question) : '';
   const [fullMm, setFullMm] = useState('');
   const [workMm, setWorkMm] = useState('');
   const [value, setValue] = useState('');
@@ -293,7 +315,7 @@ function QuestionAnswerForm({
     if (finalValue) onSubmit(finalValue, 'all');
   };
 
-  const canSubmit = isWidth ? !!fullMm : (!!value || selected.length > 0);
+  const canSubmit = isWidth ? (!!fullMm && !!widthProfile) : (!!value || selected.length > 0);
 
   return (
     <div className="border rounded-lg p-3 bg-muted/30 space-y-3">
@@ -346,6 +368,11 @@ function QuestionAnswerForm({
                 <button key={s} onClick={() => { const p = s.split(':'); setFullMm(p[0] || ''); setWorkMm(p[1] || ''); }}
                   className="text-[10px] px-2 py-0.5 rounded border border-border bg-background hover:border-primary transition-colors">{s}</button>
               ))}
+            </div>
+          )}
+          {!widthProfile && (
+            <div className="text-[10px] text-destructive bg-destructive/5 border border-destructive/20 rounded px-2 py-1">
+              Нельзя подтвердить WIDTH_MASTER: не найден profile.
             </div>
           )}
         </div>
@@ -472,7 +499,12 @@ function AIChatPanel({
     setApplyingIdx(msgIdx);
     try {
       const confirmPayload: ConfirmAction[] = actions.map(a => ({ type: a.type, payload: a.payload }));
-      if (confirmActionsFn) await confirmActionsFn(confirmPayload);
+      const guarded = normalizeAndValidateConfirmActions(confirmPayload);
+      if (guarded.issues.length > 0) {
+        throw new Error(`${guarded.issues[0].type}: ${guarded.issues[0].reason}`);
+      }
+
+      if (confirmActionsFn) await confirmActionsFn(guarded.actions);
       if (onApplyActions) onApplyActions(actions);
       setMessages(prev => prev.map((m, i) => i === msgIdx ? { ...m, actionsApplied: true } : m));
     } catch (err) {
@@ -536,7 +568,12 @@ function AIChatPanel({
                       </div>
                     )}
                     <div className="flex gap-2 mt-1">
-                      <Button size="sm" className="h-6 text-[10px] flex-1" onClick={() => handleApplyActions(m.actions!, i)} disabled={applyingIdx === i || hasInvalidWidth}>
+                      <Button
+                        size="sm"
+                        className="h-6 text-[10px] flex-1"
+                        onClick={() => handleApplyActions(m.actions!, i)}
+                        disabled={applyingIdx === i || hasInvalidConfirmActions(m.actions!.map(a => ({ type: a.type, payload: a.payload })))}
+                      >
                         {applyingIdx === i ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Play className="h-3 w-3 mr-1" />}
                         Применить
                       </Button>
@@ -633,6 +670,23 @@ function CategorySidebar({
   );
 }
 
+function KpiTile({ label, value, tone = 'default' }: { label: string; value: string; tone?: 'default' | 'success' | 'danger' | 'primary' }) {
+  const toneClass = tone === 'success'
+    ? 'text-emerald-600 dark:text-emerald-400'
+    : tone === 'danger'
+      ? 'text-destructive'
+      : tone === 'primary'
+        ? 'text-primary'
+        : 'text-foreground';
+
+  return (
+    <div className="rounded-lg border bg-card px-3 py-2 min-w-[104px]">
+      <div className={`text-base font-semibold tabular-nums leading-none ${toneClass}`}>{value}</div>
+      <div className="text-[10px] text-muted-foreground mt-1 uppercase tracking-wide">{label}</div>
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════════
@@ -656,6 +710,10 @@ export function NormalizationWizard({
   const [confirmApplyOpen, setConfirmApplyOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const [scanLimit, setScanLimit] = useState<500 | 2000 | 5000>(2000);
+  const [quickFilter, setQuickFilter] = useState('');
+  const [questionQuery, setQuestionQuery] = useState('');
+  const [highImpactOnly, setHighImpactOnly] = useState(false);
 
   const flow = useNormalizationFlow({ organizationId, importJobId: effectiveJobId });
   const norm = flow.norm;
@@ -665,6 +723,9 @@ export function NormalizationWizard({
   const startScan = flow.startScan;
   const confirmBatch = flow.confirmBatch;
   const startApply = flow.startApply;
+  const runScan = useCallback(() => {
+    void startScan({ aiSuggest: true, limit: scanLimit });
+  }, [startScan, scanLimit]);
 
   const autoStartedRef = useRef(false);
   useEffect(() => {
@@ -679,8 +740,8 @@ export function NormalizationWizard({
 
     void fetchDashboard(effectiveJobId);
     void fetchCatalogItems(500);
-    void startScan({ aiSuggest: true, limit: 2000 });
-  }, [open, organizationId, effectiveJobId, fetchDashboard, fetchCatalogItems, startScan]);
+    runScan();
+  }, [open, organizationId, effectiveJobId, fetchDashboard, fetchCatalogItems, runScan]);
 
   useEffect(() => { if (!open) autoStartedRef.current = false; }, [open]);
 
@@ -713,6 +774,38 @@ export function NormalizationWizard({
     // Filter out types that the user already confirmed in this session
     return cards.filter(c => !confirmedTypes.has(c.type));
   }, [norm.dashboardResult, aiQuestions, confirmedTypes]);
+
+  const filteredQuestionCards = useMemo(() => {
+    let cards = [...questionCards].sort((a, b) => (b.count || 0) - (a.count || 0));
+    const q = questionQuery.trim().toLowerCase();
+    if (q) {
+      cards = cards.filter((c) =>
+        (c.label || '').toLowerCase().includes(q) ||
+        (c.type || '').toLowerCase().includes(q) ||
+        (c.examples || []).some((e) => e.toLowerCase().includes(q))
+      );
+    }
+    if (highImpactOnly) {
+      cards = cards.filter((c) => (c.count || 0) >= 10);
+    }
+    return cards;
+  }, [questionCards, questionQuery, highImpactOnly]);
+
+  const filteredQuestionDetails = useMemo(() => {
+    let list = [...aiQuestions];
+    const q = questionQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter((item) =>
+        (item.token || '').toLowerCase().includes(q) ||
+        (item.ask || '').toLowerCase().includes(q) ||
+        (item.examples || []).some((ex) => ex.toLowerCase().includes(q))
+      );
+    }
+    if (highImpactOnly) {
+      list = list.filter((item) => (item.affected_count || 0) >= 10);
+    }
+    return list;
+  }, [aiQuestions, questionQuery, highImpactOnly]);
 
   const categoryStats = useMemo(() => {
     const stats: Record<string, { total: number; ready: number; needsAttention: number }> = {};
@@ -750,8 +843,16 @@ export function NormalizationWizard({
   const filteredItems = useMemo(() => {
     let result = activeCategory === 'ALL' ? items : items.filter(i => (i.product_type || 'OTHER') === activeCategory);
     if (onlyProblematic) result = result.filter(i => validateProduct(i).status !== 'ready');
+    if (quickFilter.trim()) {
+      const q = quickFilter.trim().toLowerCase();
+      result = result.filter((i) =>
+        (i.title || '').toLowerCase().includes(q) ||
+        (i.profile || '').toLowerCase().includes(q) ||
+        (i.color_or_ral || '').toLowerCase().includes(q)
+      );
+    }
     return result;
-  }, [items, activeCategory, onlyProblematic]);
+  }, [items, activeCategory, onlyProblematic, quickFilter]);
 
   const isNormalizable = activeCategory === 'PROFNASTIL' || activeCategory === 'METALLOCHEREPICA';
   const isApplying = flow.state === 'APPLY_STARTING' || flow.state === 'APPLY_RUNNING';
@@ -766,10 +867,9 @@ export function NormalizationWizard({
 
   // Handlers
   const handleRunScan = useCallback(() => {
-    setConfirmedTypes(new Set()); // Reset confirmed types on new scan
-    void startScan({ aiSuggest: true, limit: 2000 });
+    runScan();
     void fetchDashboard(effectiveJobId);
-  }, [startScan, fetchDashboard, effectiveJobId]);
+  }, [runScan, fetchDashboard, effectiveJobId]);
 
   const handleApply = useCallback(() => { setConfirmApplyOpen(false); void startApply(); }, [startApply]);
 
@@ -811,35 +911,14 @@ export function NormalizationWizard({
       const success = await norm.answerQuestion('THICKNESS_SET', profileToken, value);
       if (success) {
         setActiveQuestionForm(null);
-        void startScan({ aiSuggest: true, limit: 2000 });
+        runScan();
       }
       return;
     }
 
     // WIDTH_MASTER always needs profile + numeric fields
     if (backendType === 'WIDTH_MASTER') {
-      // Extract profile from multiple sources with aggressive fallbacks
-      let widthProfile = profileToken;
-      
-      // Fallback 1: extract from examples
-      if (!widthProfile && activeQuestionForm.examples?.length) {
-        for (const ex of activeQuestionForm.examples) {
-          // Match patterns like "МП40", "С8", "Н60", "HC35", "Профнастил МП40 ..."
-          const profileMatch = ex.match(/(?:Профнастил[и]?\s+)?([A-Za-zА-Яа-яЁё]{1,4}\d{1,3})/i);
-          if (profileMatch) { widthProfile = profileMatch[1]; break; }
-        }
-      }
-      
-      // Fallback 2: extract from cluster_path
-      if (!widthProfile && activeQuestionForm.cluster_path?.profile) {
-        widthProfile = activeQuestionForm.cluster_path.profile;
-      }
-      
-      // Fallback 3: from ask text (e.g., "Ширина для МП40")
-      if (!widthProfile && activeQuestionForm.ask) {
-        const askMatch = activeQuestionForm.ask.match(/для\s+([A-Za-zА-Яа-яЁё]{1,4}\d{1,3})/i);
-        if (askMatch) widthProfile = askMatch[1];
-      }
+      const widthProfile = resolveWidthProfile(activeQuestionForm);
       
       if (!widthProfile) {
         toast({ title: 'Не удалось определить профиль', description: 'Выберите конкретный профиль из списка «Детали вопросов»', variant: 'destructive' });
@@ -860,10 +939,11 @@ export function NormalizationWizard({
       if (result?.ok) {
         toast({ title: 'Ширина подтверждена', description: `Профиль: ${widthProfile}` });
         setActiveQuestionForm(null);
-        setConfirmedTypes(prev => new Set(prev).add('WIDTH_MASTER'));
-        void startScan({ aiSuggest: true, limit: 2000 });
+        runScan();
       } else {
-        const errMsg = (result as any)?.error?.message || 'Ошибка подтверждения';
+        const errMsg = (result && typeof result === 'object' && 'error' in result)
+          ? String((result as { error?: string }).error || 'Ошибка подтверждения')
+          : 'Ошибка подтверждения';
         toast({ title: 'Ошибка подтверждения', description: errMsg, variant: 'destructive' });
       }
       return;
@@ -875,10 +955,9 @@ export function NormalizationWizard({
     const result = await confirmBatch([action]);
     if (result?.ok) {
       setActiveQuestionForm(null);
-      setConfirmedTypes(prev => new Set(prev).add(backendType));
-      void startScan({ aiSuggest: true, limit: 2000 });
+      runScan();
     }
-  }, [confirmBatch, startScan, activeQuestionForm, norm]);
+  }, [confirmBatch, runScan, activeQuestionForm, norm]);
 
   const handleAnswerFromCluster = useCallback(async (questionId: string, value: string | number) => {
     const question = aiQuestions.find((q, i) => `q-${i}` === questionId || q.token === questionId);
@@ -890,37 +969,17 @@ export function NormalizationWizard({
     // THICKNESS_SET — use legacy path
     if (backendType === 'THICKNESS_SET') {
       const success = await norm.answerQuestion('THICKNESS_SET', token, value);
-      if (success) void startScan({ aiSuggest: true, limit: 2000 });
+      if (success) runScan();
       return;
     }
 
-    // PR2: WIDTH_MASTER needs profile + numeric payload, not token/canonical
-    if (backendType === 'WIDTH_MASTER') {
-      const profile = token;
-      if (!profile) {
-        toast({ title: 'Профиль не определён', description: 'Невозможно подтвердить ширину без профиля', variant: 'destructive' });
-        return;
-      }
-      const strVal = String(value);
-      const payload: Record<string, unknown> = { profile };
-      if (strVal.includes(':')) {
-        const [full, work] = strVal.split(':');
-        payload.full_mm = parseInt(full, 10) || 0;
-        payload.work_mm = parseInt(work, 10) || 0;
-      } else {
-        payload.full_mm = parseInt(strVal, 10) || 0;
-      }
-      console.log('[NormWizard] WIDTH_MASTER cluster confirm payload:', payload);
-      const action: ConfirmAction = { type: backendType, payload };
-      const result = await confirmBatch([action]);
-      if (result?.ok) { setConfirmedTypes(prev => new Set(prev).add(backendType)); void startScan({ aiSuggest: true, limit: 2000 }); }
-      return;
-    }
-
-    const action: ConfirmAction = { type: backendType, payload: { token, canonical: value } };
+    const payload = backendType === 'WIDTH_MASTER'
+      ? { token, canonical: value, profile: token }
+      : { token, canonical: value };
+    const action: ConfirmAction = { type: backendType, payload };
     const result = await confirmBatch([action]);
-    if (result?.ok) { setConfirmedTypes(prev => new Set(prev).add(backendType)); void startScan({ aiSuggest: true, limit: 2000 }); }
-  }, [confirmBatch, startScan, aiQuestions, norm]);
+    if (result?.ok) runScan();
+  }, [confirmBatch, runScan, aiQuestions, norm]);
 
   const getApplyStatusLabel = () => {
     const phaseLabel = norm.applyPhase && norm.applyPhase !== 'unknown'
@@ -944,7 +1003,7 @@ export function NormalizationWizard({
       <DialogContent className="max-w-[98vw] w-[1700px] h-[92vh] max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
 
         {/* ═══ TOP STICKY BAR ═══ */}
-        <div className="shrink-0 border-b bg-background">
+        <div className="shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85 sticky top-0 z-10">
           {/* Title row */}
           <div className="flex items-center justify-between px-4 py-2.5 border-b">
             <div className="flex items-center gap-3">
@@ -998,40 +1057,25 @@ export function NormalizationWizard({
           </div>
 
           {/* KPI + Status */}
-          <div className="flex items-center gap-6 px-4 py-2">
-            <div className="flex items-center gap-5">
-              <div className="text-center">
-                <div className="text-lg font-bold leading-none tabular-nums">{kpiTotal.toLocaleString('ru')}</div>
-                <div className="text-[10px] text-muted-foreground mt-0.5">Всего</div>
-              </div>
-              <div className="text-center">
-                <div className="text-lg font-bold leading-none text-primary tabular-nums">{kpiReady.toLocaleString('ru')}</div>
-                <div className="text-[10px] text-muted-foreground mt-0.5">Готово</div>
-              </div>
-              <div className="text-center">
-                <div className="text-lg font-bold leading-none text-destructive tabular-nums">{kpiAttention.toLocaleString('ru')}</div>
-                <div className="text-[10px] text-muted-foreground mt-0.5">Проблем</div>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="text-center">
-                  <div className="text-lg font-bold leading-none text-primary tabular-nums">{kpiPct.toFixed(1)}%</div>
-                  <div className="text-[10px] text-muted-foreground mt-0.5">Готовность</div>
-                </div>
-                <Progress value={kpiPct} className="h-1.5 w-24" />
-              </div>
+          <div className="flex items-center gap-4 px-4 py-2">
+            <div className="flex items-center gap-2 overflow-x-auto pb-0.5">
+              <KpiTile label="Всего" value={kpiTotal.toLocaleString('ru')} />
+              <KpiTile label="Готово" value={kpiReady.toLocaleString('ru')} tone="success" />
+              <KpiTile label="Проблем" value={kpiAttention.toLocaleString('ru')} tone="danger" />
+              <KpiTile label="Готовность" value={`${kpiPct.toFixed(1)}%`} tone="primary" />
             </div>
 
-            <div className="h-8 border-l" />
+            <div className="hidden lg:block h-8 border-l" />
 
             {/* Status indicators */}
             <div className="flex items-center gap-3 flex-1 min-w-0">
               {flow.state === 'SCANNING' && (
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground rounded-full border px-2 py-1">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" /> Сканирование…
                 </div>
               )}
               {norm.catalogLoading && flow.state !== 'SCANNING' && (
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground rounded-full border px-2 py-1">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" /> Загрузка…
                 </div>
               )}
@@ -1049,15 +1093,10 @@ export function NormalizationWizard({
                   )}
                 </div>
               )}
-              {flow.context.lastError && (
-                <div className="flex items-center gap-2 text-xs text-destructive">
-                  <AlertCircle className="h-3 w-3 shrink-0" />
-                  <span className="truncate">{flow.context.lastError}</span>
-                  {(norm.applyState === 'POLL_EXCEEDED' || norm.applyState === 'ERROR') && (
-                    <Button size="sm" variant="outline" className="h-6 text-[10px] px-2 shrink-0 border-destructive/30 text-destructive hover:bg-destructive/10" onClick={handleRunScan}>
-                      <RefreshCw className="h-3 w-3 mr-1" /> Повторить
-                    </Button>
-                  )}
+              {!isApplying && flow.state !== 'SCANNING' && (
+                <div className="hidden md:flex items-center gap-2 text-[11px] text-muted-foreground rounded-full border px-2 py-1">
+                  <span>В работе:</span>
+                  <strong className="text-foreground">{questionCards.reduce((s, c) => s + c.count, 0).toLocaleString('ru')}</strong>
                 </div>
               )}
               {norm.dryRunResult?.stats && flow.state !== 'SCANNING' && (
@@ -1069,7 +1108,7 @@ export function NormalizationWizard({
           </div>
 
           {/* AI unavailable banner */}
-          {(norm.dryRunResult?.ai_disabled || norm.dryRunResult?.stats?.ai_status?.failed) && (
+          {(norm.dryRunResult?.ai_disabled || norm.dryRunResult?.stats?.ai_status?.failed) && !norm.dryRunResult?.ai_skip_reason && (
             <div className="mx-4 mb-2 flex items-center gap-2 text-xs border border-destructive/30 bg-destructive/5 rounded-md px-3 py-2">
               <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
               <div>
@@ -1115,14 +1154,49 @@ export function NormalizationWizard({
                     {CAT_LABELS[activeCategory]}
                     {filteredItems.length > 0 && <span className="ml-2 font-normal">({filteredItems.length})</span>}
                   </span>
+                  <Badge variant="outline" className="text-xs">
+                    Показано {filteredItems.length.toLocaleString('ru')} из {Math.max(totalScanned, filteredItems.length).toLocaleString('ru')}
+                  </Badge>
+                  <div className="flex items-center gap-1 ml-auto">
+                    <Input
+                      value={quickFilter}
+                      onChange={(e) => setQuickFilter(e.target.value)}
+                      placeholder="Поиск по профилю/названию…"
+                      className="h-7 w-48 text-xs"
+                    />
+                    <span className="text-[10px] text-muted-foreground">Лимит</span>
+                    <Select value={String(scanLimit)} onValueChange={(v) => setScanLimit(Number(v) as 500 | 2000 | 5000)}>
+                      <SelectTrigger className="h-7 w-24 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="500">500</SelectItem>
+                        <SelectItem value="2000">2000</SelectItem>
+                        <SelectItem value="5000">5000</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {(quickFilter || onlyProblematic) && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-xs"
+                        onClick={() => {
+                          setQuickFilter('');
+                          setOnlyProblematic(false);
+                        }}
+                      >
+                        Сброс
+                      </Button>
+                    )}
+                  </div>
                   {onlyProblematic && filteredItems.length < (categoryStats[activeCategory]?.total || 0) && (
                     <Badge variant="outline" className="text-xs text-destructive border-destructive/30">Только проблемные</Badge>
                   )}
                 </div>
 
                 {isNormalizable ? (
-                  <div className="flex-1 flex min-h-0 overflow-hidden">
-                    <div className="w-64 border-r shrink-0 overflow-hidden">
+                  <div className="flex-1 flex min-h-0">
+                    <div className="w-72 border-r shrink-0 min-h-0 overflow-hidden">
                       <ClusterTree
                         items={filteredItems}
                         selectedCluster={selectedCluster}
@@ -1131,7 +1205,7 @@ export function NormalizationWizard({
                         onToggleNode={handleToggleNode}
                       />
                     </div>
-                    <div className="flex-1 min-w-0 overflow-hidden">
+                    <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
                       <ClusterDetailPanel
                         items={filteredItems}
                         clusterPath={selectedCluster}
@@ -1143,7 +1217,7 @@ export function NormalizationWizard({
                     </div>
                   </div>
                 ) : (
-                  <div className="flex-1 min-w-0 overflow-hidden">
+                  <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
                     <ClusterDetailPanel
                       items={filteredItems}
                       clusterPath={null}
@@ -1183,15 +1257,52 @@ export function NormalizationWizard({
                 <TabsContent value="questions" className="flex-1 min-h-0 m-0 flex flex-col">
                   <ScrollArea className="flex-1 min-h-0">
                     <div className="p-3 space-y-3">
+                      <div className="rounded-lg border bg-muted/20 p-2 space-y-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Badge variant="secondary" className="text-[10px]">Типов: {filteredQuestionCards.length}</Badge>
+                          <Badge variant="outline" className="text-[10px]">Вопросов: {filteredQuestionDetails.length}</Badge>
+                          <Badge variant="outline" className="text-[10px]">Затронуто: {filteredQuestionCards.reduce((sum, c) => sum + (c.count || 0), 0).toLocaleString('ru')}</Badge>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            value={questionQuery}
+                            onChange={(e) => setQuestionQuery(e.target.value)}
+                            placeholder="Поиск по вопросам, типам, примерам…"
+                            className="h-8 text-xs"
+                          />
+                          <Button
+                            size="sm"
+                            variant={highImpactOnly ? 'default' : 'outline'}
+                            className="h-8 text-xs whitespace-nowrap"
+                            onClick={() => setHighImpactOnly(v => !v)}
+                          >
+                            {highImpactOnly ? 'High impact ON' : 'High impact'}
+                          </Button>
+                          {(questionQuery || highImpactOnly) && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 text-xs"
+                              onClick={() => {
+                                setQuestionQuery('');
+                                setHighImpactOnly(false);
+                              }}
+                            >
+                              Сброс
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+
                       {activeQuestionForm && (
                         <QuestionAnswerForm question={activeQuestionForm} onSubmit={handleAnswerQuestion} onClose={() => setActiveQuestionForm(null)} loading={norm.answeringQuestion} />
                       )}
 
-                      {questionCards.length > 0 ? (
+                      {filteredQuestionCards.length > 0 ? (
                         <>
                           <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Задачи нормализации</div>
                           <div className="space-y-2">
-                            {questionCards.sort((a, b) => (b.count || 0) - (a.count || 0)).map(card => {
+                            {filteredQuestionCards.map(card => {
                               const relatedQs = aiQuestions.filter(aq => {
                                 const t = (aq.type || '').toUpperCase();
                                 if (card.type === 'WIDTH_MASTER' && t === 'WIDTH') return true;
@@ -1230,11 +1341,11 @@ export function NormalizationWizard({
                         </div>
                       )}
 
-                      {aiQuestions.length > 0 && !activeQuestionForm && (
+                      {filteredQuestionDetails.length > 0 && !activeQuestionForm && (
                         <>
                           <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mt-4">Детали вопросов</div>
                           <div className="space-y-1">
-                            {aiQuestions.slice(0, 20).map((q, i) => {
+                            {filteredQuestionDetails.slice(0, 30).map((q, i) => {
                               const cfg = Q_TYPE_CONFIG[q.type?.toUpperCase() + '_MAP'] || Q_TYPE_CONFIG[q.type?.toUpperCase() + '_MASTER'] || { icon: AlertTriangle, label: q.type, color: '' };
                               const QIcon = cfg.icon;
                               return (
@@ -1249,7 +1360,7 @@ export function NormalizationWizard({
                                 </button>
                               );
                             })}
-                            {aiQuestions.length > 20 && <p className="text-xs text-muted-foreground text-center py-2">+ ещё {aiQuestions.length - 20}</p>}
+                            {filteredQuestionDetails.length > 30 && <p className="text-xs text-muted-foreground text-center py-2">+ ещё {filteredQuestionDetails.length - 30}</p>}
                           </div>
                         </>
                       )}
@@ -1267,7 +1378,7 @@ export function NormalizationWizard({
                     categoryStats={categoryStats}
                     onApplyActions={(actions) => {
                       toast({ title: 'Применено из чата', description: `${actions.length} правил` });
-                      flow.startScan({ aiSuggest: true, limit: 2000 });
+                      runScan();
                     }}
                   />
                 </TabsContent>
