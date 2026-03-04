@@ -61,12 +61,13 @@ interface NormalizationWizardProps {
 // ─── Question type config ─────────────────────────────────────
 
 const Q_TYPE_CONFIG: Record<string, { icon: React.ElementType; label: string; color: string }> = {
-  WIDTH_MASTER:  { icon: Ruler,      label: 'Ширины',     color: 'bg-blue-500/10 border-blue-500/30 text-blue-700' },
-  COATING_MAP:   { icon: Layers,     label: 'Покрытия',   color: 'bg-orange-500/10 border-orange-500/30 text-orange-700' },
-  COLOR_MAP:     { icon: Palette,    label: 'Цвета',      color: 'bg-purple-500/10 border-purple-500/30 text-purple-700' },
-  THICKNESS_SET: { icon: BarChart3,  label: 'Толщины',    color: 'bg-green-500/10 border-green-500/30 text-green-700' },
-  PROFILE_MAP:   { icon: TrendingUp, label: 'Профили',    color: 'bg-cyan-500/10 border-cyan-500/30 text-cyan-700' },
-  CATEGORY_FIX:  { icon: Activity,   label: 'Категории',  color: 'bg-destructive/10 border-destructive/30 text-destructive' },
+  WIDTH_MASTER:      { icon: Ruler,      label: 'Ширины',         color: 'bg-blue-500/10 border-blue-500/30 text-blue-700' },
+  COATING_MAP:       { icon: Layers,     label: 'Покрытия',       color: 'bg-orange-500/10 border-orange-500/30 text-orange-700' },
+  COLOR_MAP:         { icon: Palette,    label: 'Цвета',          color: 'bg-purple-500/10 border-purple-500/30 text-purple-700' },
+  THICKNESS_SET:     { icon: BarChart3,  label: 'Толщины',        color: 'bg-green-500/10 border-green-500/30 text-green-700' },
+  PROFILE_MAP:       { icon: TrendingUp, label: 'Профили',        color: 'bg-cyan-500/10 border-cyan-500/30 text-cyan-700' },
+  CATEGORY_FIX:      { icon: Activity,   label: 'Категории',      color: 'bg-destructive/10 border-destructive/30 text-destructive' },
+  PRODUCT_KIND_MAP:  { icon: Activity,   label: 'Тип продукции',  color: 'bg-amber-500/10 border-amber-500/30 text-amber-700' },
 };
 
 const CAT_LABELS: Record<string, string> = {
@@ -350,7 +351,7 @@ function QuestionAnswerForm({
       )}
 
       {isWidth ? (
-        <div className="space-y-2">
+      <div className="space-y-2">
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="text-[10px] text-muted-foreground block mb-1">Полная, мм *</label>
@@ -488,6 +489,13 @@ function AIChatPanel({
   }, [input, loading, sendChat, buildContext]);
 
   const handleApplyActions = useCallback(async (actions: AiChatV2Action[], msgIdx: number) => {
+    // PR2: Validate WIDTH_MASTER actions have profile before sending
+    const invalidWidth = actions.find(a => a.type === 'WIDTH_MASTER' && !a.payload?.profile);
+    if (invalidWidth) {
+      setMessages(prev => [...prev, { role: 'assistant', content: '⚠️ Действие WIDTH_MASTER не содержит профиль. Уточните профиль в запросе.' }]);
+      return;
+    }
+
     setApplyingIdx(msgIdx);
     try {
       const confirmPayload: ConfirmAction[] = actions.map(a => ({ type: a.type, payload: a.payload }));
@@ -540,18 +548,25 @@ function AIChatPanel({
                 {m.content}
 
                 {/* Pending actions */}
-                {m.actions && m.actions.length > 0 && !m.actionsApplied && (
+                {m.actions && m.actions.length > 0 && !m.actionsApplied && (() => {
+                  const hasInvalidWidth = m.actions!.some(a => a.type === 'WIDTH_MASTER' && !a.payload?.profile);
+                  return (
                   <div className="mt-2 p-2 bg-background/50 rounded border space-y-1">
                     <div className="flex items-center gap-1 mb-1">
                       <AlertTriangle className="h-3 w-3 text-primary" />
-                      <span className="text-[10px] font-semibold">{m.actions.length} действий</span>
+                      <span className="text-[10px] font-semibold">{m.actions!.length} действий</span>
                     </div>
-                    {m.actions.slice(0, 4).map((action, j) => (
+                    {m.actions!.slice(0, 4).map((action, j) => (
                       <div key={j} className="text-[10px] font-mono bg-muted/50 rounded px-2 py-0.5 truncate">
                         <span className="text-primary font-semibold">{action.type}</span>: {JSON.stringify(action.payload).substring(0, 80)}
                       </div>
                     ))}
-                    {m.actions.length > 4 && <span className="text-[10px] text-muted-foreground">+{m.actions.length - 4} ещё</span>}
+                    {m.actions!.length > 4 && <span className="text-[10px] text-muted-foreground">+{m.actions!.length - 4} ещё</span>}
+                    {hasInvalidWidth && (
+                      <div className="flex items-center gap-1 text-[10px] text-destructive bg-destructive/5 rounded px-2 py-0.5">
+                        <AlertCircle className="h-3 w-3 shrink-0" /> WIDTH_MASTER: профиль не указан
+                      </div>
+                    )}
                     <div className="flex gap-2 mt-1">
                       <Button
                         size="sm"
@@ -567,7 +582,8 @@ function AIChatPanel({
                       </Button>
                     </div>
                   </div>
-                )}
+                  );
+                })()}
 
                 {m.actionsApplied && (
                   <div className="mt-1 text-[10px] text-primary flex items-center gap-1">
@@ -684,12 +700,13 @@ export function NormalizationWizard({
   const [inputJobId, setInputJobId] = useState(propJobId || '');
   const effectiveJobId = propJobId || inputJobId || undefined;
 
-  const [activeCategory, setActiveCategory] = useState<ProductCategory>('PROFNASTIL');
+  const [activeCategory, setActiveCategory] = useState<ProductCategory>('ALL');
   const [selectedCluster, setSelectedCluster] = useState<ClusterPath | null>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [onlyProblematic, setOnlyProblematic] = useState(false);
   const [rightTab, setRightTab] = useState<'questions' | 'chat'>('questions');
   const [activeQuestionForm, setActiveQuestionForm] = useState<AIQuestion | null>(null);
+  const [confirmedTypes, setConfirmedTypes] = useState<Set<string>>(new Set());
   const [confirmApplyOpen, setConfirmApplyOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
@@ -739,18 +756,24 @@ export function NormalizationWizard({
 
   const questionCards = useMemo((): DashboardQuestionCard[] => {
     const dbCards = norm.dashboardResult?.question_cards || [];
-    if (dbCards.length > 0) return dbCards;
-    const grouped: Record<string, DashboardQuestionCard> = {};
-    for (const q of aiQuestions) {
-      const backendType = q.type.toUpperCase() === 'WIDTH' ? 'WIDTH_MASTER' : q.type.toUpperCase() === 'COATING' ? 'COATING_MAP' : q.type.toUpperCase() === 'COLOR' ? 'COLOR_MAP' : q.type.toUpperCase() + '_MAP';
-      if (!grouped[backendType]) {
-        grouped[backendType] = { type: backendType, label: Q_TYPE_CONFIG[backendType]?.label || backendType, count: 0, examples: [] };
+    let cards: DashboardQuestionCard[];
+    if (dbCards.length > 0) {
+      cards = dbCards;
+    } else {
+      const grouped: Record<string, DashboardQuestionCard> = {};
+      for (const q of aiQuestions) {
+        const backendType = q.type.toUpperCase() === 'WIDTH' ? 'WIDTH_MASTER' : q.type.toUpperCase() === 'COATING' ? 'COATING_MAP' : q.type.toUpperCase() === 'COLOR' ? 'COLOR_MAP' : q.type.toUpperCase() + '_MAP';
+        if (!grouped[backendType]) {
+          grouped[backendType] = { type: backendType, label: Q_TYPE_CONFIG[backendType]?.label || backendType, count: 0, examples: [] };
+        }
+        grouped[backendType].count += q.affected_count;
+        grouped[backendType].examples = [...(grouped[backendType].examples || []), ...(q.examples || [])].slice(0, 5);
       }
-      grouped[backendType].count += q.affected_count;
-      grouped[backendType].examples = [...(grouped[backendType].examples || []), ...(q.examples || [])].slice(0, 5);
+      cards = Object.values(grouped);
     }
-    return Object.values(grouped);
-  }, [norm.dashboardResult, aiQuestions]);
+    // Filter out types that the user already confirmed in this session
+    return cards.filter(c => !confirmedTypes.has(c.type));
+  }, [norm.dashboardResult, aiQuestions, confirmedTypes]);
 
   const filteredQuestionCards = useMemo(() => {
     let cards = [...questionCards].sort((a, b) => (b.count || 0) - (a.count || 0));
@@ -977,7 +1000,7 @@ export function NormalizationWizard({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[98vw] w-[1700px] h-[95vh] flex flex-col p-0 gap-0">
+      <DialogContent className="max-w-[98vw] w-[1700px] h-[92vh] max-h-[92vh] flex flex-col p-0 gap-0 overflow-hidden">
 
         {/* ═══ TOP STICKY BAR ═══ */}
         <div className="shrink-0 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85 sticky top-0 z-10">
@@ -1004,7 +1027,7 @@ export function NormalizationWizard({
 
             <div className="flex items-center gap-2">
               {DEV_MODE && !propJobId && (
-                <Input value={inputJobId} onChange={e => setInputJobId(e.target.value)} placeholder="Job ID" className="h-7 w-40 text-xs" />
+                <Input value={inputJobId} onChange={e => setInputJobId(e.target.value)} placeholder="ID задачи импорта" className="h-7 w-40 text-xs" />
               )}
               <Button size="sm" variant="ghost" onClick={() => setShowSettings(v => !v)} className="h-7 text-xs gap-1">
                 <Settings2 className="h-3.5 w-3.5" />
@@ -1106,8 +1129,8 @@ export function NormalizationWizard({
         </div>
 
         {/* ═══ BODY: Resizable 3-Panel Layout ═══ */}
-        <div className="flex-1 min-h-0 overflow-hidden">
-          <ResizablePanelGroup direction="horizontal" className="h-full">
+        <div className="flex-1 min-h-0 overflow-hidden relative">
+          <ResizablePanelGroup direction="horizontal" className="absolute inset-0">
             {/* LEFT: Categories */}
             <ResizablePanel defaultSize={14} minSize={10} maxSize={22}>
               <CategorySidebar
@@ -1124,7 +1147,7 @@ export function NormalizationWizard({
 
             {/* CENTER: Clusters / Table */}
             <ResizablePanel defaultSize={rightPanelOpen ? 56 : 86} minSize={30}>
-              <div className="flex flex-col h-full">
+              <div className="flex flex-col h-full overflow-hidden">
                 {/* Center toolbar */}
                 <div className="px-3 py-2 border-b flex items-center gap-2 shrink-0 bg-muted/30">
                   <span className="text-xs font-semibold text-muted-foreground">
