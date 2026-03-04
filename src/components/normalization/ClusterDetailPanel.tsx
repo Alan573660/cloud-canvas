@@ -149,7 +149,9 @@ function WidthQuestionForm({ question, onAnswer, disabled }: {
       {/* Pre-fill from suggestions */}
       {question.suggestions.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
-          {question.suggestions.map((s, i) => (
+          {question.suggestions
+            .filter(s => typeof s === 'string' && !s.startsWith('{'))
+            .map((s, i) => (
             <Button
               key={i}
               size="sm"
@@ -183,7 +185,9 @@ function TextQuestionForm({ question, onAnswer, placeholder, disabled }: {
       {/* Suggestion buttons */}
       {question.suggestions.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
-          {question.suggestions.map((s, i) => (
+          {question.suggestions
+            .filter(s => typeof s === 'string' && !s.startsWith('{'))
+            .map((s, i) => (
             <Button
               key={i}
               size="sm"
