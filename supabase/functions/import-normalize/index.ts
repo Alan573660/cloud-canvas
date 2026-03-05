@@ -102,6 +102,7 @@ interface PreviewRowsRequest {
   sheet_kind?: string;
   profile?: string;
   sort?: string;
+  status?: 'needs_attention' | 'ready';
   limit?: number;
   offset?: number;
 }
@@ -464,6 +465,7 @@ Deno.serve(async (req) => {
       if (previewBody.sheet_kind) previewPayload.sheet_kind = previewBody.sheet_kind;
       if (previewBody.profile) previewPayload.profile = previewBody.profile;
       if (previewBody.sort) previewPayload.sort = previewBody.sort;
+      if (previewBody.status) previewPayload.status = previewBody.status;
 
       const result = await callEnricher(`${enricherUrl}/api/enrich/preview_rows`, 'POST', previewPayload, 30000);
 

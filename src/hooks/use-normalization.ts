@@ -37,6 +37,7 @@ export type {
   DashboardResult,
   TreeNode,
   TreeResult,
+  GlobalFacets,
 } from '@/lib/contract-types';
 
 import type {
@@ -53,6 +54,7 @@ import type {
   TreeResult,
   PreviewRowsResult,
   PreviewRowsFacets,
+  GlobalFacets,
 } from '@/lib/contract-types';
 
 import { normalizeApplyStatus } from '@/lib/contract-types';
@@ -112,6 +114,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogTotal, setCatalogTotal] = useState(0);
   const [catalogFacets, setCatalogFacets] = useState<PreviewRowsFacets | null>(null);
+  const [globalFacets, setGlobalFacets] = useState<GlobalFacets | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [profileHash, setProfileHash] = useState<string | null>(null);
 
@@ -692,6 +695,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     profile?: string;
     sort?: string;
     q?: string;
+    status?: 'needs_attention' | 'ready';
   }) => {
     setCatalogLoading(true);
     try {
@@ -703,6 +707,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       let offset = 0;
       let hasMore = true;
       let facets: PreviewRowsFacets | null = null;
+      let gFacets: GlobalFacets | null = null;
 
       while (hasMore && allRows.length < maxRows) {
         const currentBatch = Math.min(batchSize, maxRows - allRows.length);
@@ -717,6 +722,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
         if (filters?.profile) payload.profile = filters.profile;
         if (filters?.sort) payload.sort = filters.sort;
         if (filters?.q) payload.q = filters.q;
+        if (filters?.status) payload.status = filters.status;
 
         let result: PreviewRowsResult;
         try {
@@ -738,15 +744,19 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
         offset += rows.length;
         hasMore = (result.has_next !== undefined ? result.has_next : rows.length === currentBatch) && allRows.length < maxRows;
 
-        // Capture facets from first batch response
+        // Capture facets and global_facets from first batch response
         if (!facets && result.facets) {
           facets = result.facets;
+        }
+        if (!gFacets && result.global_facets) {
+          gFacets = result.global_facets;
         }
       }
 
       setCatalogTotal(totalCount || allRows.length);
       setCatalogItems(allRows);
       setCatalogFacets(facets);
+      setGlobalFacets(gFacets);
       return allRows;
     } catch (err) {
       const msg = parseEdgeFunctionError(err);
@@ -776,6 +786,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setCatalogItems([]);
     setCatalogTotal(0);
     setCatalogFacets(null);
+    setGlobalFacets(null);
     answerLocksRef.current.clear();
     stopPolling();
   }, [stopPolling]);
@@ -793,6 +804,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     catalogLoading,
     catalogTotal,
     catalogFacets,
+    globalFacets,
     fetchCatalogItems,
 
     // Apply

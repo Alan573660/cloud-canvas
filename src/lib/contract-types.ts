@@ -246,6 +246,8 @@ export interface CatalogRow {
   width_work_mm?: number | null;
   width_full_mm?: number | null;
   base_price_rub_m2?: number;
+  /** Canonical price field returned by enricher preview_rows */
+  price_rub_m2?: number | null;
   sku?: string | null;
   extra_params?: Record<string, unknown>;
   // Fields from enricher preview_rows (BigQuery)
@@ -271,6 +273,14 @@ export interface PreviewRowsFacets {
   profiles: FacetEntry[];
 }
 
+/** Global facets — unfiltered totals for KPI (returned when status/sheet_kind filters are active) */
+export interface GlobalFacets {
+  total: number;
+  ready: number;
+  needs_attention: number;
+  by_kind?: Record<string, { total: number; ready: number; needs_attention: number }>;
+}
+
 export interface PreviewRowsResult {
   ok: boolean;
   total_count: number;
@@ -279,6 +289,7 @@ export interface PreviewRowsResult {
   has_next: boolean;
   rows: CatalogRow[];
   facets?: PreviewRowsFacets;
+  global_facets?: GlobalFacets;
   error?: string;
 }
 
