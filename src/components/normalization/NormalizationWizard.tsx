@@ -969,10 +969,12 @@ export function NormalizationWizard({
   const totalScanned = flow.context.totalScanned;
 
   const dashProgress = norm.dashboardResult?.progress;
-  const kpiTotal = dashProgress?.total || categoryStats.ALL.total || totalScanned;
+  // Priority: catalogTotal (from preview_rows total_count=71316) > dry_run stats > dashboard (capped at 500)
+  const serverTotal = norm.catalogTotal || totalScanned || norm.dryRunResult?.stats?.rows_total || 0;
+  const kpiTotal = serverTotal > 0 ? serverTotal : (dashProgress?.total || categoryStats.ALL.total || 0);
   const kpiReady = dashProgress?.ready || categoryStats.ALL.ready;
   const kpiAttention = dashProgress?.needs_attention || categoryStats.ALL.needsAttention;
-  const kpiPct = dashProgress?.ready_pct || (kpiTotal > 0 ? (kpiReady / kpiTotal) * 100 : 0);
+  const kpiPct = kpiTotal > 0 ? (kpiReady / kpiTotal) * 100 : 0;
 
   // Handlers
   const handleRunScan = useCallback(() => {
@@ -1292,7 +1294,7 @@ export function NormalizationWizard({
                     {filteredItems.length > 0 && <span className="ml-2 font-normal">({filteredItems.length})</span>}
                   </span>
                   <Badge variant="outline" className="text-xs">
-                    Показано {filteredItems.length.toLocaleString('ru')} из {Math.max(norm.catalogTotal, totalScanned, filteredItems.length).toLocaleString('ru')}
+                    Показано {filteredItems.length.toLocaleString('ru')} из {kpiTotal.toLocaleString('ru')}
                   </Badge>
                   <div className="flex items-center gap-1 ml-auto">
                     <Input
