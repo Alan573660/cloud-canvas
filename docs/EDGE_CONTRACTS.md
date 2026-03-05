@@ -48,9 +48,11 @@
   "op": "dry_run",
   "organization_id": "uuid",
   "import_job_id": "uuid",
-  "scope": { "only_where_null": true, "limit": 2000 },
-  "ai_suggest": false
+  "scope": { "only_where_null": false, "limit": 0, "sheet_kind": "PROFNASTIL" },
+  "ai_suggest": true
 }
+```
+**Примечание:** `limit: 0` = весь датасет (без ограничения). `sheet_kind` (опционально) — фокус анализа на конкретную категорию.
 ```
 
 **Response OK (LIVE):**
@@ -116,29 +118,40 @@
     }
   ],
   "stats": {
+    "rows_scanned": 71316,
+    "rows_total": 71316,
+    "candidates": 45000,
+    "patches_ready": 71316,
+    "unique_patterns": 12500,
     "sample": 60,
-    "target_sample": 300,
+    "target_sample": 45000,
     "questions": 1,
     "ai": true,
     "shadow_mode": true,
     "ai_status": {
       "enabled": true,
-      "attempted": false,
+      "attempted": true,
       "failed": false,
-      "fail_reason": "not_attempted",
+      "fail_reason": "no_candidates",
       "model": "gemini-2.5-flash-lite"
     }
+  },
+  "patches_by_kind": {
+    "PROFNASTIL": { "count": 25000, "sample": ["...до 10 патчей..."] },
+    "METAL_TILE": { "count": 18000, "sample": ["..."] },
+    "ACCESSORY": { "count": 28316, "sample": ["..."] }
   }
 }
 ```
 
-**Ключевые поля dry_run:**
+**Ключевые поля dry_run (v2):**
 - `patches_sample[]` — примеры извлечённых атрибутов (до 60 шт).
+- `patches_by_kind` — группировка патчей по `sheet_kind` с count и sample (до 10).
+- `stats.rows_scanned` / `stats.rows_total` — полный объём обработанных строк.
+- `stats.candidates` — строки целевых типов (PROFNASTIL/METAL_TILE/SANDWICH).
+- `stats.unique_patterns` — уникальные паттерны названий.
 - `questions[]` — вопросы, требующие подтверждения пользователем.
-- `questions[].type` — тип вопроса: `WIDTH_MASTER`, `CATEGORY`, и др.
-- `questions[].profiles[]` — профили с примерами (для WIDTH_MASTER).
-- `questions[].families[]` — группы family_key + count.
-- `stats.ai_status` — статус ИИ с причиной отказа.
+- `stats.ai_status.fail_reason` — может быть `no_candidates` при отсутствии кандидатов для AI.
 
 **Response ERROR:**
 ```json
@@ -284,14 +297,38 @@
 
 ### 1.8 preview_rows
 
+**Request:**
+```json
+{
+  "op": "preview_rows",
+  "organization_id": "uuid",
+  "import_job_id": "uuid",
+  "sheet_kind": "PROFNASTIL",
+  "profile": "С8",
+  "sort": "title_asc",
+  "q": "поиск",
+  "limit": 500,
+  "offset": 0
+}
+```
+
 **Response OK:**
 ```json
 {
   "ok": true,
-  "contract_version": "v1",
-  "rows": [ { "id": "...", "title": "...", "normalized_key": "..." } ],
-  "total": 500
+  "total_count": 71316,
+  "offset": 0,
+  "limit": 500,
+  "has_next": true,
+  "rows": [ { "id": "...", "title": "...", "sheet_kind": "PROFNASTIL", "profile": "С8" } ],
+  "facets": {
+    "sheet_kinds": [{ "kind": "PROFNASTIL", "count": 25000 }, { "kind": "METAL_TILE", "count": 18000 }],
+    "profiles": [{ "profile": "С8", "count": 5000 }, { "profile": "С21", "count": 3000 }]
+  }
 }
+```
+
+**Новые поля:** `sheet_kind`, `profile`, `sort` (фильтры), `total_count`, `has_next`, `facets` (агрегации).
 ```
 
 ---

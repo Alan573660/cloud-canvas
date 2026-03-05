@@ -65,6 +65,12 @@ export interface DryRunPatch {
   notes?: string;
   family_key?: string;
   cat_name?: string;
+  cat_tree?: string;
+}
+
+export interface PatchesByKindEntry {
+  count: number;
+  sample: DryRunPatch[];
 }
 
 export interface DryRunResult {
@@ -73,14 +79,19 @@ export interface DryRunResult {
   profile_hash?: string;
   stats?: {
     rows_scanned: number;
+    rows_total: number;
     candidates: number;
     patches_ready: number;
+    unique_patterns?: number;
     ai_status?: AIStatus;
     // Legacy
+    sample?: number;
+    target_sample?: number;
     ai?: boolean;
     shadow_mode?: boolean;
   };
   patches_sample?: DryRunPatch[];
+  patches_by_kind?: Record<string, PatchesByKindEntry>;
   questions?: BackendQuestion[];
   error?: string;
   code?: string;
@@ -237,6 +248,38 @@ export interface CatalogRow {
   base_price_rub_m2?: number;
   sku?: string | null;
   extra_params?: Record<string, unknown>;
+  // Fields from enricher preview_rows (BigQuery)
+  sheet_kind?: string | null;
+  color_system?: string | null;
+  color_code?: string | null;
+  unit?: string | null;
+  cur?: string | number | null;
+  cat_name?: string | null;
+  cat_tree?: string | null;
+}
+
+// ─── Preview Rows Result ────────────────────────────────────
+
+export interface FacetEntry {
+  kind?: string;
+  profile?: string;
+  count: number;
+}
+
+export interface PreviewRowsFacets {
+  sheet_kinds: FacetEntry[];
+  profiles: FacetEntry[];
+}
+
+export interface PreviewRowsResult {
+  ok: boolean;
+  total_count: number;
+  offset: number;
+  limit: number;
+  has_next: boolean;
+  rows: CatalogRow[];
+  facets?: PreviewRowsFacets;
+  error?: string;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────

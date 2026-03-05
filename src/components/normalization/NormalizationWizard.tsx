@@ -45,7 +45,7 @@ import type {
 } from './types';
 import { validateProduct } from './types';
 import { useNormalizationFlow } from '@/hooks/use-normalization-flow';
-import type { DryRunPatch, BackendQuestion, CatalogRow, DashboardQuestionCard, AiChatV2Action, AiChatV2Result, ConfirmAction } from '@/lib/contract-types';
+import type { DryRunPatch, BackendQuestion, CatalogRow, DashboardQuestionCard, AiChatV2Action, AiChatV2Result, ConfirmAction, PatchesByKindEntry } from '@/lib/contract-types';
 import { hasInvalidConfirmActions, normalizeAndValidateConfirmActions } from '@/lib/confirm-action-guards';
 
 // ─── Props ────────────────────────────────────────────────────
@@ -169,8 +169,18 @@ function patchToCanonical(item: DryRunPatch): CanonicalProduct {
 
 function catalogRowToCanonical(row: CatalogRow): CanonicalProduct {
   const extra = (row.extra_params || {}) as Record<string, unknown>;
-  const sheetKind = (extra.sheet_kind as string) || '';
+  // Prefer direct fields from enricher preview_rows, fall back to extra_params
+  const sheetKind = row.sheet_kind || (extra.sheet_kind as string) || '';
+  const colorSystem = row.color_system || (extra.color_system as string) || '';
+  const colorCode = row.color_code || (extra.color_code as string) || '';
   const category = categorizeItem({ profile: row.profile || '', title: row.title || '', sheet_kind: sheetKind });
+  
+  // Price: prefer base_price_rub_m2, fallback to cur
+  let price = row.base_price_rub_m2 ?? 0;
+  if (!price && row.cur != null) {
+    price = typeof row.cur === 'number' ? row.cur : parseFloat(String(row.cur)) || 0;
+  }
+  
   return {
     id: row.id,
     organization_id: '',
@@ -178,14 +188,14 @@ function catalogRowToCanonical(row: CatalogRow): CanonicalProduct {
     profile: row.profile || '',
     thickness_mm: row.thickness_mm || 0,
     coating: row.coating || '',
-    color_or_ral: (extra.color_code as string) || '',
-    color_system: (extra.color_system as string) || '',
-    color_code: (extra.color_code as string) || '',
+    color_or_ral: colorCode,
+    color_system: colorSystem,
+    color_code: colorCode,
     zinc_label: extractZincLabel(row.notes || undefined),
     work_width_mm: row.width_work_mm || 0,
     full_width_mm: row.width_full_mm || 0,
-    price: row.base_price_rub_m2 ?? 0,
-    unit: 'm2',
+    price,
+    unit: (row.unit === 'm2' || !row.unit) ? 'm2' : 'sht',
     title: row.title || undefined,
     notes: row.notes || undefined,
   };
@@ -740,8 +750,8 @@ export function NormalizationWizard({
   const confirmBatch = flow.confirmBatch;
   const startApply = flow.startApply;
   const runScan = useCallback(() => {
-    void startScan({ aiSuggest: true, limit: scanLimit });
-  }, [startScan, scanLimit]);
+    void startScan({ aiSuggest: true, limit: 0 }); // 0 = full dataset (no limit)
+  }, [startScan]);
 
   const autoStartedRef = useRef(false);
   useEffect(() => {
@@ -863,24 +873,67 @@ export function NormalizationWizard({
   }, [aiQuestions, questionQuery, highImpactOnly]);
 
 
+  // Map sheet_kind → ProductCategory for facets
+  const SHEET_KIND_TO_CAT: Record<string, ProductCategory> = {
+    PROFNASTIL: 'PROFNASTIL',
+    METAL_TILE: 'METALLOCHEREPICA',
+    ACCESSORY: 'DOBOR',
+    SANDWICH: 'SANDWICH',
+    SMOOTH_SHEET: 'OTHER',
+    OTHER: 'OTHER',
+  };
+
   const categoryStats = useMemo(() => {
     const stats: Record<string, { total: number; ready: number; needsAttention: number }> = {};
     const cats: ProductCategory[] = ['ALL', 'PROFNASTIL', 'METALLOCHEREPICA', 'DOBOR', 'SANDWICH', 'OTHER'];
     for (const c of cats) stats[c] = { total: 0, ready: 0, needsAttention: 0 };
+
+    // If we have server facets (from preview_rows), use them for total counts
+    const facets = norm.catalogFacets;
+    if (facets?.sheet_kinds?.length) {
+      let allTotal = 0;
+      for (const f of facets.sheet_kinds) {
+        const kind = (f.kind || '').toUpperCase();
+        const cat = SHEET_KIND_TO_CAT[kind] || 'OTHER';
+        if (stats[cat]) stats[cat].total += f.count;
+        allTotal += f.count;
+      }
+      stats.ALL.total = allTotal;
+    }
+
+    // If we have patches_by_kind, overlay counts
+    const patchesByKind = norm.dryRunResult?.patches_by_kind;
+    if (patchesByKind) {
+      for (const [kind, entry] of Object.entries(patchesByKind)) {
+        const cat = SHEET_KIND_TO_CAT[kind.toUpperCase()] || 'OTHER';
+        // patches_by_kind gives us the enriched count from dry_run
+        if (!facets?.sheet_kinds?.length && stats[cat]) {
+          stats[cat].total = Math.max(stats[cat].total, entry.count);
+        }
+      }
+      if (!facets?.sheet_kinds?.length) {
+        stats.ALL.total = Object.values(patchesByKind).reduce((s, e) => s + e.count, 0);
+      }
+    }
+
+    // Compute ready/needsAttention from loaded items
     for (const item of items) {
       const cat = item.product_type || 'OTHER';
       const v = validateProduct(item);
-      stats.ALL.total++;
-      if (v.status === 'ready') stats.ALL.ready++;
-      else stats.ALL.needsAttention++;
-      if (stats[cat]) {
-        stats[cat].total++;
-        if (v.status === 'ready') stats[cat].ready++;
-        else stats[cat].needsAttention++;
+      if (!facets?.sheet_kinds?.length && !patchesByKind) {
+        stats.ALL.total++;
+        if (stats[cat]) stats[cat].total++;
+      }
+      if (v.status === 'ready') {
+        stats.ALL.ready++;
+        if (stats[cat]) stats[cat].ready++;
+      } else {
+        stats.ALL.needsAttention++;
+        if (stats[cat]) stats[cat].needsAttention++;
       }
     }
     return stats;
-  }, [items]);
+  }, [items, norm.catalogFacets, norm.dryRunResult?.patches_by_kind]);
 
   // Auto-select best category
   useEffect(() => {
@@ -1248,18 +1301,6 @@ export function NormalizationWizard({
                       placeholder="Поиск по профилю/названию…"
                       className="h-7 w-48 text-xs"
                     />
-                    <span className="text-[10px] text-muted-foreground">Лимит</span>
-                    <Select value={String(scanLimit)} onValueChange={(v) => setScanLimit(Number(v) as 500 | 2000 | 5000 | 10000)}>
-                      <SelectTrigger className="h-7 w-24 text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="500">500</SelectItem>
-                        <SelectItem value="2000">2 000</SelectItem>
-                        <SelectItem value="5000">5 000</SelectItem>
-                        <SelectItem value="10000">10 000</SelectItem>
-                      </SelectContent>
-                    </Select>
                     {(quickFilter || onlyProblematic) && (
                       <Button
                         size="sm"
