@@ -718,9 +718,14 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
         if (filters?.sort) payload.sort = filters.sort;
         if (filters?.q) payload.q = filters.q;
 
-        const data = await invokeOrThrow('import-normalize', payload);
-
-        const result = data as PreviewRowsResult;
+        let result: PreviewRowsResult;
+        try {
+          const data = await invokeOrThrow('import-normalize', payload);
+          result = data as PreviewRowsResult;
+        } catch (batchErr) {
+          console.warn(`[fetchCatalogItems] batch at offset=${offset} failed:`, parseEdgeFunctionError(batchErr));
+          break; // Stop batching but keep already loaded rows
+        }
 
         if (!result?.ok) {
           console.warn('[fetchCatalogItems] preview_rows returned not ok:', result?.error);
@@ -746,7 +751,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     } catch (err) {
       const msg = parseEdgeFunctionError(err);
       console.warn('[fetchCatalogItems] preview_rows error:', msg);
-      setCatalogItems([]);
+      // Don't reset items — preserve any partially loaded data
       return [];
     } finally {
       setCatalogLoading(false);
