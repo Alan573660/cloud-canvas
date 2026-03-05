@@ -458,7 +458,7 @@ Deno.serve(async (req) => {
         group_type: previewBody.group_type,
         filter_key: previewBody.filter_key,
         q: previewBody.q,
-        limit: Math.min(previewBody.limit ?? 500, 2000),
+        limit: previewBody.limit ?? 500,
         offset: previewBody.offset ?? 0,
       };
       // Pass through Contract v1 filter fields

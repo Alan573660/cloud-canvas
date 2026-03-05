@@ -690,7 +690,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
 
   // ─── Fetch Catalog Items via enricher preview_rows ─────────
 
-  const fetchCatalogItems = useCallback(async (limit = 2000, filters?: {
+  const fetchCatalogItems = useCallback(async (limit = 10000, filters?: {
     sheetKind?: string;
     profile?: string;
     sort?: string;
@@ -699,9 +699,9 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   }) => {
     setCatalogLoading(true);
     try {
-      // Fetch in batches to overcome backend row limits
-      const batchSize = 500;
-      const maxRows = Math.min(limit, 10000);
+      // Fetch in batches — use 2000 per batch for speed, no artificial cap
+      const batchSize = 2000;
+      const maxRows = limit <= 0 ? 100000 : limit; // 0 = unlimited
       let allRows: CatalogRow[] = [];
       let totalCount = 0;
       let offset = 0;
