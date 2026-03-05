@@ -71,6 +71,7 @@ interface DryRunRequest {
   scope?: {
     only_where_null?: boolean;
     limit?: number;
+    sheet_kind?: string;
   };
   ai_suggest?: boolean;
 }
@@ -98,6 +99,9 @@ interface PreviewRowsRequest {
   group_type?: 'WIDTH' | 'COLOR' | 'COATING' | 'DECOR' | 'THICKNESS';
   filter_key?: string;
   q?: string;
+  sheet_kind?: string;
+  profile?: string;
+  sort?: string;
   limit?: number;
   offset?: number;
 }
@@ -358,13 +362,15 @@ Deno.serve(async (req) => {
     // =========================================
     if (op === 'dry_run') {
       const dryRunBody = body as DryRunRequest;
-      const requestedScope = dryRunBody.scope || {};
-      const enricherPayload = {
+      const requestedScope = dryRunBody.scope || {} as Record<string, unknown>;
+      const scopeLimit = typeof requestedScope.limit === 'number' ? requestedScope.limit : 0;
+      const enricherPayload: Record<string, unknown> = {
         organization_id,
         import_job_id,
         scope: {
           only_where_null: requestedScope.only_where_null ?? true,
-          limit: Math.min(requestedScope.limit ?? 2000, 3000),
+          limit: scopeLimit, // 0 = no limit (full dataset scan)
+          ...(requestedScope.sheet_kind ? { sheet_kind: requestedScope.sheet_kind } : {}),
         },
         ai_suggest: dryRunBody.ai_suggest ?? false,
       };
@@ -445,7 +451,7 @@ Deno.serve(async (req) => {
     // =========================================
     if (op === 'preview_rows') {
       const previewBody = body as PreviewRowsRequest;
-      const previewPayload = {
+      const previewPayload: Record<string, unknown> = {
         organization_id,
         import_job_id: previewBody.import_job_id || 'current',
         group_type: previewBody.group_type,
@@ -454,6 +460,10 @@ Deno.serve(async (req) => {
         limit: Math.min(previewBody.limit ?? 500, 2000),
         offset: previewBody.offset ?? 0,
       };
+      // Pass through Contract v1 filter fields
+      if (previewBody.sheet_kind) previewPayload.sheet_kind = previewBody.sheet_kind;
+      if (previewBody.profile) previewPayload.profile = previewBody.profile;
+      if (previewBody.sort) previewPayload.sort = previewBody.sort;
 
       const result = await callEnricher(`${enricherUrl}/api/enrich/preview_rows`, 'POST', previewPayload, 30000);
 
