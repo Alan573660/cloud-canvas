@@ -45,7 +45,7 @@ import type {
 } from './types';
 import { validateProduct } from './types';
 import { useNormalizationFlow } from '@/hooks/use-normalization-flow';
-import type { DryRunPatch, BackendQuestion, CatalogRow, DashboardQuestionCard, AiChatV2Action, AiChatV2Result, ConfirmAction, PatchesByKindEntry } from '@/lib/contract-types';
+import type { DryRunPatch, BackendQuestion, CatalogRow, DashboardQuestionCard, AiChatV2Action, AiChatV2Result, ConfirmAction, PatchesByKindEntry, GlobalFacets } from '@/lib/contract-types';
 import { hasInvalidConfirmActions, normalizeAndValidateConfirmActions } from '@/lib/confirm-action-guards';
 
 // ─── Props ────────────────────────────────────────────────────
@@ -175,8 +175,8 @@ function catalogRowToCanonical(row: CatalogRow): CanonicalProduct {
   const colorCode = row.color_code || (extra.color_code as string) || '';
   const category = categorizeItem({ profile: row.profile || '', title: row.title || '', sheet_kind: sheetKind });
   
-  // Price: prefer base_price_rub_m2, fallback to cur
-  let price = row.base_price_rub_m2 ?? 0;
+  // Price: prefer price_rub_m2 (canonical from enricher), then base_price_rub_m2, then cur
+  let price = row.price_rub_m2 ?? row.base_price_rub_m2 ?? 0;
   if (!price && row.cur != null) {
     price = typeof row.cur === 'number' ? row.cur : parseFloat(String(row.cur)) || 0;
   }
@@ -888,7 +888,28 @@ export function NormalizationWizard({
     const cats: ProductCategory[] = ['ALL', 'PROFNASTIL', 'METALLOCHEREPICA', 'DOBOR', 'SANDWICH', 'OTHER'];
     for (const c of cats) stats[c] = { total: 0, ready: 0, needsAttention: 0 };
 
-    // If we have server facets (from preview_rows), use them for total counts
+    // If we have global_facets (server-side accurate KPIs), use them
+    const gf = norm.globalFacets;
+    if (gf?.by_kind) {
+      let allTotal = 0, allReady = 0, allAttention = 0;
+      for (const [kind, kpi] of Object.entries(gf.by_kind)) {
+        const cat = SHEET_KIND_TO_CAT[kind.toUpperCase()] || 'OTHER';
+        if (stats[cat]) {
+          stats[cat].total += kpi.total;
+          stats[cat].ready += kpi.ready;
+          stats[cat].needsAttention += kpi.needs_attention;
+        }
+        allTotal += kpi.total;
+        allReady += kpi.ready;
+        allAttention += kpi.needs_attention;
+      }
+      stats.ALL.total = gf.total || allTotal;
+      stats.ALL.ready = gf.ready ?? allReady;
+      stats.ALL.needsAttention = gf.needs_attention ?? allAttention;
+      return stats;
+    }
+
+    // Fallback: If we have server facets (from preview_rows), use them for total counts
     const facets = norm.catalogFacets;
     if (facets?.sheet_kinds?.length) {
       let allTotal = 0;
@@ -906,7 +927,6 @@ export function NormalizationWizard({
     if (patchesByKind) {
       for (const [kind, entry] of Object.entries(patchesByKind)) {
         const cat = SHEET_KIND_TO_CAT[kind.toUpperCase()] || 'OTHER';
-        // patches_by_kind gives us the enriched count from dry_run
         if (!facets?.sheet_kinds?.length && stats[cat]) {
           stats[cat].total = Math.max(stats[cat].total, entry.count);
         }
@@ -933,7 +953,7 @@ export function NormalizationWizard({
       }
     }
     return stats;
-  }, [items, norm.catalogFacets, norm.dryRunResult?.patches_by_kind]);
+  }, [items, norm.catalogFacets, norm.dryRunResult?.patches_by_kind, norm.globalFacets]);
 
   // Auto-select best category
   useEffect(() => {
@@ -969,11 +989,12 @@ export function NormalizationWizard({
   const totalScanned = flow.context.totalScanned;
 
   const dashProgress = norm.dashboardResult?.progress;
-  // Priority: catalogTotal (from preview_rows total_count=71316) > dry_run stats > dashboard (capped at 500)
-  const serverTotal = norm.catalogTotal || totalScanned || norm.dryRunResult?.stats?.rows_total || 0;
+  const gf = norm.globalFacets;
+  // Priority: global_facets (accurate server-side KPIs) > catalogTotal > dry_run stats > dashboard
+  const serverTotal = gf?.total || norm.catalogTotal || totalScanned || norm.dryRunResult?.stats?.rows_total || 0;
   const kpiTotal = serverTotal > 0 ? serverTotal : (dashProgress?.total || categoryStats.ALL.total || 0);
-  const kpiReady = dashProgress?.ready || categoryStats.ALL.ready;
-  const kpiAttention = dashProgress?.needs_attention || categoryStats.ALL.needsAttention;
+  const kpiReady = gf?.ready ?? dashProgress?.ready ?? categoryStats.ALL.ready;
+  const kpiAttention = gf?.needs_attention ?? dashProgress?.needs_attention ?? categoryStats.ALL.needsAttention;
   const kpiPct = kpiTotal > 0 ? (kpiReady / kpiTotal) * 100 : 0;
 
   // Handlers
