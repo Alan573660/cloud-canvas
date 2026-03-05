@@ -51,6 +51,8 @@ import type {
   CatalogRow,
   DashboardResult,
   TreeResult,
+  PreviewRowsResult,
+  PreviewRowsFacets,
 } from '@/lib/contract-types';
 
 import { normalizeApplyStatus } from '@/lib/contract-types';
@@ -105,10 +107,11 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
   const [dryRunLoading, setDryRunLoading] = useState(false);
   const [dryRunResult, setDryRunResult] = useState<DryRunResult | null>(null);
 
-  // Catalog items loaded directly from DB
+  // Catalog items loaded directly from enricher preview_rows
   const [catalogItems, setCatalogItems] = useState<CatalogRow[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogTotal, setCatalogTotal] = useState(0);
+  const [catalogFacets, setCatalogFacets] = useState<PreviewRowsFacets | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [profileHash, setProfileHash] = useState<string | null>(null);
 
@@ -163,6 +166,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     limit?: number;
     aiSuggest?: boolean;
     sheetKinds?: string[];
+    sheetKind?: string;
     onlyWhereNull?: boolean;
   }) => {
     setDryRunLoading(true);
@@ -172,15 +176,21 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setApplyError(null);
 
     try {
+      const scopeObj: Record<string, unknown> = {
+        only_where_null: options?.onlyWhereNull ?? false,
+        limit: options?.limit ?? 0, // 0 = no limit (full dataset)
+      };
+      if (options?.sheetKind) {
+        scopeObj.sheet_kind = options.sheetKind;
+      } else if (options?.sheetKinds?.length) {
+        scopeObj.sheet_kinds = options.sheetKinds;
+      }
+
       const { data, envelope, errorMessage } = await invokeWithEnvelope<DryRunResult>('import-normalize', {
         op: 'dry_run',
         organization_id: organizationId,
         import_job_id: importJobId || 'current',
-        scope: {
-          only_where_null: options?.onlyWhereNull ?? false,
-          limit: options?.limit ?? 2000,
-          ...(options?.sheetKinds ? { sheet_kinds: options.sheetKinds } : {}),
-        },
+        scope: scopeObj,
         ai_suggest: options?.aiSuggest ?? false,
       });
 
@@ -677,7 +687,12 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
 
   // ─── Fetch Catalog Items via enricher preview_rows ─────────
 
-  const fetchCatalogItems = useCallback(async (limit = 2000) => {
+  const fetchCatalogItems = useCallback(async (limit = 2000, filters?: {
+    sheetKind?: string;
+    profile?: string;
+    sort?: string;
+    q?: string;
+  }) => {
     setCatalogLoading(true);
     try {
       // Fetch in batches to overcome backend row limits
@@ -687,23 +702,25 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
       let totalCount = 0;
       let offset = 0;
       let hasMore = true;
+      let facets: PreviewRowsFacets | null = null;
 
       while (hasMore && allRows.length < maxRows) {
         const currentBatch = Math.min(batchSize, maxRows - allRows.length);
-        const data = await invokeOrThrow('import-normalize', {
+        const payload: Record<string, unknown> = {
           op: 'preview_rows',
           organization_id: organizationId,
           import_job_id: importJobId || 'current',
           limit: currentBatch,
           offset,
-        });
-
-        const result = data as {
-          ok: boolean;
-          total_count?: number;
-          rows?: CatalogRow[];
-          error?: string;
         };
+        if (filters?.sheetKind) payload.sheet_kind = filters.sheetKind;
+        if (filters?.profile) payload.profile = filters.profile;
+        if (filters?.sort) payload.sort = filters.sort;
+        if (filters?.q) payload.q = filters.q;
+
+        const data = await invokeOrThrow('import-normalize', payload);
+
+        const result = data as PreviewRowsResult;
 
         if (!result?.ok) {
           console.warn('[fetchCatalogItems] preview_rows returned not ok:', result?.error);
@@ -714,11 +731,17 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
         totalCount = result.total_count || totalCount;
         allRows = [...allRows, ...rows];
         offset += rows.length;
-        hasMore = rows.length === currentBatch && allRows.length < maxRows;
+        hasMore = (result.has_next !== undefined ? result.has_next : rows.length === currentBatch) && allRows.length < maxRows;
+
+        // Capture facets from first batch response
+        if (!facets && result.facets) {
+          facets = result.facets;
+        }
       }
 
       setCatalogTotal(totalCount || allRows.length);
       setCatalogItems(allRows);
+      setCatalogFacets(facets);
       return allRows;
     } catch (err) {
       const msg = parseEdgeFunctionError(err);
@@ -747,6 +770,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     setTreeResult(null);
     setCatalogItems([]);
     setCatalogTotal(0);
+    setCatalogFacets(null);
     answerLocksRef.current.clear();
     stopPolling();
   }, [stopPolling]);
@@ -763,6 +787,7 @@ export function useNormalization({ organizationId, importJobId }: UseNormalizati
     catalogItems,
     catalogLoading,
     catalogTotal,
+    catalogFacets,
     fetchCatalogItems,
 
     // Apply

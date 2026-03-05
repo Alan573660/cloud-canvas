@@ -93,7 +93,7 @@ export function useNormalizationFlow({ organizationId, importJobId }: UseNormali
     lastError: lastError || applyError,
     questionsCount: dryRunResult?.questions?.length || 0,
     patchesReady: dryRunResult?.stats?.patches_ready || 0,
-    totalScanned: dryRunResult?.stats?.rows_scanned || catalogTotal || 0,
+    totalScanned: dryRunResult?.stats?.rows_total || dryRunResult?.stats?.rows_scanned || catalogTotal || 0,
   }), [importJobId, runId, profileHash, applyId, lastError, applyError, dryRunResult, catalogTotal]);
 
   // ─── Actions ────────────────────────────────────────────
@@ -101,13 +101,15 @@ export function useNormalizationFlow({ organizationId, importJobId }: UseNormali
   const startScan = useCallback(async (options?: {
     limit?: number;
     aiSuggest?: boolean;
+    sheetKind?: string;
   }): Promise<DryRunResult | null> => {
     setFlowState('SCANNING');
     setLastError(null);
     const result = await executeDryRun({
       aiSuggest: options?.aiSuggest ?? true,
-      limit: options?.limit ?? 2000,
+      limit: options?.limit ?? 0, // 0 = full dataset
       onlyWhereNull: false,
+      sheetKind: options?.sheetKind,
     });
     if (!result) {
       setFlowState('ERROR');
