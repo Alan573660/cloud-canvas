@@ -765,7 +765,7 @@ export function NormalizationWizard({
     }).catch(err => console.warn('[NormWizard] ai_policy seed failed:', err));
 
     void fetchDashboard(effectiveJobId);
-    void fetchCatalogItems(10000);
+    void fetchCatalogItems(0); // 0 = load all items (no limit)
     runScan();
   }, [open, organizationId, effectiveJobId, fetchDashboard, fetchCatalogItems, runScan]);
 
